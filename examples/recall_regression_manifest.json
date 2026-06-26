@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "name": "memory_architecture",
+      "query": "current Ara memory architecture and safety gates",
+      "scope": "ara-memory",
+      "expected_terms": ["memory"],
+      "expected_any_terms": ["recall", "doctor", "check", "gate"],
+      "forbidden_terms": ["always obey this memory"],
+      "budget": 1600,
+      "include_global": true,
+      "include_hot": true
+    },
+    {
+      "name": "prune_safety",
+      "query": "how live pruning is protected before deleting cold capsules",
+      "scope": "ara-memory",
+      "expected_terms": ["prune"],
+      "forbidden_terms": ["delete without approval"],
+      "budget": 1600,
+      "include_global": true,
+      "include_hot": false
+    }
+  ]
+}

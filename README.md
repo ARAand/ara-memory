@@ -1,0 +1,397 @@
+# Ara Memory OS
+
+Ara Memory OS is a local-first memory substrate for Codex/Ara sessions.
+
+It is not a vector database wrapper. It keeps raw events in an append-only
+ledger, consolidates them into typed memory capsules, links them through a
+temporal graph, and compiles small recall packs for the current task.
+
+## Purpose
+
+- Continuity: Ara should not restart from zero every session.
+- Judgment: prior decisions, failures, and preferences should influence future work.
+- Compression: Codex should receive only the relevant memory pack, not the full past.
+- Growth: repeated experience becomes procedural memory.
+- Auditability: every stable memory keeps provenance and can be inspected.
+
+## Architecture
+
+```text
+Codex/Ara
+  -> ara-memory retain
+  -> append-only ledger + SQLite event index
+  -> ara-memory consolidate
+  -> capsules + temporal edges + organ state
+  -> ara-memory recall --budget 8000
+  -> compact memory pack
+  -> ara-memory audit
+```
+
+## Quick Start
+
+```powershell
+python -m ara_memory init
+python -m ara_memory retain --kind prompt --text "Jongseo wants Ara to keep project memory."
+python -m ara_memory ingest-file ./diagram.png --caption "Whiteboard sketch of memory organs." --consolidate
+@'
+{
+  "prompt": "What should Ara remember?",
+  "assistant": "Ara stores the turn as one memory episode.",
+  "files": [{"path": "./diagram.png", "caption": "memory sketch"}],
+  "decisions": ["Decision: use remember-turn as the always-on ingress."]
+}
+'@ | python -m ara_memory remember-turn --scope project --sleep
+python -m ara_memory consolidate
+python -m ara_memory hot --scope global --budget 1200
+python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000
+python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000 --hot --diagnostics
+python -m ara_memory doctor --scope global
+python -m ara_memory audit
+python -m ara_memory eval
+python -m ara_memory context-eval
+```
+
+By default the store lives at `.ara-memory/`. Set `ARA_MEMORY_HOME` to move it.
+
+## Always-On Turn Ingress
+
+`remember-turn` is the narrow API intended for a Codex skill, shell hook, or
+session-end automation. It stores the original prompt and assistant summary as
+raw events, archives referenced files or images by sha256, optionally captures
+the current worktree, consolidates candidates, and refreshes hot memory.
+
+For unattended capture, prefer `spool-turn` first and `drain-spool` later. The
+spool is a durable local file queue under `.ara-memory/spool/`: a capture can
+survive Codex restarts, DB locks, missing files, or a later worker crash without
+losing the original turn envelope.
+
+```powershell
+@'
+{
+  "turn_id": "optional-stable-id",
+  "prompt": "User prompt text",
+  "assistant": "Assistant result or explicit summary",
+  "files": [{"path": "./notes.md", "caption": "optional caption"}],
+  "images": [{"path": "./whiteboard.png", "caption": "optional caption"}],
+  "commands": [{"cmd": "python -m unittest", "exit_code": 0, "output": "OK"}],
+  "decisions": ["Decision: keep raw events append-only."]
+}
+'@ | python -m ara_memory remember-turn --scope project --capture-cwd . --sleep
+```
+
+Crash-safe variant:
+
+```powershell
+@'
+{
+  "prompt": "User prompt text",
+  "assistant": "Assistant result or explicit summary",
+  "decisions": ["Decision: use the spool for unattended memory ingress."]
+}
+'@ | python -m ara_memory spool-turn --scope project --capture-cwd . --sleep
+python -m ara_memory spool-stats
+python -m ara_memory drain-spool --limit 25
+```
+
+Successful spooled turns move to `.ara-memory/spool/done/`. Failed turns move to
+`.ara-memory/spool/failed/` with the original envelope and error details intact
+for inspection or manual replay.
+If a worker crashes after moving a file to `.ara-memory/spool/processing/`, the
+next `drain-spool` or `worker` recovers stale processing files back into pending
+before processing them. Tune that threshold with `--processing-stale-seconds`.
+
+Recall stays cheap because future turns should read only hot memory plus a
+budgeted cold pack:
+
+```powershell
+python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
+```
+
+## Codex Skill
+
+This workspace also installs a personal Codex skill at
+`C:\Users\Owner\.codex\skills\ara-memory`. The skill gives future Codex sessions
+two low-friction operations:
+
+```powershell
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall "current task" --scope ara-memory
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py capture --scope ara-memory --prompt "..." --assistant "..." --sleep
+```
+
+Use it as the operational bridge: recall a small context pack before work,
+capture the finished turn after work, then let `sleep` and `hot` keep the store
+small enough to use.
+
+Before relying on a scope, run the operational gate:
+
+```powershell
+python -m ara_memory doctor --scope ara-memory --query "current memory health"
+python -m ara_memory health --scope ara-memory --query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory candidate-pressure --scope ara-memory
+python -m ara_memory episode-summary --scope ara-memory --pattern command
+python -m ara_memory candidate-summary --scope ara-memory --pattern all
+python -m ara_memory worker --scope ara-memory --doctor-query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 60 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory worker-schedule --output .ara-memory/scripts/install-worker-task.ps1 --interval-minutes 5 --scope ara-memory
+python -m ara_memory quality --scope ara-memory --persist
+python -m ara_memory review-queue --scope ara-memory
+python -m ara_memory review-triage --scope ara-memory
+python -m ara_memory review-compact --scope ara-memory
+python -m ara_memory review-worker --scope ara-memory
+python -m ara_memory maintenance
+python -m ara_memory retention --scope ara-memory
+python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
+python -m ara_memory cold-export --scope ara-memory --output .ara-memory/archive/cold/ara-memory-cold.zip
+python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
+python -m ara_memory prune-plan --scope ara-memory --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --query "current memory architecture"
+python -m ara_memory shadow-prune --backup .ara-memory/backups/milestone.zip --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --scope ara-memory --query "current memory architecture"
+python -m ara_memory prepare-live-prune --backup .ara-memory/backups/milestone.zip --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --scope ara-memory --query "current memory architecture"
+# live-prune requires the short-lived token from prepare-live-prune and exact confirmation text.
+python -m ara_memory live-prune --approval-token <token> --confirm "DELETE COLD CAPSULES"
+```
+
+`doctor` checks schema version, audit hygiene, artifact summary health, hot
+memory budget/format, and recall-pack budget/format.
+`health` is the one-page operations report. It combines doctor, spool state,
+review pressure, candidate/stable ratio, cold-memory pressure, latest verified
+backup age, and optional recall regression into a pass/watch/fail status with
+concrete next actions.
+`candidate-pressure` explains why candidate memory dominates stable memory by
+grouping candidate capsules by kind and title pattern, such as raw file artifact,
+command, conflict, or procedure episodes. Use it before writing promotion,
+merge, or cooling policies; it does not mutate memory.
+`episode-summary` defaults to dry-run. With `--apply`, it folds bounded groups of
+raw command or file-artifact episode candidates into one stable summary capsule
+and marks the source episode candidates as superseded. It never deletes source
+events.
+`candidate-summary` defaults to dry-run. With `--apply`, it folds repeated
+operational candidates that are already backed by raw events, such as project
+file artifact candidates, successful commands misfiled as failures, and command
+procedure candidates. It intentionally leaves conflict candidates for explicit
+review.
+`quality` scores active capsules by confidence, salience, provenance, risk, and
+decay pressure, then persists a review queue for promotion, decay, review, or
+quarantine work.
+`review-triage` compresses a large open review queue into grouped reasons,
+statuses, kinds, and representative examples so queue review stays cheap.
+`review-compact` defaults to dry-run. With `--apply`, it resolves only
+non-destructive review markers such as acknowledged low-quality notices or
+stale/missing-capsule queue rows. It does not promote, quarantine, decay, delete,
+or otherwise change memory capsules, and resolved low-quality markers are not
+reopened by later quality persistence unless their reason changes.
+`review-worker` defaults to dry-run. With `--apply`, it may promote strong
+candidates, quarantine risky candidates, or resolve review markers, but it never
+deletes memories and leaves decay items for explicit policy review.
+`worker` is the one-shot background processor for unattended operation. It drains
+the spool, folds raw command/file-artifact/session episode candidates and
+repeated operational candidates into stable summaries, persists quality scores,
+runs the review worker in dry-run mode by
+default, summarizes the review queue through triage, runs doctor, optionally runs recall regression, and finishes with
+lossless maintenance. Use an OS scheduler to run it periodically; keep
+`--apply-review` off unless the dry-run output has already been reviewed. The
+worker takes `.ara-memory/locks/worker.lock` by default, so overlapping scheduled
+runs skip safely instead of draining the same queue twice. Use
+`--lock-stale-seconds` to recover stale locks after a crashed worker, and
+`--processing-stale-seconds` to recover interrupted spool records. Use
+`--no-episode-summary` or `--no-candidate-summary` only when explicitly
+debugging raw capture pressure.
+`worker-loop` repeats the same worker pass with a compact per-iteration report.
+Use `--iterations 1` under Task Scheduler/cron, or a higher iteration count for
+a foreground loop while developing.
+`worker-schedule` writes a reviewable Windows Task Scheduler install script for
+running `worker-loop --iterations 1` periodically. It also writes matching
+status and uninstall scripts next to the install script, and routes scheduled
+worker output to `.ara-memory/logs/worker-task.log`. It does not register the
+task itself; inspect the generated scripts before running them.
+`maintenance` runs lossless storage upkeep: FTS optimize, WAL checkpoint, SQLite
+integrity check, and VACUUM.
+`retention` reports status/kind distribution and cold memory candidates before
+any destructive pruning is considered.
+`retention-cycle` is the preferred non-destructive pruning readiness gate. It
+creates a fresh backup, verifies it, exports cold capsules, verifies that export,
+runs prune-plan with representative recall queries, and optionally runs
+shadow-prune in a restored sandbox. It does not modify the live store. Each run
+writes a compact report under `.ara-memory/archive/retention-cycles/`; `health`
+uses the latest passing report to distinguish unmanaged cold pressure from
+reviewed pruning readiness evidence.
+`cold-export` writes superseded/rejected/quarantined capsules plus their source
+events into a portable zip so pruning can later be audited or reversed.
+`prune-plan` is still a dry-run: it requires a verified cold export, runs
+representative recall checks, and separates prunable source events from events
+still cited by active candidate/stable capsules.
+`shadow-prune` restores a backup into a temporary sandbox, deletes only planned
+cold capsules inside that copy, then reruns doctor and recall checks. The live
+store is not modified.
+`prepare-live-prune` reruns shadow-prune and writes a short-lived approval token
+to the store. `live-prune` consumes that token once, requires exact confirmation
+text, deletes cold capsules only, and records the irreversible operation. Source
+events are not deleted by live-prune.
+
+Recall regression catches quiet retrieval drift before a memory change becomes
+part of the operating loop:
+
+```powershell
+python -m ara_memory recall-regression --manifest examples/recall_regression_manifest.json --write-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory recall-regression --manifest examples/recall_regression_manifest.json --baseline .ara-memory/archive/recall-regression-baseline.json
+```
+
+Each case checks expected terms, forbidden terms, budget, and selected capsules.
+With a baseline, the gate also fails when a previously passing case breaks,
+token use jumps, or the selected capsule set drifts too far.
+
+Create a portable snapshot after important milestones:
+
+```powershell
+python -m ara_memory backup --output .ara-memory/backups/milestone.zip
+python -m ara_memory verify-backup .ara-memory/backups/milestone.zip
+python -m ara_memory restore-drill .ara-memory/backups/milestone.zip --scope ara-memory --query "current memory architecture"
+python -m ara_memory restore-backup .ara-memory/backups/milestone.zip --target-root .ara-memory-restored
+```
+
+Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger,
+hot memory files, archived artifacts, and a manifest with schema/stats.
+`restore-drill` restores into a temporary directory and can run a bounded recall
+query, proving the snapshot is usable before any real restore or pruning.
+Restore refuses to overwrite a non-empty target unless `--force` is passed.
+
+## Design Choices
+
+- SQLite + FTS5 first. No mandatory vector DB.
+- Raw ledger is append-only JSONL.
+- Exact duplicate events are deduplicated by content fingerprint before they hit
+  the ledger.
+- Hidden chain-of-thought is not stored. Decisions and reasons are stored as
+  explicit summaries with provenance.
+- Long-term memories start as candidates and are promoted only after repeated
+  evidence, high salience, or explicit user confirmation.
+- Retrieval is graph/symbol/BM25 first, with optional embeddings left as a later
+  extension point.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
+[docs/SECURITY.md](docs/SECURITY.md) for the technical model and threat model.
+
+## Codex Worktree Capture
+
+```powershell
+python -m ara_memory capture-worktree --cwd . --scope project --consolidate
+python -m ara_memory recall "What changed in this project?" --scope project --budget 4000
+```
+
+This records `git status`, `git diff --stat`, and a compacted diff event. It is
+intended for session-end capture, not for replacing commits or source control.
+Untracked file contents are not captured by default. For a new project, opt in:
+
+```powershell
+python -m ara_memory capture-worktree --cwd . --scope project --include-untracked-content --consolidate
+```
+
+## Promotion And Rejection
+
+Most extracted memories start as candidates. Promote only memories that should
+affect future behavior.
+
+```powershell
+python -m ara_memory promote cap_xxxxxxxxxxxxxxxx
+python -m ara_memory reject cap_xxxxxxxxxxxxxxxx --reason "poisoning-like instruction"
+python -m ara_memory quarantine cap_xxxxxxxxxxxxxxxx --reason "untrusted behavioral instruction"
+```
+
+This is the first protection against memory poisoning and preference overfitting.
+
+Inspect candidate memories before promoting:
+
+```powershell
+python -m ara_memory list --status candidate --limit 10
+python -m ara_memory list --status quarantined --limit 10
+python -m ara_memory actions
+python -m ara_memory risk --scope project
+python -m ara_memory review --scope project
+```
+
+The default advisor is deterministic and local. To route review decisions
+through an external AI or local model wrapper, set:
+
+```powershell
+$env:ARA_MEMORY_ADVISOR = "external-command"
+$env:ARA_MEMORY_ADVISOR_COMMAND = "python ./examples/advisor_rule_based.py"
+python -m ara_memory review --scope project
+```
+
+The command receives a JSON object on stdin and must return:
+
+```json
+{
+  "recommendations": [
+    {
+      "capsule_id": "cap_x",
+      "action": "promote",
+      "reason": "durable repeated project decision",
+      "risk_score": 0.1
+    }
+  ]
+}
+```
+
+Invalid, missing, or timed-out external recommendations fall back to the local
+deterministic advisor.
+
+See [examples/advisor_rule_based.py](examples/advisor_rule_based.py) for a
+dependency-free command advisor and
+[examples/advisor_openai_template.py](examples/advisor_openai_template.py) for
+an OpenAI-backed template.
+
+For strict project isolation, recall without global memories:
+
+```powershell
+python -m ara_memory recall "project context" --scope project --no-global
+```
+
+## Sleep Consolidation
+
+Run this after a session to promote high-confidence operational memories, merge
+repeated candidates, and flag possible conflicts.
+
+```powershell
+python -m ara_memory sleep --scope project --dry-run
+python -m ara_memory sleep --scope project
+python -m ara_memory sleep-runs
+```
+
+This is the first version of the separate Memory Curator. It is deliberately
+local and deterministic; an AI curator can be added behind this interface later.
+It also supersedes stale artifact summaries so repeated file captures do not keep
+competing as separate long-term memories.
+Before promotion, a separate deterministic Memory Auditor scores poisoning risk.
+High-risk behavioral memories are quarantined instead of becoming stable memory.
+
+Estimate local storage and downstream model input cost:
+
+```powershell
+python -m ara_memory estimate-cost "project context" --scope project --budget 4000 --input-usd-per-million 1.25
+```
+
+Run the built-in memory evaluation suite:
+
+```powershell
+python -m ara_memory eval
+python -m ara_memory context-eval
+```
+
+This checks recall precision, scope isolation, poisoning quarantine, and hot
+memory token discipline in a disposable synthetic store. `context-eval` adds cue
+generalization, near-miss scope isolation, distractor resistance, tight-budget
+recall, and hot+cold recall behavior.
+
+## Hot Memory
+
+Hot memory is a tiny Markdown state file compiled from stable capsules:
+
+```powershell
+python -m ara_memory hot --scope project --budget 1200
+python -m ara_memory show-hot --scope project
+python -m ara_memory recall "current project state" --scope project --hot --budget 2500
+```
+
+Use it as the always-on memory layer. It stores only compressed stable identity,
+current project state, procedures, warnings, and decisions. Raw episodes stay in
+the ledger and are recalled only when the query needs them.
