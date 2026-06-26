@@ -155,6 +155,8 @@ def _title_pattern(title: str, kind: str) -> str:
         return "conflict candidates"
     if lowered.startswith("procedure candidate: "):
         return "procedure candidates"
+    if lowered.startswith("goal memory: "):
+        return "goal candidates"
     if lowered.startswith("decision: "):
         return "decision candidates"
     if kind == "episode":

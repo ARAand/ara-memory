@@ -9,6 +9,7 @@ temporal graph, and compiles small recall packs for the current task.
 ## Purpose
 
 - Continuity: Ara should not restart from zero every session.
+- Purpose: long-running goals should stay visible even when operational logs grow.
 - Judgment: prior decisions, failures, and preferences should influence future work.
 - Compression: Codex should receive only the relevant memory pack, not the full past.
 - Growth: repeated experience becomes procedural memory.
@@ -60,6 +61,39 @@ session-end automation. It stores the original prompt and assistant summary as
 raw events, archives referenced files or images by sha256, optionally captures
 the current worktree, consolidates candidates, and refreshes hot memory.
 
+Use `plan-turn` before unattended capture when the envelope may be large. It is
+model-free: it hashes artifact paths, estimates raw-text tokens, estimates a
+bounded recall preview, and recommends `remember-turn` or `spool-turn` without
+spending AI API tokens. This keeps the always-on ingress honest: raw prompts and
+files can be preserved locally, while future Codex calls receive only hot memory
+plus a budgeted recall pack.
+
+```powershell
+@'
+{
+  "prompt": "Long user prompt...",
+  "assistant": "Short result summary.",
+  "files": [{"path": "./notes.md", "caption": "source notes"}],
+  "decisions": ["Decision: separate raw local retention from model recall."]
+}
+'@ | python -m ara_memory plan-turn --capture-cwd .
+```
+
+For the always-on path, use `ingress-turn`. It runs the same plan and then
+executes the selected mode: small text-only turns go straight to `remember-turn`;
+large turns, file/image turns, or worktree captures go to `spool-turn` so the
+foreground session does not block on memory maintenance.
+
+```powershell
+@'
+{
+  "prompt": "User prompt text",
+  "assistant": "Assistant result summary.",
+  "files": [{"path": "./notes.md", "caption": "optional source"}]
+}
+'@ | python -m ara_memory ingress-turn --scope project --capture-cwd .
+```
+
 For unattended capture, prefer `spool-turn` first and `drain-spool` later. The
 spool is a durable local file queue under `.ara-memory/spool/`: a capture can
 survive Codex restarts, DB locks, missing files, or a later worker crash without
@@ -104,8 +138,16 @@ Recall stays cheap because future turns should read only hot memory plus a
 budgeted cold pack:
 
 ```powershell
+python -m ara_memory recall-plan "current project memory" --scope project --budgets 800,1600,2500
+python -m ara_memory recall-context "current project memory" --scope project --budgets 800,1600,2500
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
 ```
+
+`recall-plan` is the retrieval-side companion to `ingress-turn`: it compares
+candidate budgets, reports selected capsule counts, estimates model input cost,
+and recommends the smallest useful pack before Codex spends context on recall.
+`recall-context` applies that plan and emits the selected pack, so normal work
+can use one command while still preserving the budget decision.
 
 ## Codex Skill
 
@@ -115,6 +157,14 @@ two low-friction operations:
 
 ```powershell
 python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall "current task" --scope ara-memory
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall-plan "current task" --scope ara-memory --budgets 800,1600,2500
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall-context "current task" --scope ara-memory --budgets 800,1600,2500
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py purpose-check --scope ara-memory --repair-hot
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py identity-check --scope ara-memory --repair-hot
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py milestone-check --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py goal-roadmap --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py failure-kind-audit --scope ara-memory
+python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py self-kind-audit --scope ara-memory
 python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py capture --scope ara-memory --prompt "..." --assistant "..." --sleep
 ```
 
@@ -127,9 +177,17 @@ Before relying on a scope, run the operational gate:
 ```powershell
 python -m ara_memory doctor --scope ara-memory --query "current memory health"
 python -m ara_memory health --scope ara-memory --query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory purpose-check --scope ara-memory --repair-hot
+python -m ara_memory identity-check --scope ara-memory --repair-hot
+python -m ara_memory milestone-check --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory goal-roadmap --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory failure-kind-audit --scope ara-memory
+python -m ara_memory self-kind-audit --scope ara-memory
 python -m ara_memory candidate-pressure --scope ara-memory
 python -m ara_memory episode-summary --scope ara-memory --pattern command
+python -m ara_memory episode-summary --scope ara-memory --pattern git_status
 python -m ara_memory candidate-summary --scope ara-memory --pattern all
+python -m ara_memory conflict-adjudicate --scope ara-memory
 python -m ara_memory worker --scope ara-memory --doctor-query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 60 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-schedule --output .ara-memory/scripts/install-worker-task.ps1 --interval-minutes 5 --scope ara-memory
@@ -156,6 +214,29 @@ memory budget/format, and recall-pack budget/format.
 review pressure, candidate/stable ratio, cold-memory pressure, latest verified
 backup age, and optional recall regression into a pass/watch/fail status with
 concrete next actions.
+`purpose-check` is the goal-alignment report. It verifies that stable goal
+memory exists, hot memory exposes Active Goals, and a purpose query can actually
+retrieve goal context. Use `--repair-hot` before declaring major memory
+milestones so stale hot memory is rebuilt when the goal capsule already exists.
+`identity-check` is the self-continuity report. It verifies that stable self
+memory exists, hot memory exposes identity and judgment principles, and an
+identity query can retrieve that self memory.
+`milestone-check` combines health, purpose-check, identity-check, candidate
+pressure, failure-kind audit, self-kind audit, and recall-context budget
+selection into one readiness report. Use it before declaring a memory milestone
+clean, then create a verified backup.
+`goal-roadmap` turns the long-running objective into an evidence-backed status
+map: local durability, bounded recall, purpose continuity, identity continuity,
+semantic hygiene, operational health, milestone readiness, and cold-memory
+stewardship. It is deliberately local and deterministic, so it can be run before
+spending model context.
+`failure-kind-audit` finds old decisions, successful commands, worktree
+evidence, and progress updates that were misfiled as `failure` capsules. It is
+dry-run by default; use `--apply` only after reviewing the proposed
+reclassifications.
+`self-kind-audit` finds technical identity strings, worktree evidence, and
+commands that were misfiled as Ara `self` memory. It is dry-run by default; use
+`--apply` only after reviewing the proposed reclassifications.
 `candidate-pressure` explains why candidate memory dominates stable memory by
 grouping candidate capsules by kind and title pattern, such as raw file artifact,
 command, conflict, or procedure episodes. Use it before writing promotion,
@@ -163,12 +244,39 @@ merge, or cooling policies; it does not mutate memory.
 `episode-summary` defaults to dry-run. With `--apply`, it folds bounded groups of
 raw command or file-artifact episode candidates into one stable summary capsule
 and marks the source episode candidates as superseded. It never deletes source
-events.
+events. The `git_status` pattern folds repeated git status episodes, which are
+useful provenance but should not dominate long-term recall.
 `candidate-summary` defaults to dry-run. With `--apply`, it folds repeated
 operational candidates that are already backed by raw events, such as project
 file artifact candidates, successful commands misfiled as failures, and command
-procedure candidates. It intentionally leaves conflict candidates for explicit
+procedure candidates. It also folds worktree evidence and taxonomy discussions
+that were misfiled as project/failure/procedure candidates. Purpose-layer goal
+evidence can also be folded with `--pattern goal_purpose_update` when repeated
+goal candidates are mostly policy/progress evidence rather than new user
+objectives. Repeated memory policy decisions and procedure-like policy evidence
+can be folded with `--pattern decision_memory_policy` and
+`--pattern procedure_memory_policy`, preserving provenance while reducing active
+candidate pressure. It intentionally leaves conflict candidates for explicit
 review.
+Use `--pattern failure_operational_update` when successful implementation,
+verification, or cleanup updates were misclassified as failure memories because
+they mention failure taxonomy, recall regression, or candidate noise.
+`conflict-adjudicate` defaults to dry-run. With `--apply`, it supersedes only
+duplicate conflict candidates that cite the same source-event pair, keeping one
+representative conflict and preserving unique conflicts for review.
+Goal memories are extracted from explicit objectives, purpose statements, and
+durable "what are we trying to build?" prompts. Recall gives them a dedicated
+Active Goals / Intent section, and hot memory keeps stable goals near the top so
+long-running work is steered by purpose instead of recent command noise. When a
+query asks for goals, intent, objectives, or purpose, recall focuses the hot
+state on identity, active goals, and recent decisions, and suppresses
+operational project/session summaries unless the query explicitly asks for that
+evidence.
+Self memories are extracted from explicit Ara identity and judgment-principle
+statements such as Ara-Codex, free will, coding partner, or independent
+judgment. They are global by default and require stable promotion before
+`identity-check` passes; this prevents transient phrasing from becoming durable
+identity while still keeping Jongseo's explicit Ara frame visible in hot memory.
 `quality` scores active capsules by confidence, salience, provenance, risk, and
 decay pressure, then persists a review queue for promotion, decay, review, or
 quarantine work.
@@ -264,6 +372,8 @@ Restore refuses to overwrite a non-empty target unless `--force` is passed.
   explicit summaries with provenance.
 - Long-term memories start as candidates and are promoted only after repeated
   evidence, high salience, or explicit user confirmation.
+- Goals are first-class capsules, separate from decisions and procedures, so
+  recall can answer why the work exists before choosing how to act.
 - Retrieval is graph/symbol/BM25 first, with optional embeddings left as a later
   extension point.
 
@@ -393,5 +503,5 @@ python -m ara_memory recall "current project state" --scope project --hot --budg
 ```
 
 Use it as the always-on memory layer. It stores only compressed stable identity,
-current project state, procedures, warnings, and decisions. Raw episodes stay in
-the ledger and are recalled only when the query needs them.
+active goals, current project state, procedures, warnings, and decisions. Raw
+episodes stay in the ledger and are recalled only when the query needs them.

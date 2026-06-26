@@ -11,8 +11,8 @@ from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, new_id
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
-MERGE_KINDS = {"project", "procedure", "failure", "fact"}
-CONFLICT_KINDS = {"decision", "preference", "procedure", "self", "fact"}
+MERGE_KINDS = {"project", "procedure", "failure", "fact", "goal"}
+CONFLICT_KINDS = {"decision", "preference", "procedure", "self", "fact", "goal"}
 NEGATION_MARKERS = (" not ", " never ", "avoid ", "do not ", "don't ", "instead of ", "rather than ")
 TOKEN_RE = re.compile(r"[a-zA-Z0-9_./:-]{3,}")
 

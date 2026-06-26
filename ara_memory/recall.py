@@ -26,12 +26,14 @@ class RecallCompiler:
         hot_state: str | None = None,
     ) -> RecallResult:
         terms = extract_keywords(query, limit=10)
+        intent_query = _is_intent_query(query, terms)
         graph_rows = self.store.graph_neighbors(terms, scope=scope, limit=24, include_global=include_global)
         raw_capsules = self.store.search_capsules(query, scope=scope, limit=48, include_global=include_global)
         capsules = _rerank_capsules([row_to_capsule(row) for row in raw_capsules], terms)[:18]
 
         summaries = []
         stable = []
+        goals = []
         decisions = []
         procedures = []
         failures = []
@@ -43,11 +45,15 @@ class RecallCompiler:
         for cap in capsules:
             if cap["id"] in seen:
                 continue
+            if intent_query and _is_low_value_for_intent(cap):
+                continue
             seen.add(cap["id"])
             kind = cap["kind"]
             item = _format_capsule(cap)
             if kind == "summary":
                 summaries.append(item)
+            elif kind == "goal":
+                goals.append(item)
             elif kind in {"self", "preference", "fact"}:
                 stable.append(item)
             elif kind == "decision":
@@ -76,11 +82,12 @@ class RecallCompiler:
             f"Scope: {scope}",
         ]
         if hot_state:
-            parts.append("## Hot Memory\n" + hot_state.strip())
+            parts.append("## Hot Memory\n" + _focus_hot_memory(hot_state, intent_query=intent_query).strip())
         parts.extend(
             [
                 "## Consolidated Memory\n" + ("\n".join(summaries) if summaries else "- None found."),
                 "## Stable / Relational Memory\n" + ("\n".join(stable) if stable else "- None found."),
+                "## Active Goals / Intent\n" + ("\n".join(goals) if goals else "- None found."),
                 "## Relevant Decisions\n" + ("\n".join(decisions) if decisions else "- None found."),
                 "## Procedures\n" + ("\n".join(procedures) if procedures else "- None found."),
                 "## Failure Warnings\n" + ("\n".join(failures) if failures else "- None found."),
@@ -114,6 +121,7 @@ def _format_capsule(cap: dict) -> str:
         "summary": 650,
         "project": 520,
         "episode": 420,
+        "goal": 700,
         "decision": 650,
         "procedure": 650,
         "failure": 700,
@@ -216,6 +224,89 @@ def _trim_nested_markdown(text: str, char_limit: int) -> str:
     return "\n\n".join(out).strip()
 
 
+def _is_intent_query(query: str, terms: list[str]) -> bool:
+    lowered = query.lower()
+    term_set = {term.lower() for term in terms}
+    intent_terms = {
+        "goal",
+        "goals",
+        "intent",
+        "intention",
+        "objective",
+        "objectives",
+        "purpose",
+        "identity",
+        "self",
+        "principle",
+        "principles",
+        "judgment",
+        "why",
+        "aim",
+        "north",
+        "star",
+        "목표",
+        "목적",
+    }
+    return bool(term_set.intersection(intent_terms)) or any(term in lowered for term in intent_terms)
+
+
+def _focus_hot_memory(hot_state: str, *, intent_query: bool) -> str:
+    if not intent_query:
+        return hot_state
+    blocks = [block.strip() for block in hot_state.split("\n\n") if block.strip()]
+    if not blocks:
+        return hot_state
+    kept: list[str] = []
+    allowed_headers = {
+        "# Ara Hot Memory",
+        "Scope:",
+        "## Stable Identity / Preferences",
+        "## Active Goals",
+        "## Recent Decisions",
+    }
+    for block in blocks:
+        first_line = block.splitlines()[0].strip()
+        if first_line in allowed_headers or first_line.startswith("Scope:"):
+            kept.append(block)
+    return "\n\n".join(kept) if kept else hot_state
+
+
+def _is_low_value_for_intent(cap: dict) -> bool:
+    if cap["kind"] in {"goal", "self", "preference", "fact", "decision"}:
+        return False
+    tags = set(str(tag).lower() for tag in cap["tags"])
+    title = str(cap["title"]).lower()
+    operational_tags = {
+        "episode-summary",
+        "candidate-summary",
+        "command",
+        "project",
+        "worktree",
+        "artifact",
+        "file_artifact",
+        "file-artifact",
+        "git",
+    }
+    if tags.intersection(operational_tags):
+        return True
+    operational_prefixes = (
+        "consolidated worktree",
+        "consolidated command",
+        "consolidated file artifact",
+        "consolidated git status",
+        "consolidated session episode",
+        "latest artifact memory:",
+        "project memory:",
+        "git status for ",
+        "command: ",
+    )
+    if title.startswith(operational_prefixes):
+        return True
+    if tags.intersection({"goal", "objective", "purpose", "intent", "identity", "principle"}):
+        return False
+    return cap["kind"] in {"project", "episode"}
+
+
 def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
     best_by_source: dict[str, dict] = {}
     for cap in capsules:
@@ -240,14 +331,38 @@ def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
 
 def _recall_score(cap: dict, terms: list[str]) -> float:
     tags = set(cap["tags"])
-    term_hits = len(tags.intersection(t.lower() for t in terms))
+    lowered_terms = [term.lower() for term in terms]
+    term_hits = len(tags.intersection(lowered_terms))
     score = 0.0
     score += _kind_priority(cap)
     score += _status_priority(cap)
     score += float(cap["salience"]) * 1.4
     score += float(cap["confidence"]) * 0.8
     score += term_hits * 0.35
+    score -= _operational_summary_penalty(cap, lowered_terms)
     return score
+
+
+def _operational_summary_penalty(cap: dict, terms: list[str]) -> float:
+    if cap["kind"] != "summary":
+        return 0.0
+    tags = set(str(tag).lower() for tag in cap["tags"])
+    title = str(cap["title"]).lower()
+    operational = (
+        "episode-summary" in tags
+        or "file_artifact" in tags
+        or "file-artifact" in tags
+        or "command" in tags
+        or "candidate-summary" in tags
+        or title.startswith("consolidated file artifact")
+        or title.startswith("consolidated command")
+    )
+    if not operational:
+        return 0.0
+    operational_query_terms = {"artifact", "file", "command", "episode", "evidence", "sha256", "diff"}
+    if any(term in operational_query_terms for term in terms):
+        return 0.0
+    return 1.35
 
 
 def _matched_tags(capsules: list[dict], terms: list[str], *, limit: int = 24) -> list[str]:
@@ -300,6 +415,8 @@ def _kind_priority(cap: dict) -> float:
     kind = cap["kind"]
     if kind == "summary":
         return 4.0
+    if kind == "goal":
+        return 3.7
     if kind in {"decision", "procedure", "failure", "self", "fact"}:
         return 3.2
     if kind == "preference":

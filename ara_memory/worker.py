@@ -225,11 +225,13 @@ def _run_locked_worker(
                     pattern=pattern,
                     min_group_size=episode_summary_session_min_group_size
                     if pattern == "session"
+                    else min(episode_summary_min_group_size, 3)
+                    if pattern == "git_status"
                     else episode_summary_min_group_size,
                     limit=episode_summary_limit,
                     dry_run=False,
                 ).as_dict()
-                for pattern in ("command", "file_artifact", "session")
+                for pattern in ("command", "file_artifact", "git_status", "session")
             ]
         }
         episode_payload["summaries_created"] = sum(item["summaries_created"] for item in episode_payload["patterns"])

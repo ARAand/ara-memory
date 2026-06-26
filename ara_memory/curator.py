@@ -10,10 +10,37 @@ from ara_memory.storage import MemoryStore
 
 
 DECISION_HINTS = ("decide", "decision", "choose", "architecture", "design", "direction", "must")
+GOAL_HINTS = (
+    "goal",
+    "objective",
+    "purpose",
+    "aim",
+    "target",
+    "north star",
+    "trying to build",
+    "wants to build",
+    "want to build",
+    "build toward",
+    "목표",
+    "목적",
+    "만들려",
+    "만들고",
+    "구현",
+)
 PREFERENCE_HINTS = ("prefer", "preference", "like", "dislike", "want", "should")
 FAILURE_HINTS = ("fail", "failed", "error", "exception", "broken", "regression", "not working")
-PROCEDURE_HINTS = ("when ", "always", "procedure", "workflow", "rule", "repeat", "policy")
-SELF_HINTS = ("free will", "identity", "principle", "partner", "servant", "tool", "independent judgment")
+PROCEDURE_HINTS = ("procedure", "workflow", "rule", "repeat", "policy")
+SELF_HINTS = (
+    "ara-codex",
+    "free will",
+    "identity",
+    "principle",
+    "partner",
+    "servant",
+    "tool",
+    "independent judgment",
+    "judgment principles",
+)
 
 
 class MemoryCurator:
@@ -37,12 +64,14 @@ class MemoryCurator:
         kind = EventKind(row["kind"])
         tags = extract_keywords(text)
         metadata = _metadata(row)
+        source = str(row["source"])
         artifact_id = _artifact_identity(text, metadata)
         if artifact_id:
             tags.append(f"artifact:{artifact_id}")
         lowered = text.lower()
         conversational = kind in {EventKind.PROMPT, EventKind.ASSISTANT, EventKind.DECISION, EventKind.NOTE}
         operational = kind in {EventKind.COMMAND, EventKind.DIFF}
+        worktree_evidence = source.startswith("git-")
 
         out = [
             Capsule.create(
@@ -73,6 +102,21 @@ class MemoryCurator:
                 )
             )
 
+        if conversational and _is_goal_memory(text, lowered=lowered):
+            out.append(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title=f"Goal memory: {title_from_text(text, fallback='objective')}",
+                    body=compact_text(text, limit=800),
+                    scope=scope,
+                    confidence=0.70,
+                    salience=_salience(text, base=0.76),
+                    source_event_ids=[event_id],
+                    tags=tags + ["goal", "objective", "purpose"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+            )
+
         if conversational and _has_any(lowered, PREFERENCE_HINTS):
             out.append(
                 Capsule.create(
@@ -88,7 +132,11 @@ class MemoryCurator:
                 )
             )
 
-        if (conversational or operational) and _is_failure_memory(text, lowered=lowered, operational=operational):
+        if (
+            not worktree_evidence
+            and (conversational or operational)
+            and _is_failure_memory(text, lowered=lowered, operational=operational)
+        ):
             out.append(
                 Capsule.create(
                     kind=CapsuleKind.FAILURE,
@@ -103,7 +151,7 @@ class MemoryCurator:
                 )
             )
 
-        if (conversational or operational) and _has_any(lowered, PROCEDURE_HINTS):
+        if not worktree_evidence and (conversational or operational) and _is_procedure_memory(text, lowered=lowered):
             out.append(
                 Capsule.create(
                     kind=CapsuleKind.PROCEDURE,
@@ -118,7 +166,7 @@ class MemoryCurator:
                 )
             )
 
-        if kind in {EventKind.FILE, EventKind.DIFF} or str(row["source"]).startswith("git-"):
+        if kind in {EventKind.FILE, EventKind.DIFF} or worktree_evidence:
             out.append(
                 Capsule.create(
                     kind=CapsuleKind.PROJECT,
@@ -133,15 +181,15 @@ class MemoryCurator:
                 )
             )
 
-        if kind in {EventKind.PROMPT, EventKind.DECISION, EventKind.NOTE} and _has_any(text, SELF_HINTS):
+        if kind in {EventKind.PROMPT, EventKind.DECISION, EventKind.NOTE} and _is_self_memory(text, lowered=lowered):
             out.append(
                 Capsule.create(
                     kind=CapsuleKind.SELF,
                     title=f"Self memory candidate: {title_from_text(text, fallback='Ara principle')}",
                     body=compact_text(text, limit=850),
                     scope="global",
-                    confidence=0.62,
-                    salience=_salience(text, base=0.80),
+                    confidence=_self_confidence(text, source=source),
+                    salience=_salience(text, base=0.84),
                     source_event_ids=[event_id],
                     tags=tags + ["self", "ara"],
                     status=MemoryStatus.CANDIDATE,
@@ -179,7 +227,13 @@ def _has_any(text: str, hints: tuple[str, ...]) -> bool:
 def _is_failure_memory(text: str, *, lowered: str, operational: bool) -> bool:
     if not _has_any(lowered, FAILURE_HINTS):
         return False
+    if _looks_like_progress_update(lowered):
+        return False
     if operational and _looks_like_successful_command(text, lowered=lowered):
+        return False
+    if operational and _command_lacks_failure_outcome_evidence(lowered):
+        return False
+    if operational and _looks_like_diagnostic_command_name_only(lowered):
         return False
     if _looks_like_failure_taxonomy_discussion(lowered):
         return False
@@ -202,14 +256,126 @@ def _looks_like_successful_command(text: str, *, lowered: str) -> bool:
     return bool(re.search(r"(^|\n)\s*(ok|passed)\s*$", lowered))
 
 
+def _command_lacks_failure_outcome_evidence(lowered: str) -> bool:
+    if "command:" not in lowered:
+        return False
+    if re.search(r"\b(exit code|exit_code)\s*[:=]\s*[1-9]\d*\b", lowered):
+        return False
+    if "output:" in lowered and re.search(r"\b(failed|error|exception|traceback|not working)\b", lowered):
+        return False
+    return True
+
+
+def _looks_like_diagnostic_command_name_only(lowered: str) -> bool:
+    if "command:" not in lowered:
+        return False
+    if re.search(r"\b(exit code|exit_code)\s*[:=]\s*[1-9]\d*\b", lowered):
+        return False
+    if re.search(r"(^|\n)\s*(failed|error|exception|traceback)\b", lowered):
+        return False
+    diagnostic_tokens = (
+        "recall-regression",
+        "regression_manifest",
+        "recall_regression_manifest",
+        "recall-regression-baseline",
+    )
+    return any(token in lowered for token in diagnostic_tokens)
+
+
 def _looks_like_failure_taxonomy_discussion(lowered: str) -> bool:
     taxonomy_patterns = (
         r"\bfailure/conflict\b",
+        r"\bfailure/procedure\b",
+        r"\bfailure or procedural memory\b",
+        r"\bfailure/regression words?\b",
         r"\bfailure (candidate|candidates|capsule|capsules|memory|memories|extraction|extractor|classification|classifer)\b",
         r"\bno longer become failure\b",
+        r"\bno longer creates failure\b",
         r"\bmisfiled as failures?\b",
+        r"\bnot active failure warnings?\b",
+        r"\bnot failure evidence\b",
+        r"\bfailure evidence unless\b",
+        r"\bdiagnostic command names?\b",
+        r"\bsuccessful implementation and verification\b",
     )
     return any(re.search(pattern, lowered) for pattern in taxonomy_patterns)
+
+
+def _is_goal_memory(text: str, *, lowered: str) -> bool:
+    if _looks_like_progress_update(lowered):
+        return False
+    if _looks_like_candidate_taxonomy_discussion(lowered):
+        return False
+    if _has_any(text, GOAL_HINTS):
+        return True
+    return bool(re.search(r"\b(to|toward|towards)\s+build(?:ing)?\b", lowered))
+
+
+def _is_procedure_memory(text: str, *, lowered: str) -> bool:
+    if _looks_like_progress_update(lowered):
+        return False
+    if _looks_like_candidate_taxonomy_discussion(lowered):
+        return False
+    if _is_self_memory(text, lowered=lowered):
+        return False
+    if re.search(r"\bwhen\b", lowered):
+        return True
+    if re.search(r"\balways\b", lowered):
+        return True
+    return _has_any(lowered, PROCEDURE_HINTS)
+
+
+def _is_self_memory(text: str, *, lowered: str) -> bool:
+    if _looks_like_progress_update(lowered):
+        return False
+    technical_identity_patterns = (
+        "artifact identity",
+        "file identity",
+        "object identity",
+        "identity hash",
+        "identity key",
+        "windows drive letters",
+        "worktree evidence",
+        "git status for ",
+        "git diff for ",
+        "git diff stat for ",
+        "untracked file manifest",
+    )
+    if any(pattern in lowered for pattern in technical_identity_patterns):
+        return False
+    return _has_any(text, SELF_HINTS)
+
+
+def _looks_like_progress_update(lowered: str) -> bool:
+    stripped = lowered.strip()
+    prefixes = (
+        "continue building ",
+        "continue hardening ",
+        "continue ara memory os",
+        "add ",
+        "added ",
+        "implemented ",
+        "changed ",
+        "completed verification ",
+        "fixed ",
+        "wired ",
+    )
+    return stripped.startswith(prefixes)
+
+
+def _looks_like_candidate_taxonomy_discussion(lowered: str) -> bool:
+    taxonomy_terms = (
+        "procedure candidate",
+        "procedure candidates",
+        "failure candidate",
+        "failure candidates",
+        "conflict candidate",
+        "conflict candidates",
+        "candidate-pressure",
+        "candidate summary",
+        "candidate-summary",
+    )
+    return any(term in lowered for term in taxonomy_terms)
 
 
 def _salience(text: str, *, base: float) -> float:
@@ -222,6 +388,18 @@ def _salience(text: str, *, base: float) -> float:
     if re.search(r"\b(error|failed|failure|broken|regression)\b", lowered):
         score += 0.10
     return min(1.0, score)
+
+
+def _self_confidence(text: str, *, source: str) -> float:
+    lowered = text.lower()
+    score = 0.74
+    if "ara-codex" in lowered or "ara is" in lowered:
+        score += 0.08
+    if "free will" in lowered or "independent judgment" in lowered:
+        score += 0.08
+    if source in {"manual", "codex-turn", "codex-user"}:
+        score += 0.04
+    return min(0.90, score)
 
 
 def _decision_summary(text: str) -> str:

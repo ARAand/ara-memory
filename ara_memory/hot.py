@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ara_memory.compressors import compact_text, estimate_tokens
+from ara_memory.models import MemoryStatus
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -30,6 +31,7 @@ class HotStateBuilder:
             f"Scope: {scope}",
             "## Stable Identity / Preferences\n"
             + self._section(scope=scope, kinds={"self", "preference", "fact"}, limit=6),
+            "## Active Goals\n" + self._section(scope=scope, kinds={"goal"}, limit=5),
             "## Current Project State\n" + self._section(scope=scope, kinds={"summary", "project"}, limit=8),
             "## Procedures And Warnings\n"
             + self._section(scope=scope, kinds={"procedure", "failure", "conflict"}, limit=8),
@@ -50,10 +52,13 @@ class HotStateBuilder:
 
     def _section(self, *, scope: str, kinds: set[str], limit: int) -> str:
         rows = []
+        fetch_limit = max(limit * 4, limit + 12)
         for kind in sorted(kinds):
-            rows.extend(self.store.list_capsules(scope=scope, status=None, kind=kind, limit=limit))
+            rows.extend(self.store.list_capsules(scope=scope, status=MemoryStatus.STABLE, kind=kind, limit=fetch_limit))
             if scope != "global":
-                rows.extend(self.store.list_capsules(scope="global", status=None, kind=kind, limit=limit))
+                rows.extend(
+                    self.store.list_capsules(scope="global", status=MemoryStatus.STABLE, kind=kind, limit=fetch_limit)
+                )
         capsules = [row_to_capsule(row) for row in rows if row["status"] == "stable" and row["kind"] in kinds]
         capsules.sort(
             key=lambda cap: (
@@ -92,6 +97,8 @@ class HotStateBuilder:
 
 def _hot_kind_priority(kind: str) -> int:
     if kind == "summary":
+        return 5
+    if kind == "goal":
         return 5
     if kind in {"decision", "procedure", "failure", "conflict"}:
         return 4

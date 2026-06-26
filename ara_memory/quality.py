@@ -662,6 +662,7 @@ def _priority(action: str, *, quality: float, decay: float, risk_score: float) -
 def _kind_bonus(kind: str) -> float:
     return {
         "decision": 0.10,
+        "goal": 0.10,
         "procedure": 0.08,
         "failure": 0.08,
         "summary": 0.07,

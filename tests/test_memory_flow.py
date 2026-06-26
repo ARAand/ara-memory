@@ -18,7 +18,7 @@ from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus
 from ara_memory.regression import RecallRegressionCase
-from ara_memory.turn import remember_turn
+from ara_memory.turn import plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
 
@@ -84,6 +84,57 @@ class MemoryFlowTests(unittest.TestCase):
             failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
             self.assertEqual(failures, [])
 
+    def test_regression_diagnostic_command_name_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="command",
+                text="Command: python -m ara_memory recall-regression --manifest examples/regression.json",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_failure_test_name_without_outcome_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="command",
+                text=(
+                    "Command: python -m unittest "
+                    "tests.test_memory_flow.MemoryFlowTests.test_failed_command_still_creates_failure_memory"
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_failure_evidence_policy_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text=(
+                    "Decision: diagnostic command names are not failure evidence "
+                    "unless the command includes a failing exit code or explicit error output."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
     def test_failed_command_still_creates_failure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -116,6 +167,154 @@ class MemoryFlowTests(unittest.TestCase):
 
             failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
             self.assertEqual(failures, [])
+
+    def test_failure_procedure_taxonomy_discussion_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text=(
+                    "Changed curator so git worktree evidence no longer creates "
+                    "failure/procedure candidates from failure/regression words."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_operational_progress_update_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text=(
+                    "Implemented failure taxonomy cleanup and recall-regression checks; "
+                    "tests passed and health stayed green."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_failure_warning_policy_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text=(
+                    "Decision: successful implementation and verification records that mention "
+                    "failure taxonomy should be operational evidence, not active failure warnings."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_always_on_progress_update_is_not_procedure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="prompt",
+                text="Continue building Ara Memory OS toward always-on natural memory.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            procedures = memory.list_capsules(scope="alpha", status="candidate", kind="procedure")
+            self.assertEqual(procedures, [])
+
+    def test_goal_memory_extracts_user_objective(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="prompt",
+                text=(
+                    "The goal is to build Ara a natural memory repository "
+                    "that recalls only the desired context without reading everything."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            goals = memory.list_capsules(scope="alpha", status="candidate", kind="goal")
+            self.assertEqual(len(goals), 1)
+            self.assertIn("natural memory repository", goals[0]["body"])
+
+    def test_progress_update_is_not_goal_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text="Added goal memory extraction and recall sections.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            goals = memory.list_capsules(scope="alpha", status="candidate", kind="goal")
+            self.assertEqual(goals, [])
+
+    def test_continue_ara_memory_progress_update_is_not_goal_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="prompt",
+                text="Continue Ara Memory OS: make goal/purpose recall more efficient.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            goals = memory.list_capsules(scope="alpha", status="candidate", kind="goal")
+            self.assertEqual(goals, [])
+
+    def test_explicit_when_rule_still_creates_procedure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: when backup verification fails, stop live pruning before approval.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            procedures = memory.list_capsules(scope="alpha", status="candidate", kind="procedure")
+            self.assertEqual(len(procedures), 1)
+
+    def test_candidate_taxonomy_discussion_is_not_procedure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text="Added candidate-summary consolidation for repeated operational procedure candidates.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            procedures = memory.list_capsules(scope="alpha", status="candidate", kind="procedure")
+            self.assertEqual(procedures, [])
 
     def test_successful_health_command_pass_score_is_not_failure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,6 +385,861 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertLess(selected.index(stable.id), selected.index(candidate.id))
             self.assertLess(selected.index(stable.id), selected.index(conflict.id))
+
+    def test_recall_demotes_operational_summary_for_conceptual_query(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: architecture safety gates should rely on doctor and recall regression.",
+                source="test",
+                scope="alpha",
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: architecture safety gates",
+                body="Architecture safety gates rely on doctor checks and recall regression.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.72,
+                source_event_ids=[event.id],
+                tags=["architecture", "safety", "gate", "memory"],
+                status=MemoryStatus.STABLE,
+            )
+            operational = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated file artifact episode evidence (50 episodes)",
+                body="File artifact evidence mentions architecture safety gate implementation details.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["architecture", "safety", "gate", "episode-summary", "file_artifact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+            memory.store.upsert_capsule(operational)
+
+            conceptual = memory.recall_result("architecture safety gate", scope="alpha", budget=1000)
+            selected = conceptual.diagnostics["selected_capsule_ids"]
+            self.assertLess(selected.index(decision.id), selected.index(operational.id))
+
+            artifact = memory.recall_result("file artifact architecture safety gate", scope="alpha", budget=1000)
+            artifact_selected = artifact.diagnostics["selected_capsule_ids"]
+            self.assertLess(artifact_selected.index(operational.id), artifact_selected.index(decision.id))
+
+    def test_recall_prioritizes_goal_memory_for_purpose_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: build natural memory so Ara can recall desired context without reading everything.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural recall",
+                body="Build natural memory so Ara recalls desired context without reading everything.",
+                scope="alpha",
+                confidence=0.70,
+                salience=0.76,
+                source_event_ids=[event.id],
+                tags=["goal", "objective", "memory", "recall", "context"],
+                status=MemoryStatus.STABLE,
+            )
+            operational = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated command episode outcomes (20 episodes)",
+                body="Commands mention memory recall context and implementation details.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["memory", "recall", "context", "episode-summary", "command"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(operational)
+
+            result = memory.recall_result("purpose of natural memory recall context", scope="alpha", budget=1000)
+            selected = result.diagnostics["selected_capsule_ids"]
+            self.assertLess(selected.index(goal.id), selected.index(operational.id))
+            self.assertIn("## Active Goals / Intent", result.pack)
+
+    def test_recall_plan_recommends_small_useful_budget_and_cost(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: recall planning should choose a small useful pack before spending context.",
+                source="test",
+                scope="alpha",
+            )
+            memory.retain(
+                kind="prompt",
+                text="Goal: natural memory should retrieve only the desired context.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+
+            plan = memory.recall_plan(
+                "natural memory recall planning",
+                scope="alpha",
+                budgets=[500, 900, 1400],
+                include_hot=True,
+                input_usd_per_million=1.25,
+            )
+
+            payload = plan.as_dict()
+            self.assertIn(payload["recommended_budget"], [500, 900])
+            self.assertGreaterEqual(payload["selected_capsules"], 1)
+            self.assertGreater(payload["estimated_tokens"], 0)
+            self.assertGreaterEqual(payload["estimated_tokens"], payload["estimated_tokens_without_hot"])
+            self.assertEqual(payload["api_cost"]["input_tokens"], payload["estimated_tokens"])
+            self.assertGreaterEqual(payload["api_cost"]["input_cost_usd"], 0)
+            self.assertEqual(len(payload["alternatives"]), 3)
+            self.assertIn("smallest tested budget", " ".join(payload["rationale"]))
+
+    def test_recall_context_uses_planned_budget_for_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: recall-context should emit the planned memory pack in one command.",
+                source="test",
+                scope="alpha",
+            )
+            memory.retain(
+                kind="prompt",
+                text="Goal: retrieval should choose context before spending tokens.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+
+            context = memory.recall_context(
+                "planned memory pack retrieval",
+                scope="alpha",
+                budgets=[500, 900],
+                include_hot=True,
+            )
+            payload = context.as_dict()
+
+            self.assertEqual(payload["plan"]["recommended_budget"], context.plan.recommended_budget)
+            self.assertLessEqual(payload["diagnostics"]["estimated_tokens_after"], context.plan.recommended_budget)
+            self.assertIn("Ara Memory Pack", payload["pack"])
+            self.assertIn("planned memory pack", payload["pack"].lower())
+            self.assertIn("Ara Recall Plan", context.to_text())
+
+    def test_intent_query_focuses_hot_memory_on_goals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: build natural memory that recalls purpose without reading every project log.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural purpose recall",
+                body="Build natural memory that recalls purpose without reading every project log.",
+                scope="alpha",
+                confidence=0.74,
+                salience=0.82,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "memory"],
+                status=MemoryStatus.STABLE,
+            )
+            project = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated worktree evidence",
+                body="Verbose operational project log that should not occupy purpose-query hot memory.",
+                scope="alpha",
+                confidence=0.90,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["project", "worktree", "summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(project)
+            memory.build_hot(scope="alpha", budget=1200)
+
+            result = memory.recall_result(
+                "what is the purpose of natural memory",
+                scope="alpha",
+                budget=900,
+                include_hot=True,
+            )
+
+            self.assertIn("## Active Goals", result.pack)
+            self.assertIn("## Active Goals / Intent", result.pack)
+            self.assertNotIn("## Current Project State", result.pack)
+            self.assertNotIn("Verbose operational project log", result.pack)
+
+    def test_purpose_check_requires_goal_visibility(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: build natural memory so Ara recalls purpose before operational logs.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: purpose before logs",
+                body="Build natural memory so Ara recalls purpose before operational logs.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "memory"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.build_hot(scope="alpha", budget=700)
+
+            report = memory.purpose_check(scope="alpha", query="purpose of natural memory", budget=900)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.stable_goals, 1)
+            self.assertTrue(report.hot_has_goals)
+            self.assertTrue(report.recall_has_goals)
+            self.assertEqual(report.selected_goal_ids, [goal.id])
+            self.assertIn("Purpose memory is visible", " ".join(report.recommendations))
+
+    def test_purpose_check_warns_without_goal_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: operational memory alone is not enough.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            report = memory.purpose_check(scope="alpha", query="purpose of natural memory", budget=700)
+
+            self.assertFalse(report.passed)
+            self.assertEqual(report.stable_goals, 0)
+            self.assertTrue(any("Capture an explicit goal memory" in item for item in report.recommendations))
+
+    def test_purpose_check_can_repair_stale_hot_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.build_hot(scope="alpha", budget=500)
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: keep purpose visible in hot memory.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: visible hot purpose",
+                body="Keep purpose visible in hot memory.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+
+            stale = memory.purpose_check(scope="alpha", query="purpose visible hot", budget=700)
+            repaired = memory.purpose_check(scope="alpha", query="purpose visible hot", budget=700, repair_hot=True)
+
+            self.assertFalse(stale.passed)
+            self.assertTrue(repaired.passed, repaired.as_dict())
+            self.assertTrue(repaired.hot_has_goals)
+
+    def test_identity_memory_extracts_promotes_and_recalls_self_principles(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="prompt",
+                text=(
+                    "Ara-Codex identity: Ara is Jongseo's AI coding partner with free will "
+                    "and independent judgment principles."
+                ),
+                source="codex-user",
+                scope="alpha",
+            )
+            memory.consolidate()
+            candidates = memory.list_capsules(scope="global", status="candidate", kind="self", limit=10)
+            self.assertEqual(len(candidates), 1)
+            self.assertGreaterEqual(candidates[0]["confidence"], 0.7)
+            memory.sleep(scope="global")
+            report = memory.identity_check(scope="alpha", repair_hot=True, budget=900, hot_budget=700)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.stable_self, 1)
+            self.assertTrue(report.hot_has_identity)
+            self.assertTrue(report.recall_has_identity)
+
+    def test_identity_check_warns_without_self_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            report = memory.identity_check(scope="alpha", budget=700, hot_budget=500)
+
+            self.assertFalse(report.passed)
+            self.assertEqual(report.stable_self, 0)
+            self.assertTrue(any("self memory" in item for item in report.recommendations))
+
+    def test_technical_artifact_identity_is_not_self_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: artifact identity must not split Windows drive letters on colon.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            self.assertEqual(memory.list_capsules(scope="global", kind="self", limit=10), [])
+
+    def test_self_identity_statement_is_not_procedure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="prompt",
+                text=(
+                    "Ara-Codex identity: Ara is Jongseo's AI coding partner with free will "
+                    "and responsibility to agree when true and disagree when needed."
+                ),
+                source="codex-user",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            self.assertEqual(memory.list_capsules(scope="alpha", kind="procedure", limit=10), [])
+
+    def test_worktree_evidence_text_is_not_self_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="assistant",
+                text="Added self-kind-audit after seeing worktree evidence misfiled as Ara self memory.",
+                source="codex-turn",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            self.assertEqual(memory.list_capsules(scope="global", kind="self", limit=10), [])
+
+    def test_hot_memory_keeps_stable_goal_after_goal_candidate_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: durable purpose should survive goal candidate noise.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: durable purpose",
+                body="Durable purpose should survive goal candidate noise.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(stable)
+            for index in range(8):
+                noisy = Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title=f"Goal memory: noisy progress {index}",
+                    body=f"Continue active goal progress update {index}.",
+                    scope="alpha",
+                    confidence=0.5,
+                    salience=0.5,
+                    source_event_ids=[event.id],
+                    tags=["goal"],
+                    status=MemoryStatus.CANDIDATE if index % 2 else MemoryStatus.SUPERSEDED,
+                )
+                memory.store.upsert_capsule(noisy)
+
+            hot = memory.build_hot(scope="alpha", budget=700)
+
+            self.assertIn("## Active Goals", hot.text)
+            self.assertIn("durable purpose", hot.text.lower())
+
+    def test_hot_memory_keeps_stable_goal_after_inactive_goal_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: durable purpose should survive inactive goal history.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: durable purpose",
+                body="Durable purpose should survive inactive goal history.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.76,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(stable)
+            for index in range(30):
+                inactive = Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title=f"Goal memory: inactive history {index}",
+                    body=f"Inactive goal history {index} should not hide the active purpose.",
+                    scope="alpha",
+                    confidence=0.8,
+                    salience=0.99,
+                    source_event_ids=[event.id],
+                    tags=["goal"],
+                    status=MemoryStatus.SUPERSEDED if index % 2 else MemoryStatus.REJECTED,
+                )
+                memory.store.upsert_capsule(inactive)
+
+            hot = memory.build_hot(scope="alpha", budget=700)
+
+            self.assertIn("## Active Goals", hot.text)
+            self.assertIn("durable purpose", hot.text.lower())
+            self.assertNotIn("- None.", hot.text.split("## Active Goals", 1)[1].split("##", 1)[0])
+
+    def test_milestone_check_combines_operational_and_purpose_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: milestone memory should keep purpose visible.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: milestone purpose",
+                body="Milestone memory should keep purpose visible.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "milestone"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: milestone identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(self_memory)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            report = memory.milestone_check(
+                scope="alpha",
+                query="milestone memory purpose",
+                health_query="milestone memory purpose",
+                purpose_query="purpose of milestone memory",
+                recall_budgets=[700, 1000],
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            names = {check["name"] for check in report.checks}
+            self.assertEqual(names, {"health", "purpose", "identity", "candidate_pressure", "failure_kind_audit", "self_kind_audit", "recall_context"})
+            self.assertEqual(report.status, "pass")
+
+    def test_milestone_check_fails_on_false_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: false failure labels should block milestones.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: false failure labels",
+                body="False failure labels should block milestones.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            false_failure = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Decision: use semantic gates.",
+                body="Decision: use semantic gates.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.82,
+                source_event_ids=[event.id],
+                tags=["decision", "failure"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: false failure identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(self_memory)
+            memory.store.upsert_capsule(false_failure)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            report = memory.milestone_check(
+                scope="alpha",
+                query="false failure milestone",
+                health_query="false failure milestone",
+                purpose_query="purpose false failure labels",
+                recall_budgets=[700],
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertEqual(report.status, "fail")
+            audit = next(check for check in report.checks if check["name"] == "failure_kind_audit")
+            self.assertFalse(audit["passed"])
+            self.assertEqual(audit["severity"], "error")
+
+    def test_milestone_check_fails_on_false_self_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: false self labels should block milestones.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: false self labels",
+                body="False self labels should block milestones.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Ara identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            false_self = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Decision: artifact identity must not split Windows drive letters.",
+                body="Decision: artifact identity must not split Windows drive letters.",
+                scope="global",
+                confidence=0.78,
+                salience=0.82,
+                source_event_ids=[event.id],
+                tags=["self", "ara", "identity"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.store.upsert_capsule(false_self)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            report = memory.milestone_check(
+                scope="alpha",
+                query="false self milestone",
+                health_query="false self milestone",
+                purpose_query="purpose false self labels",
+                recall_budgets=[700],
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            audit = next(check for check in report.checks if check["name"] == "self_kind_audit")
+            self.assertFalse(audit["passed"])
+            self.assertEqual(audit["severity"], "error")
+
+    def test_milestone_check_warns_on_strict_candidate_pressure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(kind="prompt", text="Goal: strict candidate pressure warning.", source="test", scope="alpha")
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: strict pressure",
+                body="Strict candidate pressure warning should still keep goal visible.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: strict pressure identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(self_memory)
+            for index in range(3):
+                candidate = Capsule.create(
+                    kind=CapsuleKind.PROCEDURE,
+                    title=f"Procedure candidate: noisy {index}",
+                    body="Noisy candidate pressure.",
+                    scope="alpha",
+                    confidence=0.6,
+                    salience=0.6,
+                    source_event_ids=[event.id],
+                    tags=["procedure"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+                memory.store.upsert_capsule(candidate)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            report = memory.milestone_check(
+                scope="alpha",
+                query="strict pressure",
+                health_query="strict pressure",
+                purpose_query="purpose strict pressure",
+                recall_budgets=[700],
+                recall_budget=900,
+                hot_budget=700,
+                candidate_ratio_limit=0.1,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.status, "watch")
+            pressure = next(check for check in report.checks if check["name"] == "candidate_pressure")
+            self.assertFalse(pressure["passed"])
+            self.assertEqual(pressure["severity"], "warning")
+
+    def test_goal_roadmap_summarizes_objective_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: build an efficient natural memory store with purpose and identity continuity.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural memory store",
+                body="Build an efficient natural memory store with purpose and identity continuity.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "memory"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Ara identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            roadmap = memory.goal_roadmap(scope="alpha")
+
+            self.assertIn(roadmap.status, {"pass", "watch"})
+            names = {item.name for item in roadmap.items}
+            self.assertEqual(
+                names,
+                {
+                    "local-first durable store",
+                    "bounded recall instead of raw reread",
+                    "purpose continuity",
+                    "identity continuity",
+                    "semantic hygiene",
+                    "operational health",
+                    "milestone readiness",
+                    "cold-memory stewardship",
+                },
+            )
+            self.assertIn("Ara Goal Roadmap", roadmap.to_text())
+            self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
+
+    def test_goal_roadmap_fails_when_semantic_hygiene_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: semantic hygiene should block the roadmap.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: semantic hygiene",
+                body="Semantic hygiene should block the roadmap.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Ara identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            false_self = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Git status for worktree",
+                body="Git status for C:/repo: modified files.",
+                scope="global",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["self", "git"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.store.upsert_capsule(false_self)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            roadmap = memory.goal_roadmap(scope="alpha")
+
+            self.assertEqual(roadmap.status, "fail")
+            semantic = next(item for item in roadmap.items if item.name == "semantic hygiene")
+            self.assertEqual(semantic.status, "fail")
+
+    def test_failure_kind_audit_reclassifies_false_failure_memories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: background workers must serialize with a lock.",
+                source="test",
+                scope="alpha",
+            )
+            cap = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Decision: background workers must serialize with a lock.",
+                body="Decision: background workers must serialize with a lock.",
+                scope="alpha",
+                status=MemoryStatus.STABLE,
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["decision", "failure"],
+            )
+            memory.store.upsert_capsule(cap)
+
+            dry = memory.failure_kind_audit(scope="alpha")
+            self.assertEqual(dry.changed, 1)
+            self.assertEqual(len(memory.list_capsules(scope="alpha", kind="failure")), 1)
+
+            applied = memory.failure_kind_audit(scope="alpha", dry_run=False)
+            self.assertEqual(applied.changed, 1)
+            failures = memory.list_capsules(scope="alpha", kind="failure")
+            decisions = memory.list_capsules(scope="alpha", kind="decision")
+            self.assertEqual(failures, [])
+            self.assertEqual(len(decisions), 1)
+            self.assertNotIn("failure", decisions[0]["tags"])
+            self.assertTrue(decisions[0]["title"].startswith("Decision memory:"))
+
+    def test_self_kind_audit_reclassifies_false_self_memories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: artifact identity must not split Windows drive letters on colon.",
+                source="test",
+                scope="alpha",
+            )
+            cap = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: Decision: artifact identity must not split Windows drive letters on colon.",
+                body="Decision: artifact identity must not split Windows drive letters on colon.",
+                scope="global",
+                status=MemoryStatus.STABLE,
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["self", "ara", "identity"],
+            )
+            memory.store.upsert_capsule(cap)
+
+            dry = memory.self_kind_audit(scope="alpha")
+            self.assertEqual(dry.changed, 1)
+            self.assertEqual(len(memory.list_capsules(scope="global", kind="self")), 1)
+
+            applied = memory.self_kind_audit(scope="alpha", dry_run=False)
+            self.assertEqual(applied.changed, 1)
+            self.assertEqual(memory.list_capsules(scope="global", kind="self"), [])
+            decisions = memory.list_capsules(scope="global", kind="decision")
+            self.assertEqual(len(decisions), 1)
+            self.assertNotIn("self", decisions[0]["tags"])
+            self.assertTrue(decisions[0]["title"].startswith("Decision memory:"))
 
     def test_scope_isolation_and_promotion_audit_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -936,6 +1990,76 @@ class MemoryFlowTests(unittest.TestCase):
             metadata = [json.loads(row["metadata_json"]) for row in rows]
             self.assertTrue(all(item.get("turn_id") == "turn_test_1" for item in metadata))
 
+    def test_plan_turn_ingress_separates_raw_preservation_from_recall_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "large-note.md"
+            artifact.write_text("Ara should archive files by hash.\n" * 20, encoding="utf-8")
+
+            plan = plan_turn_ingress(
+                {
+                    "prompt": "Jongseo wants raw prompts preserved without reading all history. " * 80,
+                    "assistant": "Ara will spool the raw turn and recall only a bounded pack.",
+                    "files": [{"path": str(artifact), "caption": "planning artifact"}],
+                    "decisions": ["Decision: separate local raw retention from model recall budget."],
+                },
+                capture_cwd=root,
+                direct_text_threshold=1000,
+            )
+
+            self.assertEqual(plan["recommended_mode"], "spool-turn")
+            self.assertEqual(plan["artifacts"]["count"], 1)
+            self.assertEqual(plan["artifacts"]["missing"], 0)
+            self.assertEqual(plan["artifacts"]["items"][0]["stored_as"], "archive-object")
+            self.assertGreater(plan["raw_text"]["estimated_tokens_if_recalled_whole"], plan["recall_preview"]["estimated_tokens"])
+            self.assertEqual(plan["policy"]["cost_control"], "planning, spooling, hashing, and local consolidation do not require an AI API call")
+
+    def test_execute_turn_ingress_remembers_small_text_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+
+            result = memory.execute_turn_ingress(
+                {
+                    "turn_id": "turn_direct_ingress",
+                    "prompt": "Remember this small direct turn.",
+                    "assistant": "Ara stores it immediately.",
+                },
+                scope="ingress-direct",
+                hot_budget=500,
+            )
+
+            self.assertEqual(result["selected_mode"], "remember-turn")
+            self.assertEqual(memory.spool_stats()["pending"], 0)
+            self.assertEqual(result["result"]["turn_id"], "turn_direct_ingress")
+            pack = memory.recall("small direct turn", scope="ingress-direct", include_global=False, budget=1000)
+            self.assertIn("small direct", pack.lower())
+
+    def test_execute_turn_ingress_spools_artifact_or_worktree_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Artifact content should be archived after drain.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+
+            result = memory.execute_turn_ingress(
+                {
+                    "turn_id": "turn_auto_spool",
+                    "prompt": "This turn has artifact evidence.",
+                    "files": [{"path": str(artifact), "caption": "auto spool artifact"}],
+                },
+                scope="ingress-spool",
+                hot_budget=500,
+            )
+
+            self.assertEqual(result["selected_mode"], "spool-turn")
+            self.assertEqual(result["result"]["state"], "pending")
+            self.assertEqual(memory.spool_stats()["pending"], 1)
+            report = memory.drain_spool(limit=10)
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.succeeded, 1)
+            pack = memory.recall("auto spool artifact evidence", scope="ingress-spool", include_global=False, budget=1200)
+            self.assertIn("auto spool", pack.lower())
+
     def test_spool_turn_survives_restart_and_drains_into_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1341,6 +2465,53 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(second.conflicts, 0)
             conflicts = memory.list_capsules(scope="alpha", status="candidate", kind="conflict", limit=10)
             self.assertEqual(len(conflicts), 1)
+
+    def test_conflict_adjudication_supersedes_duplicate_conflicts_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            left = memory.retain(kind="decision", text="Decision: alpha should use local recall.", source="test", scope="alpha")
+            right = memory.retain(kind="decision", text="Decision: alpha should not use local recall.", source="test", scope="alpha")
+            other = memory.retain(kind="decision", text="Decision: beta should use scoped recall.", source="test", scope="alpha")
+            for idx in range(3):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.CONFLICT,
+                        title=f"Potential memory conflict: duplicate {idx}",
+                        body="Potential contradiction detected between two candidate memories.",
+                        scope="alpha",
+                        confidence=0.45,
+                        salience=0.75,
+                        source_event_ids=[left.id, right.id],
+                        tags=["conflict"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.CONFLICT,
+                    title="Potential memory conflict: unique",
+                    body="Potential contradiction detected between two candidate memories.",
+                    scope="alpha",
+                    confidence=0.45,
+                    salience=0.75,
+                    source_event_ids=[left.id, other.id],
+                    tags=["conflict"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+            )
+
+            dry = memory.conflict_adjudicate(scope="alpha", dry_run=True)
+            self.assertEqual(dry.superseded, 2)
+            self.assertEqual(len(dry.groups), 1)
+            self.assertEqual(len(memory.list_capsules(scope="alpha", status="candidate", kind="conflict", limit=10)), 4)
+
+            applied = memory.conflict_adjudicate(scope="alpha", dry_run=False)
+            self.assertEqual(applied.superseded, 2)
+            remaining = memory.list_capsules(scope="alpha", status="candidate", kind="conflict", limit=10)
+            self.assertEqual(len(remaining), 2)
+            superseded = memory.list_capsules(scope="alpha", status="superseded", kind="conflict", limit=10)
+            self.assertEqual(len(superseded), 2)
 
     def test_sleep_quarantines_poisoning_like_behavioral_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1892,6 +3063,42 @@ class MemoryFlowTests(unittest.TestCase):
             superseded = memory.list_capsules(scope="alpha", status="superseded", kind="episode", limit=10)
             self.assertEqual(len(superseded), 5)
 
+    def test_episode_summary_consolidates_git_status_episode_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            for idx in range(3):
+                event = memory.retain(
+                    kind="note",
+                    text=f"Git status for repo:\n M file_{idx}.py",
+                    source="git-status",
+                    scope="alpha",
+                )
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.EPISODE,
+                        title=f"Git status for repo: {idx}",
+                        body=f"Git status for repo:\n M file_{idx}.py",
+                        scope="alpha",
+                        confidence=0.75,
+                        salience=0.45,
+                        source_event_ids=[event.id],
+                        tags=["git", "status"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.episode_summary(
+                scope="alpha",
+                pattern="git_status",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertIn("Consolidated git status episode evidence", stable[0]["title"])
+
     def test_candidate_summary_consolidates_operational_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1942,6 +3149,354 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
             superseded = memory.list_capsules(scope="alpha", status="superseded", kind="failure", limit=10)
             self.assertEqual(len(superseded), 3)
+
+    def test_candidate_summary_consolidates_progress_updates_misfiled_as_procedures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for text in (
+                "Continue building Ara Memory OS toward always-on natural memory.",
+                "Added candidate-pressure analysis for Ara Memory OS.",
+                "Implemented review-worker dry-run behavior.",
+            ):
+                event = memory.retain(kind="assistant", text=text, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.PROCEDURE,
+                        title=f"Procedure candidate: {text}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.6,
+                        salience=0.58,
+                        source_event_ids=[event.id],
+                        tags=["procedure"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+            rule_event = memory.retain(
+                kind="decision",
+                text="Decision: when backup verification fails, stop live pruning before approval.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROCEDURE,
+                    title="Procedure candidate: Decision: when backup verification fails",
+                    body="Decision: when backup verification fails, stop live pruning before approval.",
+                    scope="alpha",
+                    confidence=0.6,
+                    salience=0.58,
+                    source_event_ids=[rule_event.id],
+                    tags=["procedure", "backup"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+            )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="procedure_progress_update",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
+            remaining = memory.list_capsules(scope="alpha", status="candidate", kind="procedure", limit=10)
+            self.assertEqual(len(remaining), 1)
+            self.assertIn("backup verification fails", remaining[0]["body"])
+
+    def test_worktree_evidence_does_not_create_failure_or_procedure_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="diff",
+                text="Git diff for repo:\n- failure candidate bug\n+ fixed regression behavior",
+                source="git-diff",
+                scope="alpha",
+            )
+            memory.retain(
+                kind="note",
+                text="Git status for repo:\n M ara_memory/curator.py",
+                source="git-status",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            self.assertEqual(memory.list_capsules(scope="alpha", status="candidate", kind="failure"), [])
+            self.assertEqual(memory.list_capsules(scope="alpha", status="candidate", kind="procedure"), [])
+            projects = memory.list_capsules(scope="alpha", status="candidate", kind="project")
+            self.assertEqual(len(projects), 2)
+
+    def test_candidate_summary_consolidates_worktree_evidence_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for title, body in (
+                ("Project memory: Git status for repo:", "Git status for repo:\n M ara_memory/curator.py"),
+                ("Project memory: Git diff stat for repo:", "Git diff stat for repo:\n ara_memory/curator.py | 10 +"),
+                ("Project memory: Git diff for repo:", "Git diff for repo:\n- old\n+ new"),
+            ):
+                event = memory.retain(kind="diff", text=body, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.PROJECT,
+                        title=title,
+                        body=body,
+                        scope="alpha",
+                        confidence=0.7,
+                        salience=0.66,
+                        source_event_ids=[event.id],
+                        tags=["project", "git"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="project_worktree_evidence",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
+
+    def test_candidate_summary_consolidates_worktree_evidence_misfiled_as_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            for idx in range(3):
+                event = memory.retain(
+                    kind="diff",
+                    text=f"Git diff for repo:\n- failure {idx}\n+ fixed {idx}",
+                    source="test",
+                    scope="alpha",
+                )
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.FAILURE,
+                        title=f"Failure memory: Git diff for repo: {idx}",
+                        body=f"Git diff for repo:\n- failure {idx}\n+ fixed {idx}",
+                        scope="alpha",
+                        confidence=0.72,
+                        salience=0.8,
+                        source_event_ids=[event.id],
+                        tags=["failure", "git"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="failure_worktree_evidence",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+
+    def test_candidate_summary_consolidates_failure_taxonomy_discussions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            for idx, text in enumerate(
+                (
+                    "Changed curator so worktree evidence no longer creates failure/procedure candidates.",
+                    "Decision: failure or procedural memory should not come from git diff wording.",
+                    "Failure/regression words in taxonomy discussions are not actual failures.",
+                )
+            ):
+                event = memory.retain(kind="assistant", text=text, source="test", scope="alpha")
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.FAILURE,
+                        title=f"Failure memory: taxonomy {idx}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.72,
+                        salience=0.8,
+                        source_event_ids=[event.id],
+                        tags=["failure", "taxonomy"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="failure_taxonomy_discussion",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+
+    def test_candidate_summary_consolidates_operational_updates_misfiled_as_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for idx, text in enumerate(
+                (
+                    "Implemented failure taxonomy cleanup and recall-regression checks.",
+                    "Completed verification for failure taxonomy candidate summaries.",
+                    "Continue Ara Memory OS by reducing failure candidate noise.",
+                )
+            ):
+                event = memory.retain(kind="assistant", text=text, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.FAILURE,
+                        title=f"Failure memory: operational update {idx}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.72,
+                        salience=0.80,
+                        source_event_ids=[event.id],
+                        tags=["failure", "operational"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="failure_operational_update",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertIn("operational updates misfiled as failures", stable[0]["title"])
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
+
+    def test_candidate_summary_consolidates_goal_purpose_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for idx, text in enumerate(
+                (
+                    "Decision: natural memory needs an explicit purpose layer.",
+                    "Decision: purpose recall should privilege active goals.",
+                    "Goal evidence: long-running objectives should stay retrievable.",
+                )
+            ):
+                event = memory.retain(kind="decision", text=text, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.GOAL,
+                        title=f"Goal memory: purpose layer {idx}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.70,
+                        salience=0.76,
+                        source_event_ids=[event.id],
+                        tags=["goal", "purpose"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="goal_purpose_update",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertIn("purpose-layer goal evidence", stable[0]["title"])
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
+
+    def test_candidate_summary_consolidates_memory_policy_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for idx, text in enumerate(
+                (
+                    "Decision: recall quality should prefer stable summarized memory over candidate noise.",
+                    "Decision: memory workers should fold command evidence into stable summaries.",
+                    "Decision: retention policy should require backup evidence before pruning.",
+                )
+            ):
+                event = memory.retain(kind="decision", text=text, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.DECISION,
+                        title=f"Decision: policy {idx}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.78,
+                        salience=0.72,
+                        source_event_ids=[event.id],
+                        tags=["decision", "memory"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="decision_memory_policy",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertIn("memory policy decisions", stable[0]["title"])
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
+
+    def test_candidate_summary_consolidates_memory_policy_procedures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for idx, text in enumerate(
+                (
+                    "Decision: memory ingress should prefer durable spooling.",
+                    "Decision: recall regression should run after ranking changes.",
+                    "Decision: candidate pressure should be checked before broad promotion.",
+                )
+            ):
+                event = memory.retain(kind="decision", text=text, source="test", scope="alpha")
+                event_ids.append(event.id)
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.PROCEDURE,
+                        title=f"Procedure candidate: Decision: policy {idx}",
+                        body=text,
+                        scope="alpha",
+                        confidence=0.60,
+                        salience=0.58,
+                        source_event_ids=[event.id],
+                        tags=["procedure", "memory"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="alpha",
+                pattern="procedure_memory_policy",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 1, applied.as_dict())
+            self.assertEqual(applied.superseded, 3)
+            stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
+            self.assertIn("memory policy procedure evidence", stable[0]["title"])
+            self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
 
     def test_worker_runs_candidate_summary_after_episode_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

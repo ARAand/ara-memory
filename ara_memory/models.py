@@ -28,6 +28,7 @@ class EventKind(StrEnum):
 
 class CapsuleKind(StrEnum):
     EPISODE = "episode"
+    GOAL = "goal"
     DECISION = "decision"
     PREFERENCE = "preference"
     PROCEDURE = "procedure"

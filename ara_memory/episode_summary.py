@@ -11,6 +11,7 @@ from ara_memory.storage import MemoryStore, row_to_capsule
 GROUP_PATTERNS = {
     "command": ("Command: ",),
     "file_artifact": ("File artifact: ", "Untracked file "),
+    "git_status": ("Git status for ",),
     "session": (),
 }
 SESSION_EXCLUDED_PREFIXES = ("Command: ", "File artifact: ", "Untracked file ", "Git status")
@@ -183,6 +184,8 @@ def _summary_title(pattern: str, count: int) -> str:
         return f"Consolidated command episode outcomes ({count} episodes)"
     if pattern == "file_artifact":
         return f"Consolidated file artifact episode evidence ({count} episodes)"
+    if pattern == "git_status":
+        return f"Consolidated git status episode evidence ({count} episodes)"
     if pattern == "session":
         return f"Consolidated session episode narrative ({count} episodes)"
     return f"Consolidated episode evidence ({count} episodes)"

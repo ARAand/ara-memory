@@ -196,6 +196,11 @@ class AraMemory:
 
         return enqueue_turn(self, turn, **kwargs)
 
+    def execute_turn_ingress(self, turn: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        from ara_memory.turn import execute_turn_ingress
+
+        return execute_turn_ingress(self, turn, **kwargs)
+
     def drain_spool(self, **kwargs: Any) -> Any:
         from ara_memory.spool import drain_spool
 
@@ -238,6 +243,46 @@ class AraMemory:
             max_token_growth=max_token_growth,
             min_overlap=min_overlap,
         )
+
+    def recall_plan(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_plan import build_recall_plan
+
+        return build_recall_plan(self, query, **kwargs)
+
+    def recall_context(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_plan import build_recall_context
+
+        return build_recall_context(self, query, **kwargs)
+
+    def purpose_check(self, **kwargs: Any) -> Any:
+        from ara_memory.purpose import run_purpose_check
+
+        return run_purpose_check(self, **kwargs)
+
+    def identity_check(self, **kwargs: Any) -> Any:
+        from ara_memory.identity import run_identity_check
+
+        return run_identity_check(self, **kwargs)
+
+    def failure_kind_audit(self, **kwargs: Any) -> Any:
+        from ara_memory.failure_audit import audit_failure_kinds
+
+        return audit_failure_kinds(self.store, **kwargs)
+
+    def self_kind_audit(self, **kwargs: Any) -> Any:
+        from ara_memory.self_audit import audit_self_kinds
+
+        return audit_self_kinds(self.store, **kwargs)
+
+    def milestone_check(self, **kwargs: Any) -> Any:
+        from ara_memory.milestone import run_milestone_check
+
+        return run_milestone_check(self, **kwargs)
+
+    def goal_roadmap(self, **kwargs: Any) -> Any:
+        from ara_memory.goal_roadmap import build_goal_roadmap
+
+        return build_goal_roadmap(self, **kwargs)
 
     def doctor(
         self,
@@ -298,6 +343,11 @@ class AraMemory:
         from ara_memory.candidate_summary import CandidateSummaryConsolidator
 
         return CandidateSummaryConsolidator(self.store).run(**kwargs)
+
+    def conflict_adjudicate(self, **kwargs: Any) -> Any:
+        from ara_memory.conflict_adjudication import ConflictAdjudicator
+
+        return ConflictAdjudicator(self.store).run(**kwargs)
 
     def episode_summary(self, **kwargs: Any) -> Any:
         from ara_memory.episode_summary import EpisodeSummaryConsolidator

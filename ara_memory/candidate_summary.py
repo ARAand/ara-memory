@@ -30,6 +30,132 @@ PATTERNS = {
         "title": "Consolidated command procedure evidence",
         "tags": ["candidate-summary", "command", "procedure"],
     },
+    "procedure_progress_update": {
+        "kind": CapsuleKind.PROCEDURE,
+        "title_prefix": "Procedure candidate:",
+        "body_like_any": [
+            "Continue building %",
+            "Continue hardening %",
+            "Add %",
+            "Added %",
+            "Implemented %",
+            "Changed %",
+            "Fixed %",
+            "Wired %",
+        ],
+        "title": "Consolidated project progress updates misfiled as procedures",
+        "tags": ["candidate-summary", "procedure", "progress"],
+    },
+    "project_worktree_evidence": {
+        "kind": CapsuleKind.PROJECT,
+        "title_prefix": "Project memory:",
+        "body_like_any": [
+            "Git status for %",
+            "Git diff stat for %",
+            "Git diff for %",
+            "Untracked file manifest:%",
+        ],
+        "title": "Consolidated worktree evidence candidates",
+        "tags": ["candidate-summary", "git", "worktree", "project"],
+    },
+    "failure_worktree_evidence": {
+        "kind": CapsuleKind.FAILURE,
+        "title_prefix": "Failure memory: Git ",
+        "body_like_any": [
+            "Git diff for %",
+            "Git status for %",
+            "Git diff stat for %",
+        ],
+        "title": "Consolidated worktree evidence misfiled as failures",
+        "tags": ["candidate-summary", "git", "worktree", "failure"],
+    },
+    "failure_taxonomy_discussion": {
+        "kind": CapsuleKind.FAILURE,
+        "title_prefix": "Failure memory:",
+        "body_like_any": [
+            "%failure/procedure%",
+            "%failure or procedural memory%",
+            "%failure/regression word%",
+            "%no longer creates failure%",
+            "%failure candidates%",
+            "%failure capsules%",
+            "%failure taxonomy discussion%",
+            "%failure taxonomy discussions%",
+            "%misfiled as failures%",
+        ],
+        "title": "Consolidated failure taxonomy discussions misfiled as failures",
+        "tags": ["candidate-summary", "failure", "taxonomy"],
+    },
+    "failure_operational_update": {
+        "kind": CapsuleKind.FAILURE,
+        "title_prefix": "Failure memory:",
+        "body_like_any": [
+            "Implemented %",
+            "Added %",
+            "Completed verification%",
+            "Continue Ara Memory OS%",
+            "Continue building Ara Memory OS%",
+            "Narrowed %",
+            "After capture, recall-regression exposed%",
+            "Decision: %noise%",
+            "Decision: %candidate%",
+            "Command: python -m ara_memory candidate-summary%-> created%",
+        ],
+        "title": "Consolidated operational updates misfiled as failures",
+        "tags": ["candidate-summary", "failure", "operational-update"],
+    },
+    "decision_memory_policy": {
+        "kind": CapsuleKind.DECISION,
+        "title_prefix": "Decision:",
+        "body_like_any": [
+            "%memory%",
+            "%recall%",
+            "%candidate%",
+            "%summary%",
+            "%worker%",
+            "%pruning%",
+            "%retention%",
+            "%spool%",
+            "%evidence%",
+            "%goal%",
+            "%purpose%",
+        ],
+        "title": "Consolidated memory policy decisions",
+        "tags": ["candidate-summary", "decision", "memory-policy"],
+    },
+    "goal_purpose_update": {
+        "kind": CapsuleKind.GOAL,
+        "title_prefix": "Goal memory:",
+        "body_like_any": [
+            "%purpose%",
+            "%objective%",
+            "%goal%",
+            "%intent%",
+            "%natural memory%",
+            "%long-running%",
+        ],
+        "title": "Consolidated purpose-layer goal evidence",
+        "tags": ["candidate-summary", "goal", "purpose"],
+    },
+    "procedure_memory_policy": {
+        "kind": CapsuleKind.PROCEDURE,
+        "title_prefix": "Procedure candidate: Decision:",
+        "body_like_any": [
+            "%memory%",
+            "%recall%",
+            "%candidate%",
+            "%summary%",
+            "%worker%",
+            "%pruning%",
+            "%retention%",
+            "%spool%",
+            "%evidence%",
+            "%goal%",
+            "%purpose%",
+        ],
+        "title": "Consolidated memory policy procedure evidence",
+        "tags": ["candidate-summary", "procedure", "memory-policy"],
+    },
 }
 
 
@@ -137,13 +263,20 @@ class CandidateSummaryConsolidator:
 
     def _candidates(self, *, scope: str | None, pattern: str, limit: int) -> list[dict[str, Any]]:
         config = PATTERNS[pattern]
-        clauses = ["status = ?", "kind = ?", "title LIKE ?", "body LIKE ?"]
+        clauses = ["status = ?", "kind = ?", "title LIKE ?"]
         args: list[Any] = [
             MemoryStatus.CANDIDATE.value,
             config["kind"].value,
             f"{config['title_prefix']}%",
-            f"{config['body_prefix']}%",
         ]
+        body_prefix = config.get("body_prefix")
+        if body_prefix:
+            clauses.append("body LIKE ?")
+            args.append(f"{body_prefix}%")
+        body_like_any = config.get("body_like_any", [])
+        if body_like_any:
+            clauses.append("(" + " OR ".join(["body LIKE ?" for _ in body_like_any]) + ")")
+            args.extend(body_like_any)
         if pattern == "failure_success_command":
             clauses.append("(body LIKE ? OR body LIKE ? OR body LIKE ?)")
             args.extend(["%-> pass%", "%Exit code: 0%", "%\nOK%"])

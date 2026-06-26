@@ -14,7 +14,7 @@ from ara_memory.regression import (
     load_recall_regression_cases,
     write_recall_regression_baseline,
 )
-from ara_memory.turn import remember_turn
+from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
 
@@ -53,6 +53,28 @@ def main(argv: list[str] | None = None) -> int:
     remember.add_argument("--max-file-chars", type=int, default=8000)
     remember.add_argument("--max-text-chars", type=int, default=12000)
 
+    plan_turn = sub.add_parser("plan-turn")
+    plan_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
+    plan_turn.add_argument("--capture-cwd", type=Path, default=None)
+    plan_turn.add_argument("--max-file-chars", type=int, default=8000)
+    plan_turn.add_argument("--max-text-chars", type=int, default=12000)
+    plan_turn.add_argument("--direct-text-threshold", type=int, default=16000)
+
+    ingress_turn = sub.add_parser("ingress-turn")
+    ingress_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
+    ingress_turn.add_argument("--scope", default="global")
+    ingress_turn.add_argument("--source", default="codex-turn")
+    ingress_turn.add_argument("--mode", choices=["auto", "remember-turn", "spool-turn"], default="auto")
+    ingress_turn.add_argument("--dry-run", action="store_true")
+    ingress_turn.add_argument("--no-consolidate", action="store_true")
+    ingress_turn.add_argument("--sleep", action="store_true")
+    ingress_turn.add_argument("--hot-budget", type=int, default=1200)
+    ingress_turn.add_argument("--capture-cwd", type=Path, default=None)
+    ingress_turn.add_argument("--include-untracked-content", action="store_true")
+    ingress_turn.add_argument("--max-file-chars", type=int, default=8000)
+    ingress_turn.add_argument("--max-text-chars", type=int, default=12000)
+    ingress_turn.add_argument("--direct-text-threshold", type=int, default=16000)
+
     spool_turn = sub.add_parser("spool-turn")
     spool_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
     spool_turn.add_argument("--scope", default="global")
@@ -89,6 +111,81 @@ def main(argv: list[str] | None = None) -> int:
     recall.add_argument("--no-global", action="store_true", help="Do not include global memories when recalling a scoped pack.")
     recall.add_argument("--diagnostics", action="store_true", help="Print recall cost/selection diagnostics after the pack.")
     recall.add_argument("--hot", action="store_true", help="Prepend the scope hot memory file if it exists.")
+
+    recall_plan = sub.add_parser("recall-plan")
+    recall_plan.add_argument("query")
+    recall_plan.add_argument("--scope", default="global")
+    recall_plan.add_argument("--budgets", default="800,1600,2500")
+    recall_plan.add_argument("--no-global", action="store_true")
+    recall_plan.add_argument("--no-hot", action="store_true")
+    recall_plan.add_argument("--output-tokens", type=int, default=0)
+    recall_plan.add_argument("--input-usd-per-million", type=float, default=0.0)
+    recall_plan.add_argument("--output-usd-per-million", type=float, default=0.0)
+    recall_plan.add_argument("--json", action="store_true")
+
+    recall_context = sub.add_parser("recall-context")
+    recall_context.add_argument("query")
+    recall_context.add_argument("--scope", default="global")
+    recall_context.add_argument("--budgets", default="800,1600,2500")
+    recall_context.add_argument("--no-global", action="store_true")
+    recall_context.add_argument("--no-hot", action="store_true")
+    recall_context.add_argument("--output-tokens", type=int, default=0)
+    recall_context.add_argument("--input-usd-per-million", type=float, default=0.0)
+    recall_context.add_argument("--output-usd-per-million", type=float, default=0.0)
+    recall_context.add_argument("--pack-only", action="store_true")
+    recall_context.add_argument("--json", action="store_true")
+
+    purpose_check = sub.add_parser("purpose-check")
+    purpose_check.add_argument("--scope", default="global")
+    purpose_check.add_argument("--query", default="purpose of Ara natural memory and long-running goal")
+    purpose_check.add_argument("--budget", type=int, default=1000)
+    purpose_check.add_argument("--hot-budget", type=int, default=1200)
+    purpose_check.add_argument("--no-global", action="store_true")
+    purpose_check.add_argument("--repair-hot", action="store_true")
+    purpose_check.add_argument("--json", action="store_true")
+
+    identity_check = sub.add_parser("identity-check")
+    identity_check.add_argument("--scope", default="global")
+    identity_check.add_argument("--query", default="Ara identity judgment principles free will coding partner")
+    identity_check.add_argument("--budget", type=int, default=1000)
+    identity_check.add_argument("--hot-budget", type=int, default=1200)
+    identity_check.add_argument("--no-global", action="store_true")
+    identity_check.add_argument("--repair-hot", action="store_true")
+    identity_check.add_argument("--json", action="store_true")
+
+    milestone_check = sub.add_parser("milestone-check")
+    milestone_check.add_argument("--scope", default="global")
+    milestone_check.add_argument("--query", default="current Ara memory architecture and purpose")
+    milestone_check.add_argument("--recall-budgets", default="800,1600,2500")
+    milestone_check.add_argument("--health-query", default="current memory health")
+    milestone_check.add_argument("--purpose-query", default="purpose of Ara natural memory and long-running goal")
+    milestone_check.add_argument("--recall-budget", type=int, default=1600)
+    milestone_check.add_argument("--hot-budget", type=int, default=1200)
+    milestone_check.add_argument("--candidate-ratio-limit", type=float, default=0.5)
+    milestone_check.add_argument("--no-repair-hot", action="store_true")
+    milestone_check.add_argument("--regression-manifest", type=Path, default=None)
+    milestone_check.add_argument("--regression-baseline", type=Path, default=None)
+    milestone_check.add_argument("--json", action="store_true")
+
+    failure_kind_audit = sub.add_parser("failure-kind-audit")
+    failure_kind_audit.add_argument("--scope", default=None)
+    failure_kind_audit.add_argument("--status", action="append", choices=["candidate", "stable", "quarantined", "superseded", "rejected"], default=None)
+    failure_kind_audit.add_argument("--limit", type=int, default=200)
+    failure_kind_audit.add_argument("--apply", action="store_true")
+    failure_kind_audit.add_argument("--json", action="store_true")
+
+    self_kind_audit = sub.add_parser("self-kind-audit")
+    self_kind_audit.add_argument("--scope", default=None)
+    self_kind_audit.add_argument("--status", action="append", choices=["candidate", "stable", "quarantined", "superseded", "rejected"], default=None)
+    self_kind_audit.add_argument("--limit", type=int, default=200)
+    self_kind_audit.add_argument("--apply", action="store_true")
+    self_kind_audit.add_argument("--json", action="store_true")
+
+    goal_roadmap = sub.add_parser("goal-roadmap")
+    goal_roadmap.add_argument("--scope", default="global")
+    goal_roadmap.add_argument("--regression-manifest", type=Path, default=None)
+    goal_roadmap.add_argument("--regression-baseline", type=Path, default=None)
+    goal_roadmap.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -343,16 +440,34 @@ def main(argv: list[str] | None = None) -> int:
     candidate_summary.add_argument("--scope", default=None)
     candidate_summary.add_argument(
         "--pattern",
-        choices=["all", "project_file_artifact", "failure_success_command", "procedure_command"],
+        choices=[
+            "all",
+            "decision_memory_policy",
+            "project_file_artifact",
+            "failure_operational_update",
+            "failure_taxonomy_discussion",
+            "failure_success_command",
+            "failure_worktree_evidence",
+            "goal_purpose_update",
+            "procedure_command",
+            "procedure_memory_policy",
+            "procedure_progress_update",
+            "project_worktree_evidence",
+        ],
         default="all",
     )
     candidate_summary.add_argument("--min-group-size", type=int, default=3)
     candidate_summary.add_argument("--limit", type=int, default=80)
     candidate_summary.add_argument("--apply", action="store_true")
     candidate_summary.add_argument("--json", action="store_true")
+    conflict_adjudicate = sub.add_parser("conflict-adjudicate")
+    conflict_adjudicate.add_argument("--scope", default=None)
+    conflict_adjudicate.add_argument("--limit", type=int, default=500)
+    conflict_adjudicate.add_argument("--apply", action="store_true")
+    conflict_adjudicate.add_argument("--json", action="store_true")
     episode_summary = sub.add_parser("episode-summary")
     episode_summary.add_argument("--scope", default=None)
-    episode_summary.add_argument("--pattern", choices=["command", "file_artifact", "session"], default="command")
+    episode_summary.add_argument("--pattern", choices=["command", "file_artifact", "git_status", "session"], default="command")
     episode_summary.add_argument("--min-group-size", type=int, default=5)
     episode_summary.add_argument("--limit", type=int, default=50)
     episode_summary.add_argument("--apply", action="store_true")
@@ -421,6 +536,39 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
+    if args.cmd == "plan-turn":
+        payload = _read_json_arg(args.file)
+        result = plan_turn_ingress(
+            payload,
+            capture_cwd=args.capture_cwd,
+            max_file_chars=args.max_file_chars,
+            max_text_chars=args.max_text_chars,
+            direct_text_threshold=args.direct_text_threshold,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    if args.cmd == "ingress-turn":
+        payload = _read_json_arg(args.file)
+        result = execute_turn_ingress(
+            memory,
+            payload,
+            scope=args.scope,
+            source=args.source,
+            consolidate=not args.no_consolidate,
+            sleep=args.sleep,
+            hot_budget=args.hot_budget,
+            capture_cwd=args.capture_cwd,
+            include_untracked_content=args.include_untracked_content,
+            max_file_chars=args.max_file_chars,
+            max_text_chars=args.max_text_chars,
+            direct_text_threshold=args.direct_text_threshold,
+            mode=args.mode,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
     if args.cmd == "spool-turn":
         payload = _read_json_arg(args.file)
         result = memory.spool_turn(
@@ -483,6 +631,132 @@ def main(argv: list[str] | None = None) -> int:
             print("\n# Recall Diagnostics")
             print(json.dumps(result.diagnostics, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+
+    if args.cmd == "recall-plan":
+        result = memory.recall_plan(
+            args.query,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            output_tokens=args.output_tokens,
+            input_usd_per_million=args.input_usd_per_million,
+            output_usd_per_million=args.output_usd_per_million,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "recall-context":
+        result = memory.recall_context(
+            args.query,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            output_tokens=args.output_tokens,
+            input_usd_per_million=args.input_usd_per_million,
+            output_usd_per_million=args.output_usd_per_million,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text(include_plan=not args.pack_only))
+        return 0
+
+    if args.cmd == "purpose-check":
+        result = memory.purpose_check(
+            scope=args.scope,
+            query=args.query,
+            budget=args.budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
+            repair_hot=args.repair_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "identity-check":
+        result = memory.identity_check(
+            scope=args.scope,
+            query=args.query,
+            budget=args.budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
+            repair_hot=args.repair_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "milestone-check":
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
+        result = memory.milestone_check(
+            scope=args.scope,
+            query=args.query,
+            recall_budgets=_parse_budget_list(args.recall_budgets),
+            health_query=args.health_query,
+            purpose_query=args.purpose_query,
+            recall_budget=args.recall_budget,
+            hot_budget=args.hot_budget,
+            candidate_ratio_limit=args.candidate_ratio_limit,
+            repair_hot=not args.no_repair_hot,
+            regression_cases=cases,
+            regression_baseline=baseline,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "failure-kind-audit":
+        result = memory.failure_kind_audit(
+            scope=args.scope,
+            statuses=args.status,
+            limit=args.limit,
+            dry_run=not args.apply,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "self-kind-audit":
+        result = memory.self_kind_audit(
+            scope=args.scope,
+            statuses=args.status,
+            limit=args.limit,
+            dry_run=not args.apply,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "goal-roadmap":
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
+        result = memory.goal_roadmap(
+            scope=args.scope,
+            regression_cases=cases,
+            regression_baseline=baseline,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.status in {"pass", "watch"} else 1
 
     if args.cmd == "promote":
         if not memory.promote(args.capsule_id, actor=args.actor, reason=args.reason):
@@ -916,6 +1190,18 @@ def main(argv: list[str] | None = None) -> int:
             print(result.to_text())
         return 0
 
+    if args.cmd == "conflict-adjudicate":
+        result = memory.conflict_adjudicate(
+            scope=args.scope,
+            limit=args.limit,
+            dry_run=not args.apply,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
     if args.cmd == "episode-summary":
         result = memory.episode_summary(
             scope=args.scope,
@@ -985,6 +1271,21 @@ def _read_json_arg(file: Path | None) -> dict:
     if not isinstance(payload, dict):
         raise SystemExit("Turn envelope must be a JSON object.")
     return payload
+
+
+def _parse_budget_list(value: str) -> list[int]:
+    budgets = []
+    for raw in value.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        budget = int(item)
+        if budget <= 0:
+            raise SystemExit("Recall budgets must be positive integers.")
+        budgets.append(budget)
+    if not budgets:
+        raise SystemExit("Provide at least one recall budget.")
+    return budgets
 
 
 if __name__ == "__main__":

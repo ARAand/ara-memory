@@ -10,7 +10,7 @@ from ara_memory.risk import MemoryRiskAssessor
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
-PROMOTE_KINDS = {"self", "procedure", "decision", "failure", "project", "fact"}
+PROMOTE_KINDS = {"self", "goal", "procedure", "decision", "failure", "project", "fact"}
 
 
 @dataclass(slots=True)
