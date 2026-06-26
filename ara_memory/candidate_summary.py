@@ -146,7 +146,7 @@ class CandidateSummaryConsolidator:
         ]
         if pattern == "failure_success_command":
             clauses.append("(body LIKE ? OR body LIKE ? OR body LIKE ?)")
-            args.extend(["%-> passed%", "%Exit code: 0%", "%\nOK%"])
+            args.extend(["%-> pass%", "%Exit code: 0%", "%\nOK%"])
         if scope:
             clauses.append("scope = ?")
             args.append(scope)

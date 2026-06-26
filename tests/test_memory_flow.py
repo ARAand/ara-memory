@@ -99,6 +99,42 @@ class MemoryFlowTests(unittest.TestCase):
             failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
             self.assertEqual(len(failures), 1)
 
+    def test_failure_taxonomy_discussion_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text=(
+                    "Changed curator failure extraction so successful command events no longer "
+                    "become failure capsules, and failure/conflict candidates are treated as taxonomy."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
+    def test_successful_health_command_pass_score_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="command",
+                text=(
+                    "Command: python -m ara_memory health --regression-manifest examples/regression.json "
+                    "-> pass score 90"
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            self.assertEqual(failures, [])
+
     def test_recall_prefers_stable_memory_over_candidate_operational_noise(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

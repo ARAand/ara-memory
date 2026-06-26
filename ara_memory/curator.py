@@ -181,6 +181,14 @@ def _is_failure_memory(text: str, *, lowered: str, operational: bool) -> bool:
         return False
     if operational and _looks_like_successful_command(text, lowered=lowered):
         return False
+    if _looks_like_failure_taxonomy_discussion(lowered):
+        return False
+    if re.search(r"\b(error|failed|exception|broken|not working)\b", lowered):
+        return True
+    if "regression" in lowered and "recall-regression" not in lowered and "regression_manifest" not in lowered:
+        return True
+    if re.search(r"\bfail(?:ure)?\b", lowered):
+        return True
     return True
 
 
@@ -189,9 +197,19 @@ def _looks_like_successful_command(text: str, *, lowered: str) -> bool:
         return False
     if re.search(r"\b(exit code|exit_code)\s*[:=]\s*0\b", lowered):
         return True
-    if re.search(r"\s->\s*(passed|ok|success|succeeded)\b", lowered):
+    if re.search(r"\s->\s*(pass|passed|ok|success|succeeded)\b", lowered):
         return True
     return bool(re.search(r"(^|\n)\s*(ok|passed)\s*$", lowered))
+
+
+def _looks_like_failure_taxonomy_discussion(lowered: str) -> bool:
+    taxonomy_patterns = (
+        r"\bfailure/conflict\b",
+        r"\bfailure (candidate|candidates|capsule|capsules|memory|memories|extraction|extractor|classification|classifer)\b",
+        r"\bno longer become failure\b",
+        r"\bmisfiled as failures?\b",
+    )
+    return any(re.search(pattern, lowered) for pattern in taxonomy_patterns)
 
 
 def _salience(text: str, *, base: float) -> float:
