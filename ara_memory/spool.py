@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -77,12 +78,22 @@ def enqueue_turn(
 ) -> SpoolRecord:
     memory.init()
     paths = _spool_paths(memory.store.root)
-    spool_id = str(turn.get("turn_id") or new_id("spool"))
+    turn_payload = dict(turn)
+    turn_id = str(turn_payload.get("turn_id") or new_id("turn"))
+    turn_payload["turn_id"] = turn_id
+    spool_id = _new_spool_id(turn_id)
+    created_at = utc_now()
+    metadata = dict(turn_payload.get("metadata")) if isinstance(turn_payload.get("metadata"), dict) else {}
+    metadata.setdefault("turn_captured_at", created_at)
+    metadata.setdefault("spool_id", spool_id)
+    metadata.setdefault("spooled_at", created_at)
+    turn_payload["metadata"] = metadata
     payload = {
         "format": "ara-memory-spooled-turn-v1",
         "spool_id": spool_id,
-        "created_at": utc_now(),
-        "turn": dict(turn),
+        "logical_turn_id": turn_id,
+        "created_at": created_at,
+        "turn": turn_payload,
         "options": {
             "scope": scope,
             "source": source,
@@ -98,7 +109,13 @@ def enqueue_turn(
     final_path = paths["pending"] / f"{_safe_name(spool_id)}.json"
     temp_path = paths["pending"] / f".{_safe_name(spool_id)}.{new_id('tmp')}.tmp"
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    temp_path.replace(final_path)
+    try:
+        _publish_without_overwrite(temp_path, final_path)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
     return SpoolRecord(spool_id=spool_id, path=str(final_path), state="pending")
 
 
@@ -256,3 +273,19 @@ def _turn(value: Any) -> dict[str, Any]:
 
 def _safe_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in value)[:120]
+
+
+def _new_spool_id(turn_id: str) -> str:
+    base = _safe_name(turn_id)[:80].strip("._-") or "turn"
+    return f"{base}-{new_id('spool')}"
+
+
+def _publish_without_overwrite(temp_path: Path, final_path: Path) -> None:
+    try:
+        os.link(temp_path, final_path)
+    except FileExistsError:
+        raise
+    except OSError:
+        data = temp_path.read_bytes()
+        with final_path.open("xb") as handle:
+            handle.write(data)

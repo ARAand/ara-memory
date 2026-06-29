@@ -2138,6 +2138,96 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("spool-turn", pack)
             self.assertIn("drain-spool", pack)
 
+    def test_spool_turn_duplicate_turn_ids_do_not_overwrite_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+
+            first = memory.spool_turn(
+                {
+                    "turn_id": "turn_duplicate_1",
+                    "prompt": "First prompt with a duplicated logical turn id.",
+                },
+                scope="spool-duplicate",
+            )
+            second = memory.spool_turn(
+                {
+                    "turn_id": "turn_duplicate_1",
+                    "prompt": "Second prompt with the same logical turn id.",
+                },
+                scope="spool-duplicate",
+            )
+
+            self.assertNotEqual(first.spool_id, second.spool_id)
+            self.assertNotEqual(Path(first.path).name, Path(second.path).name)
+            self.assertEqual(memory.spool_stats()["pending"], 2)
+
+            pending_paths = sorted((memory.store.root / "spool" / "pending").glob("*.json"))
+            payloads = [json.loads(path.read_text(encoding="utf-8")) for path in pending_paths]
+            self.assertEqual({payload["logical_turn_id"] for payload in payloads}, {"turn_duplicate_1"})
+            self.assertEqual(
+                {payload["turn"]["prompt"] for payload in payloads},
+                {
+                    "First prompt with a duplicated logical turn id.",
+                    "Second prompt with the same logical turn id.",
+                },
+            )
+            self.assertTrue(
+                all(payload["turn"]["metadata"]["turn_captured_at"] == payload["created_at"] for payload in payloads)
+            )
+
+    def test_drain_archives_duplicate_turn_ids_without_overwriting_done(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_duplicate_drain",
+                    "prompt": "First drained duplicate turn should remain visible.",
+                },
+                scope="spool-duplicate-drain",
+            )
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_duplicate_drain",
+                    "prompt": "Second drained duplicate turn should remain visible.",
+                },
+                scope="spool-duplicate-drain",
+            )
+
+            report = memory.drain_spool(limit=10)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.succeeded, 2)
+            self.assertEqual(memory.spool_stats()["pending"], 0)
+            self.assertEqual(memory.spool_stats()["done"], 2)
+            self.assertEqual(len({item.spool_id for item in report.items}), 2)
+
+            done_paths = sorted((memory.store.root / "spool" / "done").glob("*.json"))
+            done_payloads = [json.loads(path.read_text(encoding="utf-8")) for path in done_paths]
+            self.assertEqual({payload["turn"]["turn_id"] for payload in done_payloads}, {"turn_duplicate_drain"})
+
+            with memory.store.session() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT text, metadata_json
+                    FROM events
+                    WHERE scope = ? AND kind = 'prompt'
+                    """,
+                    ("spool-duplicate-drain",),
+                ).fetchall()
+            prompts = {row["text"] for row in rows}
+            metadata = [json.loads(row["metadata_json"]) for row in rows]
+            self.assertEqual(
+                prompts,
+                {
+                    "First drained duplicate turn should remain visible.",
+                    "Second drained duplicate turn should remain visible.",
+                },
+            )
+            self.assertEqual({item["turn_id"] for item in metadata}, {"turn_duplicate_drain"})
+            self.assertEqual(len({item["spool_id"] for item in metadata}), 2)
+
     def test_spool_drain_keeps_failed_envelope_for_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2161,6 +2251,63 @@ class MemoryFlowTests(unittest.TestCase):
             failed_payload = json.loads(failed_path.read_text(encoding="utf-8"))
             self.assertEqual(failed_payload["turn"]["turn_id"], "turn_spooled_fail")
             self.assertIn("error", failed_payload)
+
+    def test_replayed_failed_spool_envelope_dedupes_already_retained_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "retry.md"
+            memory = AraMemory(root / "memory")
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_spooled_retry",
+                    "prompt": "A replayed failed spool envelope should not duplicate this prompt.",
+                    "files": [{"path": str(artifact), "caption": "retry artifact"}],
+                },
+                scope="spool-retry",
+            )
+
+            first_report = memory.drain_spool(limit=10)
+
+            self.assertFalse(first_report.passed, first_report.as_dict())
+            self.assertEqual(first_report.failed, 1)
+            with memory.store.session() as conn:
+                prompt_count = conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM events
+                    WHERE scope = ? AND kind = 'prompt'
+                    """,
+                    ("spool-retry",),
+                ).fetchone()[0]
+            self.assertEqual(prompt_count, 1)
+
+            time.sleep(1.1)
+            artifact.write_text("Recovered artifact content.\n", encoding="utf-8")
+            failed_path = Path(first_report.items[0].path)
+            replay_path = memory.store.root / "spool" / "pending" / failed_path.name
+            failed_path.replace(replay_path)
+
+            second_report = memory.drain_spool(limit=10)
+
+            self.assertTrue(second_report.passed, second_report.as_dict())
+            self.assertEqual(second_report.succeeded, 1)
+            with memory.store.session() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT kind, text, metadata_json
+                    FROM events
+                    WHERE scope = ?
+                    ORDER BY created_at ASC
+                    """,
+                    ("spool-retry",),
+                ).fetchall()
+            prompts = [row for row in rows if row["kind"] == "prompt"]
+            files = [row for row in rows if row["kind"] == "file"]
+            prompt_metadata = json.loads(prompts[0]["metadata_json"])
+            done_payload = json.loads(Path(second_report.items[0].path).read_text(encoding="utf-8"))
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(len(files), 1)
+            self.assertEqual(prompt_metadata["turn_captured_at"], done_payload["turn"]["metadata"]["turn_captured_at"])
 
     def test_drain_recovers_stale_processing_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
