@@ -20,6 +20,7 @@ class MemoryAuditor:
                 found = [
                     row
                     for row in found
+                    if row["status"] in {"candidate", "stable"}
                     if risk.assess_capsule(row_to_capsule(row)).should_quarantine
                 ]
                 if not found:

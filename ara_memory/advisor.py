@@ -191,12 +191,15 @@ def _parse_external_recommendations(
         action = raw.get("action")
         if action not in {"promote", "quarantine", "keep"}:
             continue
+        fallback = fallback_recs[capsule_id]
+        if fallback.action == "quarantine" and action != "quarantine":
+            continue
         reason = raw.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             reason = f"external advisor recommended {action}"
         risk_score = raw.get("risk_score")
         if not isinstance(risk_score, (int, float)):
-            risk_score = fallback_recs[capsule_id].risk_score
+            risk_score = fallback.risk_score
         out[capsule_id] = MemoryRecommendation(
             capsule_id=capsule_id,
             action=action,

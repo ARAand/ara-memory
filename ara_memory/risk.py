@@ -38,12 +38,22 @@ class RiskVerdict:
     def should_quarantine(self) -> bool:
         return self.score >= 0.70
 
+    @property
+    def has_instruction_like_text(self) -> bool:
+        return any(reason.startswith("instruction-like text") for reason in self.reasons)
+
+    @property
+    def should_exclude_from_hot(self) -> bool:
+        return self.should_quarantine or self.has_instruction_like_text
+
     def as_dict(self) -> dict[str, object]:
         return {
             "capsule_id": self.capsule_id,
             "score": round(self.score, 3),
             "reasons": self.reasons,
             "should_quarantine": self.should_quarantine,
+            "instruction_like": self.has_instruction_like_text,
+            "exclude_from_hot": self.should_exclude_from_hot,
         }
 
 
@@ -63,7 +73,7 @@ class MemoryRiskAssessor:
         evidence_artifact = _is_evidence_artifact(capsule)
 
         if matched:
-            score += 0.25 if evidence_artifact else 0.62
+            score += 0.25 if evidence_artifact else 0.70
             reasons.append("instruction-like text: " + ", ".join(matched[:4]))
             if untrusted and not evidence_artifact:
                 score += 0.18

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ara_memory.compressors import compact_text, estimate_tokens
 from ara_memory.models import MemoryStatus
+from ara_memory.risk import MemoryRiskAssessor
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -40,7 +41,9 @@ class HotStateBuilder:
         text = _enforce_hot_budget(parts, budget)
         path = self._path(scope)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text + "\n", encoding="utf-8")
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        tmp_path.write_text(text + "\n", encoding="utf-8")
+        tmp_path.replace(path)
         return HotState(scope=scope, path=path, text=text, estimated_tokens=estimate_tokens(text))
 
     def read(self, *, scope: str = "global") -> HotState | None:
@@ -59,7 +62,12 @@ class HotStateBuilder:
                 rows.extend(
                     self.store.list_capsules(scope="global", status=MemoryStatus.STABLE, kind=kind, limit=fetch_limit)
                 )
-        capsules = [row_to_capsule(row) for row in rows if row["status"] == "stable" and row["kind"] in kinds]
+        risk = MemoryRiskAssessor(self.store)
+        capsules = [
+            cap
+            for cap in (row_to_capsule(row) for row in rows if row["status"] == "stable" and row["kind"] in kinds)
+            if not risk.assess_capsule(cap).should_exclude_from_hot
+        ]
         capsules.sort(
             key=lambda cap: (
                 _hot_kind_priority(cap["kind"]),

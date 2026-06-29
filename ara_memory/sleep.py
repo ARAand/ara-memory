@@ -103,9 +103,11 @@ class SleepConsolidator:
         for cap in candidates:
             by_signature[(_signature(cap), cap["kind"])].append(cap)
 
+        merged_ids: set[str] = set()
         for group in by_signature.values():
             if len(group) >= 2 and group[0]["kind"] in MERGE_KINDS:
                 report.merged += 1
+                merged_ids.update(cap["id"] for cap in group)
                 if not dry_run:
                     self._merge_group(group, scope=scope)
 
@@ -118,6 +120,8 @@ class SleepConsolidator:
                 self._merge_artifact_group(artifact, group, scope=scope)
 
         for cap in candidates:
+            if cap["id"] in merged_ids:
+                continue
             if cap["id"] in promote_ids:
                 report.promoted += 1
                 if not dry_run:

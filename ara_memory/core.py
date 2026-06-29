@@ -105,6 +105,20 @@ class AraMemory:
         return stats
 
     def promote(self, capsule_id: str, *, actor: str = "manual", reason: str = "") -> bool:
+        row = self.store.get_capsule(capsule_id)
+        if row is None:
+            return False
+        cap = row_to_capsule(row)
+        if cap["status"] == MemoryStatus.QUARANTINED.value:
+            return False
+        if MemoryRiskAssessor(self.store).assess_capsule(cap).should_quarantine:
+            self.store.update_capsule_status(
+                capsule_id,
+                MemoryStatus.QUARANTINED,
+                actor="memory-auditor",
+                reason="blocked unsafe manual promotion",
+            )
+            return False
         return self.store.update_capsule_status(capsule_id, MemoryStatus.STABLE, actor=actor, reason=reason)
 
     def reject(self, capsule_id: str, *, actor: str = "manual", reason: str = "") -> bool:

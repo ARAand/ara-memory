@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from hashlib import sha256
 from contextlib import contextmanager
@@ -12,6 +13,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 
 SCHEMA_VERSION = 3
+SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 SCHEMA = """
@@ -498,6 +500,7 @@ class MemoryStore:
                 """,
                 (status.value, capsule_id, row["scope"], reason, actor, utc_now()),
             )
+            _invalidate_hot_scope(self.hot_dir, row["scope"])
             return cur.rowcount > 0
 
     def get_capsule(self, capsule_id: str) -> sqlite3.Row | None:
@@ -691,4 +694,19 @@ def _fts_query(query: str) -> str:
         if len(cleaned) >= 2:
             tokens.append(f'"{cleaned}"')
     return " OR ".join(tokens[:12])
+
+
+def _invalidate_hot_scope(hot_dir: Path, scope: str) -> None:
+    if not hot_dir.exists():
+        return
+    if scope == "global":
+        targets = list(hot_dir.glob("*.md"))
+    else:
+        safe = SAFE_SCOPE_RE.sub("_", scope).strip("._") or "global"
+        targets = [hot_dir / f"{safe}.md"]
+    for path in targets:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
