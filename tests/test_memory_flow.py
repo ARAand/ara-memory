@@ -1431,6 +1431,98 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
             self.assertEqual(memory.stats()["schema_version"], storage_module.SCHEMA_VERSION)
 
+    def test_source_event_links_track_capsule_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            first = memory.retain(
+                kind="decision",
+                text="Decision: first source event should initially be unconsolidated.",
+                source="test",
+                scope="alpha",
+            )
+            second = memory.retain(
+                kind="note",
+                text="Second source event should become linked after capsule update.",
+                source="test",
+                scope="alpha",
+            )
+            initial_unconsolidated = memory.store.list_unconsolidated_events(limit=10)
+            self.assertEqual({row["id"] for row in initial_unconsolidated}, {first.id, second.id})
+
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="linked first source",
+                body="first source is linked",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[first.id],
+                tags=["link"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            with memory.store.session() as conn:
+                links = conn.execute(
+                    "SELECT event_id FROM capsule_source_events WHERE capsule_id = ?",
+                    (capsule.id,),
+                ).fetchall()
+            self.assertEqual([row["event_id"] for row in links], [first.id])
+            self.assertEqual(memory.store.source_event_ids_for_statuses(["stable"], scope="alpha"), {first.id})
+            unconsolidated = memory.store.list_unconsolidated_events(limit=10)
+            self.assertEqual({row["id"] for row in unconsolidated}, {second.id})
+
+            capsule.source_event_ids = [second.id]
+            memory.store.upsert_capsule(capsule)
+
+            with memory.store.session() as conn:
+                updated_links = conn.execute(
+                    "SELECT event_id FROM capsule_source_events WHERE capsule_id = ?",
+                    (capsule.id,),
+                ).fetchall()
+            self.assertEqual([row["event_id"] for row in updated_links], [second.id])
+            self.assertEqual(memory.store.source_event_ids_for_statuses(["stable"], scope="alpha"), {second.id})
+            updated_unconsolidated = memory.store.list_unconsolidated_events(limit=10)
+            self.assertEqual({row["id"] for row in updated_unconsolidated}, {first.id})
+
+    def test_schema_migration_backfills_source_event_links(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            event = memory.retain(
+                kind="decision",
+                text="Decision: schema migration should backfill source event links.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="backfilled source event link",
+                body="migration source event link",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["migration"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            with memory.store.session() as conn:
+                conn.execute("DELETE FROM capsule_source_events")
+                conn.execute(
+                    "UPDATE memory_meta SET value = ? WHERE key = 'schema_version'",
+                    ("3",),
+                )
+
+            reopened = AraMemory(root)
+            reopened.init()
+
+            self.assertEqual(reopened.store.schema_version(), storage_module.SCHEMA_VERSION)
+            with reopened.store.session() as conn:
+                links = conn.execute("SELECT capsule_id, event_id FROM capsule_source_events").fetchall()
+            self.assertEqual([(row["capsule_id"], row["event_id"]) for row in links], [(capsule.id, event.id)])
+            self.assertEqual(reopened.store.source_event_ids_for_statuses(["stable"], scope="alpha"), {event.id})
+
     def test_storage_has_no_dead_mojibake_audit_block(self) -> None:
         text = Path(storage_module.__file__).read_text(encoding="utf-8")
         self.assertNotIn("?곴뎄", text)

@@ -12,7 +12,7 @@ from typing import Any, Iterable, Iterator
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS capsules (
   tags_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS capsule_source_events (
+  capsule_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  PRIMARY KEY(capsule_id, event_id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS capsules_fts USING fts5(
   id UNINDEXED,
   title,
@@ -91,6 +98,8 @@ CREATE TABLE IF NOT EXISTS temporal_edges (
 
 CREATE INDEX IF NOT EXISTS idx_events_scope_time ON events(scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_kind ON capsules(scope, kind, status);
+CREATE INDEX IF NOT EXISTS idx_capsules_scope_status ON capsules(scope, status);
+CREATE INDEX IF NOT EXISTS idx_capsule_source_events_event ON capsule_source_events(event_id, capsule_id);
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
 
@@ -197,7 +206,10 @@ class MemoryStore:
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.hot_dir.mkdir(parents=True, exist_ok=True)
         with self.session() as conn:
+            old_version = _current_schema_version(conn)
             conn.executescript(SCHEMA)
+            if old_version < 4:
+                _rebuild_capsule_source_events(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -316,6 +328,11 @@ class MemoryStore:
                     " ".join(capsule.tags),
                 ),
             )
+            conn.execute("DELETE FROM capsule_source_events WHERE capsule_id = ?", (capsule.id,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO capsule_source_events(capsule_id, event_id) VALUES (?, ?)",
+                [(capsule.id, event_id) for event_id in sorted(set(capsule.source_event_ids))],
+            )
 
     def list_unconsolidated_events(self, limit: int = 100) -> list[sqlite3.Row]:
         self.init()
@@ -325,9 +342,9 @@ class MemoryStore:
                     """
                     SELECT e.*
                     FROM events e
-                    LEFT JOIN capsules c
-                      ON c.source_event_ids_json LIKE '%' || e.id || '%'
-                    WHERE c.id IS NULL
+                    LEFT JOIN capsule_source_events l
+                      ON l.event_id = e.id
+                    WHERE l.capsule_id IS NULL
                     ORDER BY e.created_at ASC
                     LIMIT ?
                     """,
@@ -460,6 +477,7 @@ class MemoryStore:
                     "SELECT COUNT(*) FROM capsules WHERE status = ?", (MemoryStatus.STABLE.value,)
                 ).fetchone()[0],
                 "edges": conn.execute("SELECT COUNT(*) FROM temporal_edges").fetchone()[0],
+                "source_event_links": conn.execute("SELECT COUNT(*) FROM capsule_source_events").fetchone()[0],
             }
 
     def schema_version(self) -> int:
@@ -520,6 +538,34 @@ class MemoryStore:
                     event_ids,
                 )
             )
+
+    def source_event_ids_for_statuses(
+        self,
+        statuses: Iterable[str],
+        *,
+        scope: str | None = None,
+    ) -> set[str]:
+        self.init()
+        status_values = list(statuses)
+        if not status_values:
+            return set()
+        placeholders = ",".join("?" for _ in status_values)
+        clauses = [f"c.status IN ({placeholders})"]
+        args: list[Any] = [*status_values]
+        if scope:
+            clauses.append("c.scope = ?")
+            args.append(scope)
+        with self.session() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT l.event_id
+                FROM capsule_source_events l
+                JOIN capsules c ON c.id = l.capsule_id
+                WHERE {' AND '.join(clauses)}
+                """,
+                args,
+            )
+            return {row["event_id"] for row in rows}
 
     def audit_rows(self) -> dict[str, list[sqlite3.Row]]:
         self.init()
@@ -672,6 +718,36 @@ def row_to_event(row: sqlite3.Row) -> Event:
         scope=row["scope"],
         created_at=row["created_at"],
         metadata=json.loads(row["metadata_json"]),
+    )
+
+
+def _current_schema_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'memory_meta'
+        """
+    ).fetchone()
+    if row is None:
+        return 0
+    value = conn.execute("SELECT value FROM memory_meta WHERE key = 'schema_version'").fetchone()
+    return int(value[0]) if value else 0
+
+
+def _rebuild_capsule_source_events(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM capsule_source_events")
+    rows = conn.execute("SELECT id, source_event_ids_json FROM capsules").fetchall()
+    links: list[tuple[str, str]] = []
+    for row in rows:
+        try:
+            source_event_ids = json.loads(row["source_event_ids_json"])
+        except (TypeError, json.JSONDecodeError):
+            source_event_ids = []
+        links.extend((row["id"], event_id) for event_id in sorted(set(source_event_ids)))
+    conn.executemany(
+        "INSERT OR IGNORE INTO capsule_source_events(capsule_id, event_id) VALUES (?, ?)",
+        links,
     )
 
 

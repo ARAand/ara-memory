@@ -606,25 +606,7 @@ def _cold_capsules(store: MemoryStore, *, scope: str | None, limit: int | None) 
 
 
 def _active_event_ids(store: MemoryStore, *, scope: str | None) -> set[str]:
-    placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
-    clauses = [f"status IN ({placeholders})"]
-    args: list[Any] = [*ACTIVE_STATUSES]
-    if scope:
-        clauses.append("scope = ?")
-        args.append(scope)
-    with store.session() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT source_event_ids_json
-            FROM capsules
-            WHERE {' AND '.join(clauses)}
-            """,
-            args,
-        )
-        event_ids: set[str] = set()
-        for row in rows:
-            event_ids.update(json.loads(row["source_event_ids_json"]))
-        return event_ids
+    return store.source_event_ids_for_statuses(ACTIVE_STATUSES, scope=scope)
 
 
 def _export_gate(
