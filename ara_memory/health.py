@@ -341,9 +341,13 @@ def _recommend(signals: list[HealthSignal]) -> list[str]:
         elif signal.name == "cold_ratio":
             cycle = next((item for item in signals if item.name == "retention_cycle"), None)
             if cycle and cycle.passed:
-                recommendations.append("Cold pressure is high but retention-cycle evidence exists; review it before any explicit live-prune approval.")
+                recommendations.append(
+                    "Cold pressure is high but retention-cycle evidence exists; run cold-stewardship before any explicit live-prune approval."
+                )
             else:
-                recommendations.append("Run retention-cycle with representative recall queries before considering any destructive cleanup.")
+                recommendations.append(
+                    "Run cold-stewardship, then retention-cycle with representative recall queries before considering any destructive cleanup."
+                )
         elif signal.name == "retention_cycle":
             recommendations.append("Run retention-cycle with representative recall queries to prove backup, cold export, prune-plan, and shadow-prune.")
         elif signal.name == "backup":

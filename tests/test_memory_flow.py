@@ -1558,6 +1558,165 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertNotIn(stable.id, {item["id"] for item in capsules})
             self.assertEqual([item["id"] for item in events], [event.id])
 
+    def test_cold_stewardship_groups_cold_memory_and_event_protection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            shared_event = memory.retain(
+                kind="decision",
+                text="Decision: active provenance must stay protected during cold stewardship.",
+                source="test",
+                scope="alpha",
+            )
+            cold_only_event = memory.retain(
+                kind="note",
+                text="Old note: cold-only source event can be exported before cleanup.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="active protected decision",
+                body="active provenance remains available",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[shared_event.id],
+                tags=["active"],
+                status=MemoryStatus.STABLE,
+            )
+            cold_shared = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file ara_memory/a.py: old content",
+                body="old project evidence sharing active provenance",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[shared_event.id],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            cold_isolated = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file ara_memory/b.py: old content",
+                body="old project evidence with cold-only provenance",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[cold_only_event.id],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            rejected = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Command: old failed diagnostic",
+                body="old failure evidence",
+                scope="alpha",
+                confidence=0.3,
+                salience=0.2,
+                source_event_ids=[cold_only_event.id],
+                tags=["cold"],
+                status=MemoryStatus.REJECTED,
+            )
+            for capsule in (stable, cold_shared, cold_isolated, rejected):
+                memory.store.upsert_capsule(capsule)
+
+            report = memory.cold_stewardship(scope="alpha", group_limit=5, examples_per_group=1)
+
+            self.assertEqual(report.status, "watch")
+            self.assertEqual(report.totals["cold_capsules"], 3)
+            self.assertAlmostEqual(report.totals["cold_ratio"], 0.75)
+            self.assertEqual(report.totals["protected_source_events"], 1)
+            self.assertEqual(report.totals["prunable_source_events"], 1)
+            self.assertIsNone(report.latest_retention_cycle)
+            top_group = report.groups[0]
+            self.assertEqual(top_group.pattern, "Project memory: Untracked file")
+            self.assertEqual(top_group.count, 2)
+            self.assertEqual(top_group.protected_source_events, 1)
+            self.assertEqual(top_group.prunable_source_events, 1)
+            self.assertEqual(len(top_group.examples), 1)
+            text = report.to_text()
+            self.assertIn("Ara Cold Stewardship", text)
+            self.assertIn("Project memory: Untracked file", text)
+
+            cycle_dir = memory.store.root / "archive" / "retention-cycles"
+            cycle_dir.mkdir(parents=True, exist_ok=True)
+            cycle_path = cycle_dir / "alpha-retention-cycle.json"
+            cycle_path.write_text(
+                json.dumps(
+                    {
+                        "scope": "alpha",
+                        "passed": True,
+                        "created_at": "2026-06-29T00:00:00+00:00",
+                        "backup": {"path": "backup.zip"},
+                        "cold_export": {"path": "cold.zip"},
+                        "prune_plan": {
+                            "totals": {
+                                "cold_capsules": 3,
+                                "protected_events": 1,
+                                "prunable_events": 1,
+                            }
+                        },
+                        "shadow_prune": {
+                            "passed": True,
+                            "deletion": {"capsules_removed": 3, "events_removed": 0},
+                        },
+                        "recommendations": ["review before live prune"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with_cycle = memory.cold_stewardship(scope="alpha")
+            self.assertTrue(with_cycle.latest_retention_cycle["passed"])
+            self.assertEqual(with_cycle.latest_retention_cycle["shadow_deletion"]["events_removed"], 0)
+
+    def test_cold_stewardship_cli_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            event = memory.retain(
+                kind="note",
+                text="Old note: CLI should report cold stewardship as JSON.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file cli.py: old content",
+                body="cli cold stewardship evidence",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[event.id],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(cold)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "cold-stewardship",
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["scope"], "alpha")
+            self.assertEqual(payload["totals"]["cold_capsules"], 1)
+            self.assertEqual(payload["groups"][0]["pattern"], "Project memory: Untracked file")
+
     def test_prune_plan_requires_export_and_protects_active_source_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1856,6 +2015,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("latest_retention_cycle", report.stats)
             self.assertTrue(report.stats["latest_retention_cycle"]["passed"])
             self.assertTrue(any("retention-cycle evidence exists" in item for item in report.recommendations))
+            self.assertTrue(any("cold-stewardship" in item for item in report.recommendations))
 
     def test_live_prune_requires_approval_and_records_irreversible_operation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

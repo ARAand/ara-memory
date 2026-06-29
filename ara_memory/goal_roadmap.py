@@ -72,6 +72,7 @@ def build_goal_roadmap(
         regression_cases=regression_cases,
         regression_baseline=regression_baseline,
     )
+    cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     context = memory.recall_context(
         "current Ara memory architecture, purpose, identity, and next work",
         scope=scope,
@@ -125,9 +126,9 @@ def build_goal_roadmap(
         ),
         RoadmapItem(
             "cold-memory stewardship",
-            "watch" if any(signal.name == "cold_ratio" and not signal.passed for signal in health.signals) else "pass",
-            _cold_evidence(health),
-            "Keep retention-cycle evidence current before any live pruning.",
+            "watch" if cold_stewardship.status == "watch" else "pass",
+            _cold_evidence(health, cold_stewardship),
+            "Run cold-stewardship to inspect cold groups and keep retention-cycle evidence current before live pruning.",
         ),
     ]
     for item in items:
@@ -137,12 +138,17 @@ def build_goal_roadmap(
     return GoalRoadmap(scope=scope, status=status, items=items, recommendations=_recommend(items))
 
 
-def _cold_evidence(health: Any) -> str:
+def _cold_evidence(health: Any, cold_stewardship: Any) -> str:
     cold = next((signal for signal in health.signals if signal.name == "cold_ratio"), None)
     retention = next((signal for signal in health.signals if signal.name == "retention_cycle"), None)
     parts = []
     if cold:
         parts.append(cold.detail)
+    parts.append(
+        "cold stewardship "
+        f"protected_source_events={cold_stewardship.totals['protected_source_events']}, "
+        f"prunable_source_events={cold_stewardship.totals['prunable_source_events']}"
+    )
     if retention:
         parts.append(retention.detail)
     return "; ".join(parts) if parts else "no cold pressure signal"

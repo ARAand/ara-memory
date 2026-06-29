@@ -419,6 +419,11 @@ def main(argv: list[str] | None = None) -> int:
     retention.add_argument("--scope", default=None)
     retention.add_argument("--cold-limit", type=int, default=20)
     retention.add_argument("--json", action="store_true")
+    cold_stewardship = sub.add_parser("cold-stewardship")
+    cold_stewardship.add_argument("--scope", default=None)
+    cold_stewardship.add_argument("--group-limit", type=int, default=12)
+    cold_stewardship.add_argument("--examples-per-group", type=int, default=2)
+    cold_stewardship.add_argument("--json", action="store_true")
     retention_cycle = sub.add_parser("retention-cycle")
     retention_cycle.add_argument("--scope", default=None)
     retention_cycle.add_argument("--backup-output", type=Path, default=None)
@@ -1141,6 +1146,18 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "cold-stewardship":
+        result = memory.cold_stewardship(
+            scope=args.scope,
+            group_limit=args.group_limit,
+            examples_per_group=args.examples_per_group,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "retention-cycle":
         queries = list(args.query)

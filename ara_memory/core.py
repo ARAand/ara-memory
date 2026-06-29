@@ -345,6 +345,11 @@ class AraMemory:
     def retention(self, *, scope: str | None = None, cold_limit: int = 20) -> RetentionReport:
         return RetentionAnalyzer(self.store).run(scope=scope, cold_limit=cold_limit)
 
+    def cold_stewardship(self, **kwargs: Any) -> Any:
+        from ara_memory.cold_stewardship import ColdStewardshipAnalyzer
+
+        return ColdStewardshipAnalyzer(self.store).run(**kwargs)
+
     def retention_cycle(self, **kwargs: Any) -> RetentionCycleReport:
         return RetentionCycleRunner(self.store).run(**kwargs)
 
