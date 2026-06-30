@@ -1,4 +1,7 @@
 .ara-memory/
+memory.db
+memory.db-*
+.tmp-*/
 __pycache__/
 *.py[cod]
 .pytest_cache/

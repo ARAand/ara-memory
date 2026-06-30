@@ -7,6 +7,7 @@ from typing import Any
 from ara_memory.advisor import MemoryAdvisor, MemoryReviewEngine, build_memory_advisor
 from ara_memory.audit import MemoryAuditor
 from ara_memory.backup import BackupResult, create_backup, drill_restore_backup, restore_backup, verify_backup
+from ara_memory.backup_stewardship import BackupStewardshipReport, run_backup_stewardship
 from ara_memory.cold_export import ColdExportResult, export_cold_capsules, verify_cold_export
 from ara_memory.curator import MemoryCurator
 from ara_memory.doctor import DoctorReport, MemoryDoctor
@@ -335,6 +336,9 @@ class AraMemory:
 
     def verify_backup(self, path: Path) -> dict[str, Any]:
         return verify_backup(path)
+
+    def backup_stewardship(self, **kwargs: Any) -> BackupStewardshipReport:
+        return run_backup_stewardship(self.store, **kwargs)
 
     def restore_backup(self, path: Path, target_root: Path, *, force: bool = False) -> dict[str, Any]:
         return restore_backup(path, target_root, force=force)

@@ -10,7 +10,9 @@ import time
 import zipfile
 from pathlib import Path
 from subprocess import run
+from unittest import mock
 
+import ara_memory.backup_stewardship as backup_stewardship_module
 import ara_memory.retention as retention_module
 import ara_memory.prune as prune_module
 import ara_memory.storage as storage_module
@@ -1693,7 +1695,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertGreater(report.totals["storage_bytes"], threshold)
             self.assertLess(report.totals["live_storage_bytes"], threshold)
             self.assertFalse(any("Live memory storage exceeds" in item for item in report.recommendations))
-            self.assertTrue(any("backups/export evidence" in item for item in report.recommendations))
+            self.assertTrue(any("backup-stewardship" in item for item in report.recommendations))
 
     def test_retention_storage_pressure_still_warns_on_live_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1978,6 +1980,166 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertIn("ledger/events.jsonl", names)
                 self.assertIn("hot/alpha.md", names)
                 self.assertTrue(any(name.startswith("archive/objects/") for name in names))
+
+    def test_backup_stewardship_deletes_only_reviewed_redundant_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: backup stewardship keeps only reviewed backups.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            paths = []
+            for index in range(4):
+                path = backup_dir / f"backup-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (1000 + index, 1000 + index))
+                paths.append(path)
+
+            dry = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0)
+
+            self.assertTrue(dry.passed, dry.as_dict())
+            self.assertTrue(dry.dry_run)
+            self.assertEqual(dry.totals["delete_candidates"], 3)
+            self.assertTrue(all(path.exists() for path in paths))
+
+            blocked = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0, apply=True)
+            self.assertFalse(blocked.passed, blocked.as_dict())
+            self.assertTrue(all(path.exists() for path in paths))
+
+            applied = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                apply=True,
+                confirm="DELETE OLD BACKUPS",
+            )
+
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertEqual(applied.totals["deleted"], 3)
+            self.assertEqual([path.exists() for path in paths], [False, False, False, True])
+
+    def test_backup_stewardship_preserves_retention_cycle_referenced_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: retention-cycle backup references must be protected.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            oldest = backup_dir / "oldest.zip"
+            middle = backup_dir / "middle.zip"
+            newest = backup_dir / "newest.zip"
+            for index, path in enumerate([oldest, middle, newest]):
+                memory.backup(output=path)
+                os.utime(path, (2000 + index, 2000 + index))
+            cycle_dir = memory.store.root / "archive" / "retention-cycles"
+            cycle_dir.mkdir(parents=True, exist_ok=True)
+            cycle = cycle_dir / "latest-cycle.json"
+            cycle.write_text(
+                json.dumps({"passed": True, "backup": {"path": str(oldest)}}),
+                encoding="utf-8",
+            )
+            os.utime(cycle, (3000, 3000))
+
+            applied = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=1,
+                apply=True,
+                confirm="DELETE OLD BACKUPS",
+            )
+
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertTrue(oldest.exists())
+            self.assertFalse(middle.exists())
+            self.assertTrue(newest.exists())
+            kept_oldest = next(item for item in applied.items if Path(item.path).resolve() == oldest.resolve())
+            self.assertIn("referenced-by-retention-cycle", kept_oldest.keep_reasons)
+
+    def test_backup_stewardship_blocks_reparse_backup_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            backup_dir = memory.store.root / "backups"
+            backup_dir.mkdir(parents=True)
+
+            def fake_reparse(path: Path) -> bool:
+                return path == backup_dir
+
+            with mock.patch.object(backup_stewardship_module, "_is_reparse_point", side_effect=fake_reparse):
+                report = memory.backup_stewardship()
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertTrue(any("reparse point" in item for item in report.recommendations))
+            self.assertEqual(report.totals["delete_candidates"], 0)
+
+    def test_backup_stewardship_reports_delete_failures_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: failed backup deletion must return a report.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            old = backup_dir / "old.zip"
+            new = backup_dir / "new.zip"
+            for index, path in enumerate([old, new]):
+                memory.backup(output=path)
+                os.utime(path, (4000 + index, 4000 + index))
+
+            with mock.patch("pathlib.Path.unlink", side_effect=PermissionError("locked")):
+                report = memory.backup_stewardship(
+                    keep_latest=1,
+                    keep_retention_cycles=0,
+                    apply=True,
+                    confirm="DELETE OLD BACKUPS",
+                )
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertEqual(report.totals["delete_errors"], 1)
+            self.assertEqual(report.totals["deleted"], 0)
+            self.assertTrue(old.exists())
+            self.assertTrue(new.exists())
+            failed = next(item for item in report.items if Path(item.path).resolve() == old.resolve())
+            self.assertIn("delete-failed-inspect-manually", failed.keep_reasons)
+
+    def test_backup_stewardship_caches_unchanged_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: backup verification cache should avoid repeated full scans.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            for index in range(2):
+                path = backup_dir / f"backup-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (5000 + index, 5000 + index))
+
+            first = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0)
+            second = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0)
+
+            self.assertTrue(first.passed, first.as_dict())
+            self.assertEqual(first.totals["verification_cache_hits"], 0)
+            self.assertTrue(second.passed, second.as_dict())
+            self.assertEqual(second.totals["verification_cache_hits"], 2)
+            self.assertTrue(all(item.verification_cached for item in second.items))
+
+    def test_backup_stewardship_cli_json_blocks_wrong_confirm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "backup-stewardship",
+                    "--apply",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"], payload)
+            self.assertIn("Refusing deletion", payload["recommendations"][0])
 
     def test_cold_export_preserves_prunable_capsules_and_source_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

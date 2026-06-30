@@ -113,7 +113,7 @@ change what the spooled turn remembers.
   "commands": [{"cmd": "python -m unittest", "exit_code": 0, "output": "OK"}],
   "decisions": ["Decision: keep raw events append-only."]
 }
-'@ | python -m ara_memory remember-turn --scope project --capture-cwd . --sleep
+'@ | python -m ara_memory spool-turn --scope project --capture-cwd . --sleep
 ```
 
 Crash-safe variant:
@@ -170,7 +170,7 @@ preserving the budget decision.
 
 This workspace also installs a personal Codex skill at
 `C:\Users\Owner\.codex\skills\ara-memory`. The skill gives future Codex sessions
-two low-friction operations:
+the following low-friction operations:
 
 ```powershell
 python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall "current task" --scope ara-memory
@@ -217,6 +217,7 @@ python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2
 python -m ara_memory cold-export --scope ara-memory --output .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory prune-plan --scope ara-memory --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --query "current memory architecture"
@@ -354,7 +355,7 @@ wrapper is configured for a path the worker drains.
 Always-on worker runbook:
 
 ```powershell
-cd C:\Users\Owner\Documents\R&D
+Set-Location -LiteralPath 'C:\Users\Owner\Documents\R&D'
 
 python -m ara_memory health --scope ara-memory --query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 0 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
@@ -438,6 +439,20 @@ consistency so old or externally modified stores with orphan rows do not pass.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
 Restore refuses to overwrite a non-empty target unless `--force` is passed.
+Because retention-cycle creates verified backups as evidence, backup bytes can
+dominate the local store even when live memory is small. Use
+`backup-stewardship` to review redundant verified backups before touching live
+memory:
+
+```powershell
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --apply --confirm "DELETE OLD BACKUPS"
+```
+
+The command is dry-run by default. Apply mode deletes only verified backups that
+are neither among the latest kept backups nor referenced by recent passing
+retention-cycle reports. Failed-verification backups are preserved for manual
+inspection instead of being silently removed.
 
 ## Design Choices
 

@@ -421,6 +421,12 @@ def main(argv: list[str] | None = None) -> int:
     backup = sub.add_parser("backup")
     backup.add_argument("--output", type=Path, default=None)
     backup.add_argument("--no-archive", action="store_true")
+    backup_stewardship = sub.add_parser("backup-stewardship")
+    backup_stewardship.add_argument("--keep-latest", type=int, default=3)
+    backup_stewardship.add_argument("--keep-retention-cycles", type=int, default=2)
+    backup_stewardship.add_argument("--apply", action="store_true")
+    backup_stewardship.add_argument("--confirm", default="")
+    backup_stewardship.add_argument("--json", action="store_true")
     verify_backup = sub.add_parser("verify-backup")
     verify_backup.add_argument("path", type=Path)
     restore_backup = sub.add_parser("restore-backup")
@@ -1107,6 +1113,19 @@ def main(argv: list[str] | None = None) -> int:
         result = memory.backup(output=args.output, include_archive=not args.no_archive)
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+
+    if args.cmd == "backup-stewardship":
+        result = memory.backup_stewardship(
+            keep_latest=args.keep_latest,
+            keep_retention_cycles=args.keep_retention_cycles,
+            apply=args.apply,
+            confirm=args.confirm,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "verify-backup":
         result = memory.verify_backup(args.path)

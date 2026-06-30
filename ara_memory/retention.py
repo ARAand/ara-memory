@@ -153,7 +153,7 @@ def _recommend(totals: dict[str, Any], by_status: list[dict[str, Any]]) -> list[
         )
     elif totals["storage_bytes"] > STORAGE_PRESSURE_BYTES and backup_or_evidence_bytes:
         recommendations.append(
-            "Total memory folder exceeds 50MB while live memory is below threshold; rotate verified backups/export evidence before touching live memory."
+            "Total memory folder exceeds 50MB while live memory is below threshold; run backup-stewardship before touching live memory."
         )
     if not recommendations:
         recommendations.append("Retention pressure is low; prefer maintenance and backup over destructive pruning.")
