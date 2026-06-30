@@ -16,11 +16,35 @@ class RecallResult:
     diagnostics: dict[str, Any]
 
 
+@dataclass(slots=True)
+class RecallCandidateResult:
+    query: str
+    scope: str
+    terms: list[str]
+    capsules: list[dict[str, Any]]
+    renderable_capsules: list[dict[str, Any]]
+    graph_rows: list[Any]
+    diagnostics: dict[str, Any]
+
+    def as_dict(self, *, include_capsules: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "query": self.query,
+            "scope": self.scope,
+            "terms": self.terms,
+            "selected_capsule_ids": [cap["id"] for cap in self.capsules],
+            "renderable_capsule_ids": [cap["id"] for cap in self.renderable_capsules],
+            "diagnostics": self.diagnostics,
+        }
+        if include_capsules:
+            payload["capsules"] = [_public_capsule_summary(cap) for cap in self.capsules]
+        return payload
+
+
 class RecallCompiler:
     def __init__(self, store: MemoryStore) -> None:
         self.store = store
 
-    def recall(
+    def recall_candidates(
         self,
         query: str,
         *,
@@ -28,11 +52,13 @@ class RecallCompiler:
         budget: int = 4000,
         include_global: bool = True,
         hot_state: str | None = None,
-    ) -> RecallResult:
+        candidate_limit: int = 18,
+        include_graph: bool = False,
+    ) -> RecallCandidateResult:
         terms = extract_keywords(query, limit=10)
         intent_query = _is_intent_query(query, terms)
         temporal_query = _is_temporal_query(query, terms)
-        graph_rows = self.store.graph_neighbors(terms, scope=scope, limit=24, include_global=include_global)
+        graph_rows = self.store.graph_neighbors(terms, scope=scope, limit=24, include_global=include_global) if include_graph else []
         raw_capsules = self.store.search_capsules(query, scope=scope, limit=48, include_global=include_global)
         candidates = [row_to_capsule(row) for row in raw_capsules]
         if intent_query:
@@ -50,9 +76,74 @@ class RecallCompiler:
                 include_global=include_global,
             )
         filtered_candidates = _filter_recall_candidates(self.store, candidates)
-        capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:18]
+        capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:candidate_limit]
         low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
-        render_source = [] if low_evidence_fallback_suppressed else capsules
+        renderable_capsules = [] if low_evidence_fallback_suppressed else _renderable_capsules(capsules, intent_query=intent_query)
+        relevance_scores = [_recall_score(cap, terms) for cap in renderable_capsules]
+        diagnostics = {
+            "budget_tokens": budget,
+            "capsules_considered": len(candidates),
+            "capsules_filtered_by_risk": len(candidates) - len(filtered_candidates),
+            "capsules_selected": len(capsules),
+            "capsules_renderable": len(renderable_capsules),
+            "graph_edges_considered": len(graph_rows),
+            "include_global": include_global,
+            "include_hot": hot_state is not None,
+            "scope": scope,
+            "query_terms": terms,
+            "query_term_count": len(terms),
+            "low_evidence_fallback_suppressed": low_evidence_fallback_suppressed,
+            "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in capsules),
+            "salience_supplement_used": any(
+                cap.get("recall_match_source") == "salience_supplement" for cap in capsules
+            ),
+            "recent_supplement_used": any(
+                cap.get("recall_match_source") == "recent_supplement" for cap in capsules
+            ),
+            "temporal_query": temporal_query,
+            "intent_query": intent_query,
+            "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
+            "relevance_score_avg": (
+                sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            ),
+            "selected_capsule_ids": [cap["id"] for cap in capsules],
+            "renderable_capsule_ids": [cap["id"] for cap in renderable_capsules],
+            "visible_capsule_ids": [cap["id"] for cap in renderable_capsules],
+        }
+        return RecallCandidateResult(
+            query=query,
+            scope=scope,
+            terms=terms,
+            capsules=capsules,
+            renderable_capsules=renderable_capsules,
+            graph_rows=graph_rows,
+            diagnostics=diagnostics,
+        )
+
+    def recall(
+        self,
+        query: str,
+        *,
+        scope: str = "global",
+        budget: int = 4000,
+        include_global: bool = True,
+        hot_state: str | None = None,
+    ) -> RecallResult:
+        candidate_result = self.recall_candidates(
+            query,
+            scope=scope,
+            budget=budget,
+            include_global=include_global,
+            hot_state=hot_state,
+            include_graph=True,
+        )
+        terms = candidate_result.terms
+        capsules = candidate_result.capsules
+        graph_rows = candidate_result.graph_rows
+        intent_query = bool(candidate_result.diagnostics["intent_query"])
+        temporal_query = bool(candidate_result.diagnostics["temporal_query"])
+        low_evidence_fallback_suppressed = bool(candidate_result.diagnostics["low_evidence_fallback_suppressed"])
+        render_source = candidate_result.renderable_capsules
 
         summaries = []
         stable = []
@@ -68,8 +159,6 @@ class RecallCompiler:
         rendered_capsules = []
         for cap in render_source:
             if cap["id"] in seen:
-                continue
-            if intent_query and _is_low_value_for_intent(cap):
                 continue
             seen.add(cap["id"])
             rendered_capsules.append(cap)
@@ -140,8 +229,8 @@ class RecallCompiler:
             "budget_tokens": budget,
             "estimated_tokens_before": estimate_tokens(untrimmed),
             "estimated_tokens_after": estimate_tokens(pack),
-            "capsules_considered": len(candidates),
-            "capsules_filtered_by_risk": len(candidates) - len(filtered_candidates),
+            "capsules_considered": int(candidate_result.diagnostics["capsules_considered"]),
+            "capsules_filtered_by_risk": int(candidate_result.diagnostics["capsules_filtered_by_risk"]),
             "capsules_selected": len(capsules),
             "capsules_rendered_before_budget": len(rendered_capsules),
             "capsules_rendered_after_budget": len(visible_capsules),
@@ -157,13 +246,9 @@ class RecallCompiler:
             "visible_section_count": len(visible_sections),
             "visible_sections": visible_sections,
             "sections_truncated": pack.count("[compressed]"),
-            "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in capsules),
-            "salience_supplement_used": any(
-                cap.get("recall_match_source") == "salience_supplement" for cap in capsules
-            ),
-            "recent_supplement_used": any(
-                cap.get("recall_match_source") == "recent_supplement" for cap in capsules
-            ),
+            "fallback_used": bool(candidate_result.diagnostics["fallback_used"]),
+            "salience_supplement_used": bool(candidate_result.diagnostics["salience_supplement_used"]),
+            "recent_supplement_used": bool(candidate_result.diagnostics["recent_supplement_used"]),
             "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
             "relevance_score_avg": (
@@ -232,6 +317,34 @@ def _filter_recall_candidates(store: MemoryStore, capsules: list[dict]) -> list[
             continue
         out.append(cap)
     return out
+
+
+def _renderable_capsules(capsules: list[dict], *, intent_query: bool) -> list[dict]:
+    seen: set[str] = set()
+    out: list[dict] = []
+    for cap in capsules:
+        if cap["id"] in seen:
+            continue
+        if intent_query and _is_low_value_for_intent(cap):
+            continue
+        seen.add(cap["id"])
+        out.append(cap)
+    return out
+
+
+def _public_capsule_summary(cap: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": cap["id"],
+        "kind": cap["kind"],
+        "status": cap["status"],
+        "scope": cap["scope"],
+        "title": cap["title"],
+        "confidence": cap["confidence"],
+        "salience": cap["salience"],
+        "tags": redact_memory_tags(cap["tags"])[:8],
+        "recall_match_source": cap.get("recall_match_source"),
+        "bm25_score": cap.get("bm25_score"),
+    }
 
 
 def _safe_graph_hints(store: MemoryStore, graph_rows: list[Any]) -> list[str]:

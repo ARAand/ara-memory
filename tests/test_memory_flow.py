@@ -7198,7 +7198,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(any(item.section == "risk" for item in report.items))
             self.assertTrue(any(item.section == "action" for item in report.items))
 
-    def test_working_memory_ignores_selected_but_invisible_capsules(self) -> None:
+    def test_working_memory_ignores_selected_but_unprojected_capsules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
             memory.init()
@@ -7224,15 +7224,83 @@ class MemoryFlowTests(unittest.TestCase):
             report = memory.working_memory(
                 prompt="invisible selected capsule",
                 scope="alpha",
-                budget=900,
-                recall_budget=1,
+                budget=1,
+                recall_budget=1000,
                 include_hot=False,
                 include_global=False,
             )
 
             self.assertIn(hidden.id, report.recall_diagnostics["selected_capsule_ids"])
-            self.assertEqual(report.recall_diagnostics["visible_capsule_ids"], [])
+            self.assertIn(hidden.id, report.recall_diagnostics["renderable_capsule_ids"])
+            self.assertEqual(report.diagnostics["projected_capsule_ids"], [])
             self.assertEqual(report.items, [])
+
+    def test_working_memory_uses_candidate_api_without_full_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: working memory should avoid full recall pack rendering.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision memory: candidate-only working memory",
+                    body="Working memory should avoid full recall pack rendering.",
+                    scope="alpha",
+                    confidence=0.90,
+                    salience=0.84,
+                    source_event_ids=[event.id],
+                    tags=["working", "memory", "candidate"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            with mock.patch.object(memory, "recall_result", side_effect=AssertionError("full recall pack rendered")):
+                report = memory.working_memory(
+                    prompt="working memory candidate-only",
+                    scope="alpha",
+                    budget=900,
+                    recall_budget=1000,
+                    include_hot=False,
+                    include_global=False,
+                )
+
+            self.assertTrue(report.items)
+            self.assertTrue(report.diagnostics["candidate_only_recall"])
+
+    def test_recall_candidates_exposes_ranked_capsules_without_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            direct = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Needle candidate evidence",
+                body="Needle evidence should be selectable without rendering a recall pack.",
+                scope="alpha",
+                confidence=0.86,
+                salience=0.60,
+                source_event_ids=[],
+                tags=["needle", "candidate"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(direct)
+
+            result = memory.recall_candidates(
+                "needle candidate",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertFalse(hasattr(result, "pack"))
+            self.assertEqual(result.capsules[0]["id"], direct.id)
+            self.assertEqual(result.diagnostics["selected_capsule_ids"][0], direct.id)
+            self.assertEqual(result.diagnostics["renderable_capsule_ids"][0], direct.id)
 
     def test_working_memory_suppresses_no_evidence_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

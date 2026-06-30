@@ -160,6 +160,7 @@ budgeted cold pack:
 
 ```powershell
 python -m ara_memory recall-plan "current project memory" --scope project --budgets 800,1600,2500
+python -m ara_memory recall-candidates "current project memory" --scope project --budget 1600
 python -m ara_memory recall-context "current project memory" --scope project --budgets 800,1600,2500
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
@@ -180,6 +181,10 @@ high-salience fallback bodies and emits a small "No direct memory evidence"
 notice instead of pretending to remember. `recall-context` applies that plan and
 emits the selected pack, so normal work can use one command while still
 preserving the budget decision.
+`recall-candidates` is the cheaper pre-render path: it returns ranked capsule
+ids and diagnostics without formatting a full memory pack. Working memory uses
+this path so action cues can be built from selected evidence without spending
+tokens on a recall pack that will not be shown to the model.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
@@ -187,7 +192,8 @@ reranking; `recall --diagnostics` exposes `temporal_query` and
 
 `working-memory` is the smaller action layer between hot memory and cold
 recall. It turns the current prompt, active files, command errors, constraints,
-and temporal hints into a cue frame, recalls only directly visible evidence,
+and temporal hints into a cue frame, recalls ranked candidates without rendering
+a full pack, projects only items that fit the working-memory output budget,
 then emits three compact sections: Keep In Mind, Risk / Friction, and This
 Should Change My Next Action. Use `working-memory-impact` after a turn to record
 which capsule ids actually changed the outcome; those notes let later

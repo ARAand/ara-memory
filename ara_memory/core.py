@@ -25,7 +25,7 @@ from ara_memory.prune import (
     ShadowPruneReport,
 )
 from ara_memory.quality import QualityReport, QualityScorer, ReviewWorkerReport
-from ara_memory.recall import RecallCompiler, RecallResult
+from ara_memory.recall import RecallCandidateResult, RecallCompiler, RecallResult
 from ara_memory.retention import RetentionAnalyzer, RetentionReport
 from ara_memory.retention_cycle import RetentionCycleReport, RetentionCycleRunner
 from ara_memory.risk import MemoryRiskAssessor
@@ -96,6 +96,26 @@ class AraMemory:
             budget=budget,
             include_global=include_global,
             hot_state=hot.text if hot else None,
+        )
+
+    def recall_candidates(
+        self,
+        query: str,
+        *,
+        scope: str = "global",
+        budget: int = 4000,
+        include_global: bool = True,
+        include_hot: bool = False,
+        candidate_limit: int = 18,
+    ) -> RecallCandidateResult:
+        hot = self.read_hot(scope=scope) if include_hot else None
+        return RecallCompiler(self.store).recall_candidates(
+            query,
+            scope=scope,
+            budget=budget,
+            include_global=include_global,
+            hot_state=hot.text if hot else None,
+            candidate_limit=candidate_limit,
         )
 
     def audit(self) -> str:

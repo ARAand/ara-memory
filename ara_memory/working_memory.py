@@ -8,7 +8,6 @@ from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, trim_to_token_budget
 from ara_memory.models import Event
-from ara_memory.storage import row_to_capsule
 
 
 @dataclass(slots=True)
@@ -100,39 +99,50 @@ class WorkingMemoryReport:
         }
 
     def to_text(self) -> str:
-        header = [
-            "# Ara Associative Working Memory",
-            f"Scope: {self.cue.scope}",
-            f"Cue: {compact_text(self.cue.text or self.recall_query, limit=420)}",
-        ]
-        if not self.items:
-            return "\n".join(
-                [
-                    *header,
-                    "## Keep In Mind\n- No direct associative memory matched this cue.",
-                    "## Risk / Friction\n- No prior hazard was retrieved for this cue.",
-                    "## This Should Change My Next Action\n- Proceed from current evidence; do not invent remembered context.",
-                ]
+        return _render_working_memory_text(self.cue, self.items, self.budget)
+
+
+def _render_working_memory_text(
+    cue: CueFrame,
+    items: list[WorkingMemoryItem],
+    budget: int,
+    *,
+    trim: bool = True,
+) -> str:
+    header = [
+        "# Ara Associative Working Memory",
+        f"Scope: {cue.scope}",
+        f"Cue: {compact_text(cue.text, limit=420)}",
+    ]
+    if not items:
+        text = "\n".join(
+            [
+                *header,
+                "## Keep In Mind\n- No direct associative memory matched this cue.",
+                "## Risk / Friction\n- No prior hazard was retrieved for this cue.",
+                "## This Should Change My Next Action\n- Proceed from current evidence; do not invent remembered context.",
+            ]
+        )
+        return trim_to_token_budget([text], budget) if trim else text
+    parts = [*header]
+    for section in ("keep", "risk", "action"):
+        title = {
+            "keep": "## Keep In Mind",
+            "risk": "## Risk / Friction",
+            "action": "## This Should Change My Next Action",
+        }[section]
+        section_items = [item for item in items if item.section == section]
+        parts.append(title)
+        if not section_items:
+            parts.append("- None.")
+            continue
+        for item in section_items[:5]:
+            parts.append(
+                f"- [{item.kind}/{item.status}] {compact_text(item.text, limit=260)} "
+                f"(source {item.capsule_id}; {item.reason})"
             )
-        parts = [*header]
-        for section in ("keep", "risk", "action"):
-            title = {
-                "keep": "## Keep In Mind",
-                "risk": "## Risk / Friction",
-                "action": "## This Should Change My Next Action",
-            }[section]
-            section_items = [item for item in self.items if item.section == section]
-            parts.append(title)
-            if not section_items:
-                parts.append("- None.")
-                continue
-            for item in section_items[:5]:
-                parts.append(
-                    f"- [{item.kind}/{item.status}] {compact_text(item.text, limit=260)} "
-                    f"(source {item.capsule_id}; {item.reason})"
-                )
-        text = "\n".join(parts)
-        return trim_to_token_budget([text], self.budget)
+    text = "\n".join(parts)
+    return trim_to_token_budget([text], budget) if trim else text
 
 
 def build_working_memory(
@@ -156,33 +166,33 @@ def build_working_memory(
         temporal_hints=_extract_temporal_hints(prompt),
     )
     recall_query = _recall_query(cue)
-    recall = memory.recall_result(
+    recall = memory.recall_candidates(
         recall_query,
         scope=scope,
         budget=recall_budget,
         include_global=include_global,
         include_hot=include_hot,
     )
-    capsule_ids = _candidate_capsule_ids(recall.diagnostics)
-    capsules = _capsules_with_recall_provenance(
-        memory,
-        recall_query,
-        capsule_ids,
-        scope=scope,
-        include_global=include_global,
-    )
-    items = _build_items(capsules, cue)
+    capsules = list(recall.renderable_capsules)
+    raw_items = _build_items(capsules, cue)
+    items = _fit_items_to_budget(raw_items, cue, budget)
+    projected_capsule_ids = _projected_capsule_ids(items)
     diagnostics = {
         "cue_terms": extract_keywords(cue.text, limit=16),
-        "capsules_considered": len(capsule_ids),
+        "capsules_considered": int(recall.diagnostics.get("capsules_considered", len(capsules))),
+        "capsules_selected": int(recall.diagnostics.get("capsules_selected", len(capsules))),
+        "capsules_projected": len(projected_capsule_ids),
+        "raw_items": len(raw_items),
         "items": len(items),
         "sections": {
             "keep": sum(1 for item in items if item.section == "keep"),
             "risk": sum(1 for item in items if item.section == "risk"),
             "action": sum(1 for item in items if item.section == "action"),
         },
+        "projected_capsule_ids": projected_capsule_ids,
         "estimated_tokens": estimate_tokens("\n".join(item.text for item in items)) if items else 0,
         "low_evidence_fallback_suppressed": bool(recall.diagnostics.get("low_evidence_fallback_suppressed", False)),
+        "candidate_only_recall": True,
     }
     return WorkingMemoryReport(
         cue=cue,
@@ -226,44 +236,6 @@ def record_memory_impact(
     )
 
 
-def _candidate_capsule_ids(diagnostics: dict[str, Any]) -> list[str]:
-    if diagnostics.get("low_evidence_fallback_suppressed"):
-        return []
-    if "visible_capsule_ids" in diagnostics:
-        return [str(item) for item in diagnostics.get("visible_capsule_ids", [])]
-    return [str(item) for item in diagnostics.get("selected_capsule_ids", [])[:8]]
-
-
-def _capsules_with_recall_provenance(
-    memory: Any,
-    recall_query: str,
-    capsule_ids: list[str],
-    *,
-    scope: str,
-    include_global: bool,
-) -> list[dict[str, Any]]:
-    if not capsule_ids:
-        return []
-    by_id = {
-        str(row["id"]): row_to_capsule(row)
-        for row in memory.store.search_capsules(
-            recall_query,
-            scope=scope,
-            limit=max(48, len(capsule_ids)),
-            include_global=include_global,
-        )
-    }
-    capsules: list[dict[str, Any]] = []
-    for capsule_id in capsule_ids:
-        cap = by_id.get(capsule_id)
-        if cap is None:
-            row = memory.store.get_capsule(capsule_id)
-            cap = row_to_capsule(row) if row is not None else None
-        if cap is not None:
-            capsules.append(cap)
-    return capsules
-
-
 def _build_items(capsules: list[dict[str, Any]], cue: CueFrame) -> list[WorkingMemoryItem]:
     cue_terms = extract_keywords(cue.text, limit=16)
     items: list[WorkingMemoryItem] = []
@@ -280,6 +252,28 @@ def _build_items(capsules: list[dict[str, Any]], cue: CueFrame) -> list[WorkingM
             items.append(action)
     items.sort(key=lambda item: (_section_priority(item.section), item.score), reverse=True)
     return _dedupe_items(items)
+
+
+def _fit_items_to_budget(items: list[WorkingMemoryItem], cue: CueFrame, budget: int) -> list[WorkingMemoryItem]:
+    if budget <= 0:
+        return []
+    kept: list[WorkingMemoryItem] = []
+    for item in items:
+        trial = kept + [item]
+        if estimate_tokens(_render_working_memory_text(cue, trial, budget, trim=False)) <= budget:
+            kept.append(item)
+    return kept
+
+
+def _projected_capsule_ids(items: list[WorkingMemoryItem]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item.capsule_id in seen:
+            continue
+        seen.add(item.capsule_id)
+        out.append(item.capsule_id)
+    return out
 
 
 def _keep_item(cap: dict[str, Any], score: float) -> WorkingMemoryItem | None:

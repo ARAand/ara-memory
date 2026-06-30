@@ -39,24 +39,27 @@ consolidate()
   -> temporal edges with provenance
 
 recall(query, scope, budget)
+  -> recall_candidates(query, scope)
   -> optional hot memory prelude
+  -> typed context pack
+  -> token budget trimming
+  -> count rendered capsules, visible sections, and visible query-term coverage
+
+recall_candidates(query, scope)
   -> keyword extraction
   -> graph neighbor lookup
   -> FTS/BM25 capsule search
   -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
-  -> typed context pack
-  -> token budget trimming
-  -> count rendered capsules, visible sections, and visible query-term coverage
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
   -> suppress no-evidence salience fallback bodies
-  -> compute recall-pack quality for budget selection
+  -> ranked capsule ids and diagnostics without rendering a pack
 
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
-  -> associative recall over hot memory plus a bounded cold pack
+  -> associative recall_candidates over hot memory plus a bounded cold pack
   -> suppress unrelated fallback capsules when there is no direct evidence
-  -> project only visible recalled capsules into Keep / Risk / Next Action
+  -> project only budget-visible items into Keep / Risk / Next Action
   -> optional working-memory-impact event for outcome feedback
 
 audit()
@@ -233,8 +236,6 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
-- Candidate-only recall API so working memory can avoid rendering a full pack
-  before projecting Keep / Risk / Next Action.
 - Impact-weighted recall edges from `working-memory-impact` events.
 - OCR/caption ingestion for images.
 - Memvid-style cold archives for large old sessions.

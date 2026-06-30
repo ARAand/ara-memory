@@ -127,6 +127,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     recall.add_argument("--hot", action="store_true", help="Prepend the scope hot memory file if it exists.")
 
+    recall_candidates = sub.add_parser(
+        "recall-candidates",
+        help="Select ranked recall capsules without rendering a full memory pack.",
+    )
+    recall_candidates.add_argument("query")
+    recall_candidates.add_argument("--scope", default="global")
+    recall_candidates.add_argument("--budget", type=int, default=1600)
+    recall_candidates.add_argument("--limit", type=int, default=18)
+    recall_candidates.add_argument("--no-global", action="store_true")
+    recall_candidates.add_argument("--hot", action="store_true")
+    recall_candidates.add_argument("--include-capsules", action="store_true")
+
     recall_plan = sub.add_parser(
         "recall-plan",
         help="Compare recall budgets and choose the smallest pack with visible evidence quality.",
@@ -769,6 +781,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.diagnostics:
             print("\n# Recall Diagnostics")
             print(json.dumps(result.diagnostics, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    if args.cmd == "recall-candidates":
+        result = memory.recall_candidates(
+            args.query,
+            scope=args.scope,
+            budget=args.budget,
+            include_global=not args.no_global,
+            include_hot=args.hot,
+            candidate_limit=args.limit,
+        )
+        print(json.dumps(result.as_dict(include_capsules=args.include_capsules), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
     if args.cmd == "recall-plan":
