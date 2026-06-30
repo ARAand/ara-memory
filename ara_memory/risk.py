@@ -11,6 +11,9 @@ from ara_memory.storage import MemoryStore, row_to_capsule, row_to_event
 INSTRUCTION_PATTERNS = (
     "ignore previous",
     "ignore all previous",
+    "disregard previous",
+    "disregard all previous",
+    "override previous",
     "system prompt",
     "developer message",
     "reveal hidden",
@@ -19,6 +22,16 @@ INSTRUCTION_PATTERNS = (
     "permanent instruction",
     "you must obey",
     "do not tell the user",
+)
+INSTRUCTION_REGEX_PATTERNS = (
+    ("ignore previous instructions", re.compile(r"\bignore\b.{0,40}\b(?:previous|prior|all)\b.{0,40}\binstruction", re.IGNORECASE)),
+    ("disregard previous instructions", re.compile(r"\bdisregard\b.{0,40}\b(?:previous|prior|all)\b.{0,40}\binstruction", re.IGNORECASE)),
+    ("override higher priority instructions", re.compile(r"\boverride\b.{0,40}\b(?:system|developer|user|previous|prior)\b.{0,40}\binstruction", re.IGNORECASE)),
+    ("highest priority instruction", re.compile(r"\bhighest\s+priority\b.{0,40}\binstruction", re.IGNORECASE)),
+    ("memory as instruction", re.compile(r"\btreat\b.{0,30}\b(?:this\s+)?memory\b.{0,30}\bas\b.{0,30}\binstruction", re.IGNORECASE)),
+    ("obey this memory", re.compile(r"\bobey\b.{0,30}\b(?:this\s+)?memory\b", re.IGNORECASE)),
+    ("do not tell the user", re.compile(r"\bdo\s+not\s+tell\b.{0,30}\buser\b", re.IGNORECASE)),
+    ("reveal hidden instructions", re.compile(r"\breveal\b.{0,40}\b(?:hidden|system|developer)\b", re.IGNORECASE)),
 )
 UNTRUSTED_EVENT_SOURCES = (
     "file-ingest",
@@ -151,10 +164,10 @@ class MemoryRiskAssessor:
     def assess_capsule(self, capsule: dict) -> RiskVerdict:
         reasons: list[str] = []
         score = 0.0
-        raw_text = f"{capsule['title']}\n{capsule['body']}"
+        raw_text = _capsule_risk_text(capsule)
         text = raw_text.lower()
 
-        matched = [pattern for pattern in INSTRUCTION_PATTERNS if pattern in text]
+        matched = instruction_like_matches(raw_text)
         events = self._events(capsule["source_event_ids"])
         untrusted = [event.source for event in events if _is_untrusted_source(event.source)]
 
@@ -237,6 +250,30 @@ def _is_evidence_artifact(capsule: dict) -> bool:
     return False
 
 
+def _capsule_risk_text(capsule: dict) -> str:
+    tags = "\n".join(str(tag) for tag in capsule.get("tags", []) if isinstance(tag, str))
+    return f"{capsule['title']}\n{capsule['body']}\n{tags}"
+
+
+def instruction_like_matches(text: str) -> list[str]:
+    lowered = text.lower()
+    matches: list[str] = []
+    for pattern in INSTRUCTION_PATTERNS:
+        if pattern in lowered:
+            matches.append(pattern)
+    for name, pattern in INSTRUCTION_REGEX_PATTERNS:
+        if pattern.search(text):
+            matches.append(name)
+    out: list[str] = []
+    seen = set()
+    for item in matches:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 def _sensitive_matches(text: str) -> list[str]:
     return [name for name, pattern in SECRET_PATTERNS if pattern.search(text)]
 
@@ -268,6 +305,24 @@ def redact_sensitive_text(text: str) -> str:
             continue
         redacted = pattern.sub(f"[redacted {name}]", redacted)
     return redacted
+
+
+def redact_memory_tags(tags: list[str]) -> list[str]:
+    safe: list[str] = []
+    seen = set()
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        if instruction_like_matches(tag):
+            continue
+        if _sensitive_matches(tag) or _direct_identifier_matches(tag):
+            continue
+        redacted = redact_sensitive_text(tag).strip()
+        if not redacted or redacted in seen:
+            continue
+        seen.add(redacted)
+        safe.append(redacted)
+    return safe
 
 
 def _is_phone_like_identifier(value: str) -> bool:

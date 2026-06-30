@@ -38,13 +38,16 @@ def export_cold_capsules(
     statuses: Iterable[MemoryStatus] | None = None,
     limit: int | None = None,
     include_events: bool = True,
+    order: str = "newest",
 ) -> ColdExportResult:
     store.init()
     status_values = tuple(statuses or DEFAULT_COLD_STATUSES)
     if not status_values:
         raise ValueError("At least one status is required for cold export.")
+    if order not in {"newest", "oldest"}:
+        raise ValueError("order must be 'newest' or 'oldest'.")
 
-    capsules = _select_capsules(store, scope=scope, statuses=status_values, limit=limit)
+    capsules = _select_capsules(store, scope=scope, statuses=status_values, limit=limit, order=order)
     source_event_ids = sorted({event_id for capsule in capsules for event_id in capsule["source_event_ids"]})
     events = _select_events(store, source_event_ids) if include_events else []
     output_path = output or _default_cold_export_path(store.root, scope=scope)
@@ -57,6 +60,7 @@ def export_cold_capsules(
         "scope": scope,
         "statuses": [status.value for status in status_values],
         "limit": limit,
+        "order": order,
         "include_events": include_events,
         "capsule_count": len(capsules),
         "event_count": len(events),
@@ -104,6 +108,7 @@ def _select_capsules(
     scope: str | None,
     statuses: tuple[MemoryStatus, ...],
     limit: int | None,
+    order: str,
 ) -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in statuses)
     clauses = [f"status IN ({placeholders})"]
@@ -111,11 +116,12 @@ def _select_capsules(
     if scope:
         clauses.append("scope = ?")
         args.append(scope)
+    ordering = "updated_at ASC, id ASC" if order == "oldest" else "updated_at DESC, id ASC"
     sql = f"""
         SELECT *
         FROM capsules
         WHERE {' AND '.join(clauses)}
-        ORDER BY updated_at DESC, id ASC
+        ORDER BY {ordering}
     """
     if limit is not None:
         sql += " LIMIT ?"

@@ -101,7 +101,7 @@ class RetentionCycleRunner:
         backup_payload = backup.as_dict()
         backup_verification = verify_backup(backup.path)
 
-        cold = export_cold_capsules(self.store, output=cold_output, scope=scope, limit=limit)
+        cold = export_cold_capsules(self.store, output=cold_output, scope=scope, limit=limit, order="oldest")
         cold_payload = cold.as_dict()
         cold_verification = verify_cold_export(cold.path)
 

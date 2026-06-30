@@ -89,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     spool_turn.add_argument("--max-text-chars", type=int, default=12000)
 
     drain_spool = sub.add_parser("drain-spool")
+    drain_spool.add_argument("--scope", default=None)
     drain_spool.add_argument("--limit", type=int, default=25)
     drain_spool.add_argument("--stop-on-error", action="store_true")
     drain_spool.add_argument("--processing-stale-seconds", type=int, default=3600)
@@ -456,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Cold status to export. Repeat to include multiple statuses.",
     )
     cold_export.add_argument("--limit", type=int, default=None)
+    cold_export.add_argument("--order", choices=["newest", "oldest"], default="newest")
     cold_export.add_argument("--no-events", action="store_true")
     verify_cold_export = sub.add_parser("verify-cold-export")
     verify_cold_export.add_argument("path", type=Path)
@@ -687,6 +689,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "drain-spool":
         result = memory.drain_spool(
             limit=args.limit,
+            scope=args.scope,
             stop_on_error=args.stop_on_error,
             processing_stale_seconds=args.processing_stale_seconds,
             stabilize=args.stabilize,
@@ -1171,6 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
             statuses=args.status,
             limit=args.limit,
             include_events=not args.no_events,
+            order=args.order,
         )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0

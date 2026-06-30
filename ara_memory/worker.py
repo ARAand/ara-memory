@@ -214,7 +214,7 @@ def _run_locked_worker(
 ) -> WorkerReport:
     steps = list(initial_steps)
 
-    drain = memory.drain_spool(limit=spool_limit, processing_stale_seconds=processing_stale_seconds)
+    drain = memory.drain_spool(limit=spool_limit, scope=scope, processing_stale_seconds=processing_stale_seconds)
     steps.append(WorkerStep("drain_spool", drain.passed, drain.as_dict()))
 
     if episode_summary:

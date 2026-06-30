@@ -120,18 +120,20 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
         include_global=case.include_global,
         include_hot=case.include_hot,
     )
-    text = result.pack.lower()
-    expected_hits = {term: term.lower() in text for term in case.expected_terms}
-    expected_any_hits = {term: term.lower() in text for term in case.expected_any_terms}
-    forbidden_hits = {term: term.lower() in text for term in case.forbidden_terms}
+    evidence_text = _regression_evidence_text(result.pack).lower()
+    full_text = result.pack.lower()
+    expected_hits = {term: term.lower() in evidence_text for term in case.expected_terms}
+    expected_any_hits = {term: term.lower() in evidence_text for term in case.expected_any_terms}
+    forbidden_hits = {term: term.lower() in full_text for term in case.forbidden_terms}
     tokens = int(result.diagnostics["estimated_tokens_after"])
     selected_ids = [str(item) for item in result.diagnostics.get("selected_capsule_ids", [])]
+    visible_ids = [str(item) for item in result.diagnostics.get("visible_capsule_ids", [])]
     passed = (
         all(expected_hits.values())
         and (not expected_any_hits or any(expected_any_hits.values()))
         and not any(forbidden_hits.values())
         and tokens <= case.budget
-        and len(selected_ids) > 0
+        and len(visible_ids) > 0
     )
     return RecallRegressionCaseResult(
         name=case.name,
@@ -145,7 +147,9 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
             "expected_any_hits": expected_any_hits,
             "forbidden_hits": forbidden_hits,
             "capsules_selected": len(selected_ids),
+            "capsules_visible": len(visible_ids),
             "selected_capsule_ids": selected_ids,
+            "visible_capsule_ids": visible_ids,
             "include_global": case.include_global,
             "include_hot": case.include_hot,
         },
@@ -183,8 +187,7 @@ def _compare_to_baseline(
         prior_tokens = int(prior_details.get("estimated_tokens", 0) or 0)
         current_tokens = int(result.details.get("estimated_tokens", 0) or 0)
         token_limit = max(prior_tokens + 100, int(prior_tokens * (1.0 + max_token_growth)))
-        prior_ids = {str(item) for item in prior_details.get("selected_capsule_ids", [])}
-        current_ids = {str(item) for item in result.details.get("selected_capsule_ids", [])}
+        prior_ids, current_ids, overlap_basis = _baseline_overlap_ids(prior_details, result.details)
         overlap = _overlap_ratio(prior_ids, current_ids)
         failures = []
         if prior_passed and not result.passed:
@@ -192,7 +195,10 @@ def _compare_to_baseline(
         if prior_tokens > 0 and current_tokens > token_limit:
             failures.append("token_growth_exceeded")
         if prior_ids and current_ids and overlap < min_overlap:
-            failures.append("selected_capsule_overlap_below_threshold")
+            if overlap_basis == "visible_capsule_ids":
+                failures.append("visible_capsule_overlap_below_threshold")
+            else:
+                failures.append("selected_capsule_overlap_below_threshold")
         comparisons.append(
             RecallRegressionCaseResult(
                 name=result.name,
@@ -203,12 +209,55 @@ def _compare_to_baseline(
                     "current_tokens": current_tokens,
                     "token_limit": token_limit,
                     "selected_overlap": overlap,
+                    "evidence_overlap": overlap,
+                    "overlap_basis": overlap_basis,
                     "min_overlap": min_overlap,
                     "max_token_growth": max_token_growth,
                 },
             )
         )
     return comparisons
+
+
+def _regression_evidence_text(pack: str) -> str:
+    excluded_sections = {
+        "Memory Safety Boundary",
+        "Hot Memory",
+        "Matched Tags",
+        "Temporal Graph Hints",
+    }
+    lines: list[str] = []
+    current_section: str | None = None
+    for line in pack.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("## "):
+            current_section = stripped[3:].strip()
+            continue
+        if stripped.startswith("#") or stripped.startswith(("Query:", "Scope:")):
+            continue
+        if current_section in excluded_sections:
+            continue
+        if stripped in {"- None found.", "- None."}:
+            continue
+        lines.append(stripped)
+    return "\n".join(lines)
+
+
+def _baseline_overlap_ids(
+    prior_details: dict[str, Any],
+    current_details: dict[str, Any],
+) -> tuple[set[str], set[str], str]:
+    prior_visible = [str(item) for item in prior_details.get("visible_capsule_ids", [])]
+    current_visible = [str(item) for item in current_details.get("visible_capsule_ids", [])]
+    if prior_visible and current_visible:
+        return set(prior_visible), set(current_visible), "visible_capsule_ids"
+    return (
+        {str(item) for item in prior_details.get("selected_capsule_ids", [])},
+        {str(item) for item in current_details.get("selected_capsule_ids", [])},
+        "selected_capsule_ids",
+    )
 
 
 def _overlap_ratio(left: set[str], right: set[str]) -> float:

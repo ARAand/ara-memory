@@ -15,6 +15,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 SCHEMA_VERSION = 5
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+SQLITE_IN_CHUNK_SIZE = 500
 STORAGE_CATEGORY_KEYS = (
     "db_bytes",
     "ledger_bytes",
@@ -446,6 +447,42 @@ class MemoryStore:
                 )
             return salience_rows(limit=limit, recall_match_source="salience_fallback", excluded_ids=[])
 
+    def recent_capsules(
+        self,
+        *,
+        scope: str,
+        limit: int,
+        include_global: bool = True,
+        excluded_ids: list[str] | None = None,
+    ) -> list[sqlite3.Row]:
+        self.init()
+        if limit <= 0:
+            return []
+        excluded_ids = excluded_ids or []
+        scope_filter = "(scope = ? OR scope = 'global')" if include_global else "scope = ?"
+        excluded_clause = ""
+        params: list[Any] = [scope]
+        if excluded_ids:
+            placeholders = ", ".join("?" for _ in excluded_ids)
+            excluded_clause = f"AND id NOT IN ({placeholders})"
+            params.extend(excluded_ids)
+        params.append(limit)
+        with self.session() as conn:
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT *, NULL AS bm25_score, 'recent_supplement' AS recall_match_source
+                    FROM capsules
+                    WHERE status IN ('candidate', 'stable')
+                      AND {scope_filter}
+                      {excluded_clause}
+                    ORDER BY updated_at DESC, salience DESC, id ASC
+                    LIMIT ?
+                    """,
+                    tuple(params),
+                )
+            )
+
     def add_edge(
         self,
         *,
@@ -597,14 +634,18 @@ class MemoryStore:
         self.init()
         if not event_ids:
             return []
-        placeholders = ",".join("?" for _ in event_ids)
+        unique_ids = list(dict.fromkeys(event_ids))
+        rows: list[sqlite3.Row] = []
         with self.session() as conn:
-            return list(
-                conn.execute(
-                    f"SELECT * FROM events WHERE id IN ({placeholders})",
-                    event_ids,
+            for chunk in _chunks(unique_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(
+                    conn.execute(
+                        f"SELECT * FROM events WHERE id IN ({placeholders})",
+                        chunk,
+                    )
                 )
-            )
+        return rows
 
     def source_event_ids_for_statuses(
         self,
@@ -774,6 +815,11 @@ def row_to_capsule(row: sqlite3.Row) -> dict[str, Any]:
     data["source_event_ids"] = json.loads(data.pop("source_event_ids_json"))
     data["tags"] = json.loads(data.pop("tags_json"))
     return data
+
+
+def _chunks(items: list[str], size: int) -> Iterator[list[str]]:
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
 
 
 def row_to_event(row: sqlite3.Row) -> Event:

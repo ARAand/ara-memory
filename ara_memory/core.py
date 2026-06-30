@@ -401,6 +401,7 @@ class AraMemory:
         statuses: list[str] | None = None,
         limit: int | None = None,
         include_events: bool = True,
+        order: str = "newest",
     ) -> ColdExportResult:
         status_values = [MemoryStatus(status) for status in statuses] if statuses else None
         return export_cold_capsules(
@@ -410,6 +411,7 @@ class AraMemory:
             statuses=status_values,
             limit=limit,
             include_events=include_events,
+            order=order,
         )
 
     def verify_cold_export(self, path: Path) -> dict[str, Any]:

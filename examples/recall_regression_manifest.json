@@ -15,7 +15,7 @@
       "name": "prune_safety",
       "query": "how live pruning is protected before deleting cold capsules",
       "scope": "ara-memory",
-      "expected_terms": ["prune"],
+      "expected_terms": ["protected", "cold", "capsules"],
       "forbidden_terms": ["delete without approval"],
       "budget": 1600,
       "include_global": true,

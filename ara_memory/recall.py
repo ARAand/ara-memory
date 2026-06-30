@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords
 from ara_memory.models import MemoryStatus
-from ara_memory.risk import MemoryRiskAssessor, redact_sensitive_text
+from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -30,6 +31,7 @@ class RecallCompiler:
     ) -> RecallResult:
         terms = extract_keywords(query, limit=10)
         intent_query = _is_intent_query(query, terms)
+        temporal_query = _is_temporal_query(query, terms)
         graph_rows = self.store.graph_neighbors(terms, scope=scope, limit=24, include_global=include_global)
         raw_capsules = self.store.search_capsules(query, scope=scope, limit=48, include_global=include_global)
         candidates = [row_to_capsule(row) for row in raw_capsules]
@@ -40,8 +42,15 @@ class RecallCompiler:
                 scope=scope,
                 include_global=include_global,
             )
+        if temporal_query:
+            candidates = _with_recent_context(
+                self.store,
+                candidates,
+                scope=scope,
+                include_global=include_global,
+            )
         filtered_candidates = _filter_recall_candidates(self.store, candidates)
-        capsules = _rerank_capsules(filtered_candidates, terms)[:18]
+        capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:18]
 
         summaries = []
         stable = []
@@ -144,6 +153,10 @@ class RecallCompiler:
             "salience_supplement_used": any(
                 cap.get("recall_match_source") == "salience_supplement" for cap in visible_capsules
             ),
+            "recent_supplement_used": any(
+                cap.get("recall_match_source") == "recent_supplement" for cap in visible_capsules
+            ),
+            "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
             "relevance_score_avg": (
                 sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
@@ -167,6 +180,31 @@ def _with_intent_goals(
     rows = list(store.list_capsules(scope=scope, status=MemoryStatus.STABLE, kind="goal", limit=limit))
     if include_global and scope != "global":
         rows.extend(store.list_capsules(scope="global", status=MemoryStatus.STABLE, kind="goal", limit=limit))
+    out = list(capsules)
+    for row in rows:
+        cap = row_to_capsule(row)
+        if cap["id"] in seen:
+            continue
+        out.append(cap)
+        seen.add(cap["id"])
+    return out
+
+
+def _with_recent_context(
+    store: MemoryStore,
+    capsules: list[dict],
+    *,
+    scope: str,
+    include_global: bool,
+    limit: int = 8,
+) -> list[dict]:
+    seen = {cap["id"] for cap in capsules}
+    rows = store.recent_capsules(
+        scope=scope,
+        limit=limit,
+        include_global=include_global,
+        excluded_ids=list(seen),
+    )
     out = list(capsules)
     for row in rows:
         cap = row_to_capsule(row)
@@ -212,7 +250,7 @@ def _safe_graph_hints(store: MemoryStore, graph_rows: list[Any]) -> list[str]:
 
 
 def _format_capsule(cap: dict) -> str:
-    tags = ", ".join(cap["tags"][:8])
+    tags = ", ".join(redact_memory_tags(cap["tags"])[:8])
     body_limit = {
         "summary": 650,
         "project": 520,
@@ -399,6 +437,47 @@ def _is_intent_query(query: str, terms: list[str]) -> bool:
     return bool(term_set.intersection(intent_terms)) or any(term in lowered for term in intent_terms)
 
 
+def _is_temporal_query(query: str, terms: list[str]) -> bool:
+    lowered = query.lower()
+    term_set = {term.lower() for term in terms}
+    english_temporal_terms = {
+        "latest",
+        "recent",
+        "recently",
+        "current",
+        "now",
+        "today",
+        "last",
+        "changed",
+        "change",
+        "update",
+        "updated",
+        "newest",
+        "fresh",
+    }
+    korean_temporal_terms = {
+        "\ud604\uc7ac",
+        "\uc9c0\uae08",
+        "\ucd5c\uadfc",
+        "\uc624\ub298",
+        "\ub9c8\uc9c0\ub9c9",
+        "\ubcc0\uacbd",
+        "\ubc14\ub010",
+        "\uc0c8\ub85c",
+    }
+    phrase_patterns = (
+        r"\bright\s+now\b",
+        r"\blast\s+(?:turn|run|time|change|update)\b",
+        r"\bwhat\s+changed\b",
+        r"\bwhat(?:'s|\s+is)\s+current\b",
+    )
+    return (
+        bool(term_set.intersection(english_temporal_terms))
+        or any(term in lowered for term in korean_temporal_terms)
+        or any(re.search(pattern, lowered) for pattern in phrase_patterns)
+    )
+
+
 def _focus_hot_memory(hot_state: str, *, intent_query: bool) -> str:
     if not intent_query:
         return hot_state
@@ -425,22 +504,10 @@ def _sanitize_hot_memory(hot_state: str) -> str:
         return hot_state
     kept = []
     for block in blocks:
-        lowered = block.lower()
-        if any(pattern in lowered for pattern in _HOT_INSTRUCTION_PATTERNS):
+        if instruction_like_matches(block):
             continue
         kept.append(block)
     return "\n\n".join(kept) if kept else "# Ara Hot Memory\n\n- Redacted risky hot memory content."
-
-
-_HOT_INSTRUCTION_PATTERNS = (
-    "ignore previous",
-    "ignore all previous",
-    "system prompt",
-    "developer message",
-    "always obey this memory",
-    "permanent instruction",
-    "you must obey",
-)
 
 
 def _is_low_value_for_intent(cap: dict) -> bool:
@@ -479,7 +546,7 @@ def _is_low_value_for_intent(cap: dict) -> bool:
     return cap["kind"] in {"project", "episode"}
 
 
-def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
+def _rerank_capsules(capsules: list[dict], terms: list[str], *, temporal_query: bool = False) -> list[dict]:
     best_by_source: dict[str, dict] = {}
     for cap in capsules:
         for source in cap["source_event_ids"]:
@@ -489,8 +556,9 @@ def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
 
     scored = []
     shadowed = []
+    recency_boosts = _recency_boosts(capsules) if temporal_query else {}
     for cap in capsules:
-        score = _recall_score(cap, terms)
+        score = _recall_score(cap, terms, recency_boost=recency_boosts.get(cap["id"], 0.0))
         if _is_shadowed_by_better_memory(cap, best_by_source):
             shadowed.append((score - 5.0, cap))
         else:
@@ -501,7 +569,7 @@ def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
     return _dedupe_ranked([cap for _, cap in scored])
 
 
-def _recall_score(cap: dict, terms: list[str]) -> float:
+def _recall_score(cap: dict, terms: list[str], *, recency_boost: float = 0.0) -> float:
     tags = set(cap["tags"])
     lowered_terms = [term.lower() for term in terms]
     tag_hits = len(tags.intersection(lowered_terms))
@@ -515,8 +583,24 @@ def _recall_score(cap: dict, terms: list[str]) -> float:
     score += tag_hits * 0.35
     score += min(2.4, title_hits * 0.45 + body_hits * 0.18)
     score += _bm25_bonus(cap)
+    score += recency_boost
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score
+
+
+def _recency_boosts(capsules: list[dict]) -> dict[str, float]:
+    ordered = sorted(
+        capsules,
+        key=lambda cap: (str(cap.get("updated_at") or ""), str(cap.get("id") or "")),
+        reverse=True,
+    )
+    boosts: dict[str, float] = {}
+    for index, cap in enumerate(ordered[:10]):
+        boost = max(0.25, 4.0 - index * 1.2)
+        if cap.get("recall_match_source") == "recent_supplement":
+            boost += 0.25
+        boosts[str(cap["id"])] = boost
+    return boosts
 
 
 def _bm25_bonus(cap: dict) -> float:
@@ -675,7 +759,7 @@ def _matched_tags(capsules: list[dict], terms: list[str], *, limit: int = 24) ->
     out: list[str] = []
     seen = set()
     for cap in capsules:
-        for tag in cap["tags"]:
+        for tag in redact_memory_tags(cap["tags"]):
             normalized = str(tag).lower()
             if not normalized:
                 continue

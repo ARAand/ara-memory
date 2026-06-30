@@ -25,7 +25,8 @@
 - Most memories start as `candidate`.
 - Manual `promote` and `reject` commands exist.
 - Manual and automatic `quarantine` exists for suspicious behavioral memory.
-- The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing before hot memory is rebuilt.
+- The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing across capsule title, body, and tags before hot memory is rebuilt.
+- Instruction-like, secret-like, and direct-identifier tags are suppressed from recall tag surfaces.
 - Default recall, manual promotion, quality review, and external advisor payloads reuse that deterministic risk boundary; risky advisor candidates are redacted before any external command receives them.
 - Recall requires an explicit scope.
 - Audit flags instruction-like memory, low-confidence stable memory, and missing provenance.
@@ -40,7 +41,7 @@
 - Recall regression blocks retrieval drift, token jumps, and forbidden-text reintroduction after memory system changes.
 - `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`.
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
-- `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files back to pending before draining.
+- `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
 - Backups include durable spool envelopes and `verify-backup` runs SQLite foreign-key checks.
 - `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.

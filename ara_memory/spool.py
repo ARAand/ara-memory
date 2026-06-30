@@ -150,6 +150,7 @@ def enqueue_turn(
 def drain_spool(
     memory: Any,
     *,
+    scope: str | None = None,
     limit: int = 25,
     stop_on_error: bool = False,
     processing_stale_seconds: int = 3600,
@@ -162,11 +163,15 @@ def drain_spool(
 ) -> DrainReport:
     memory.init()
     paths = _spool_paths(memory.store.root)
-    recovered = _recover_stale_processing(paths, stale_seconds=processing_stale_seconds)
+    recovered = _recover_stale_processing(paths, stale_seconds=processing_stale_seconds, scope=scope)
     items: list[DrainItem] = []
     succeeded_scopes: set[str] = set()
     scope_hot_budgets: dict[str, int] = {}
-    for pending_path in sorted(paths["pending"].glob("*.json"))[:limit]:
+    for pending_path in sorted(paths["pending"].glob("*.json")):
+        if len(items) >= limit:
+            break
+        if scope is not None and _spool_record_scope(pending_path) not in {None, scope}:
+            continue
         processing_path = paths["processing"] / pending_path.name
         try:
             pending_path.replace(processing_path)
@@ -327,7 +332,7 @@ def _spool_paths(root: Path) -> dict[str, Path]:
     return paths
 
 
-def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int) -> int:
+def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int, scope: str | None = None) -> int:
     if stale_seconds <= 0:
         return 0
     now = time.time()
@@ -339,6 +344,8 @@ def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int) -> 
             continue
         if age < stale_seconds:
             continue
+        if scope is not None and _spool_record_scope(processing_path) not in {None, scope}:
+            continue
         pending_path = paths["pending"] / processing_path.name
         if pending_path.exists():
             pending_path = paths["pending"] / f"{processing_path.stem}.recovered-{new_id('spool')}.json"
@@ -348,6 +355,21 @@ def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int) -> 
         except FileNotFoundError:
             continue
     return recovered
+
+
+def _spool_record_scope(path: Path) -> str | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("format") != "ara-memory-spooled-turn-v1":
+        return None
+    options = payload.get("options")
+    if not isinstance(options, dict):
+        return "global"
+    return str(options.get("scope", "global"))
 
 
 def _archive_spool_record(

@@ -38,6 +38,7 @@ recall(query, scope, budget)
   -> keyword extraction
   -> graph neighbor lookup
   -> FTS/BM25 capsule search
+  -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
   -> typed context pack
   -> token budget trimming
@@ -58,13 +59,14 @@ eval()
 
 recall_regression(manifest, baseline)
   -> representative recall cases
-  -> expected/forbidden term checks
+  -> rendered-evidence expected term checks
+  -> full-pack forbidden term checks
   -> token growth checks
-  -> selected capsule overlap checks
+  -> visible capsule overlap checks when available
 
 worker(scope)
   -> acquire .ara-memory/locks/worker.lock
-  -> drain_spool()
+  -> drain_spool(scope)
   -> episode_summary() + candidate_summary()
   -> quality(persist=True)
   -> review_worker(dry_run=True by default)
@@ -95,6 +97,8 @@ sleep()
 - `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
 - `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
+- Large provenance event lookups are de-duplicated and chunked so cold export,
+  risk review, and restore/prune preparation do not hit SQLite variable limits.
 
 ## Ingress Boundary
 
@@ -114,7 +118,7 @@ preferred bridge for always-on capture because a Codex crash, DB lock, missing
 artifact, later file edit/delete, or later worker failure does not erase or
 rewrite the user's prompt, files, or worktree evidence. If a worker dies after
 moving a file into `processing`, the next drain/worker recovers stale processing
-records back to `pending` before continuing.
+records for that same scope back to `pending` before continuing.
 
 When the foreground session needs to recall immediately after draining, use
 `drain-spool --stabilize`. It performs the same conservative episode/candidate
@@ -124,7 +128,7 @@ memory for the drained scopes. This keeps raw turn preservation crash-safe while
 preventing fresh operational evidence from destabilizing the next recall pack.
 
 `worker` is the separate memory processor. Codex can keep acting as the live
-reasoning agent while the worker drains queued turns and runs quality, review,
+reasoning agent while the worker drains queued turns for its scope and runs quality, review,
 triage, doctor, recall-regression, and maintenance gates. The default review
 worker mode is dry-run, so background operation can inspect and score memories
 without silently rewriting long-term behavior. Review triage groups large queues
@@ -190,6 +194,9 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 17. Rotate redundant verified backups with `backup-stewardship` against a target backup-byte budget before touching live memory or cold evidence; keep latest backups, retention-cycle evidence, failed-verification backups, and active live-prune approval backups.
 18. Use purpose-aware lifecycle tiers before recall or pruning: long-running purpose, identity, and preference anchors may enter hot memory, working memories require query selection, guarded memories require review, and cold evidence requires export/prune gates.
 19. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
+20. Treat temporal recall as explicit: only temporal words or phrases should
+    trigger recency boosts, while ordinary substrings such as `knowledge` or
+    `blast` must stay lexical.
 
 ## Future Extension Points
 

@@ -165,6 +165,10 @@ debugging retrieval quality; inspect `visible_capsules`,
 `quality_score` before increasing the budget. `recall-context` applies that
 plan and emits the selected pack, so normal work can use one command while still
 preserving the budget decision.
+Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
+temporal equivalents trigger recent-context supplementation and recency-aware
+reranking; `recall --diagnostics` exposes `temporal_query` and
+`recent_supplement_used` when this path is active.
 
 ## Codex Skill
 
@@ -219,7 +223,7 @@ python -m ara_memory retention --scope ara-memory
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
 python -m ara_memory lifecycle --scope ara-memory
-python -m ara_memory cold-export --scope ara-memory --output .ara-memory/archive/cold/ara-memory-cold.zip
+python -m ara_memory cold-export --scope ara-memory --order oldest --output .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory prune-plan --scope ara-memory --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --query "current memory architecture"
 python -m ara_memory shadow-prune --backup .ara-memory/backups/milestone.zip --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --scope ara-memory --query "current memory architecture"
@@ -406,7 +410,12 @@ run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 from reviewed pruning readiness evidence, while `cold-stewardship` additionally
 checks freshness and drift against the current live cold set.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
-events into a portable zip so pruning can later be audited or reversed.
+events into a portable zip so pruning can later be audited or reversed. Manual
+limited exports default to newest-first for inspection; use `--order oldest`
+when preparing a manual export for `prune-plan`, because the planner chooses
+the oldest eligible cold capsules first. `retention-cycle --limit` does this
+oldest-first export internally so its cold export matches the planned capsule
+set.
 `prune-plan` is still a dry-run: it requires a verified cold export, runs
 representative recall checks, and separates prunable source events from events
 still cited by active candidate/stable capsules.
@@ -426,11 +435,15 @@ python -m ara_memory recall-regression --manifest examples/recall_regression_man
 python -m ara_memory recall-regression --manifest examples/recall_regression_manifest.json --baseline .ara-memory/archive/recall-regression-baseline.json
 ```
 
-Each case checks expected terms, forbidden terms, budget, and selected capsules.
-With a baseline, the gate also fails when a previously passing case breaks,
-token use jumps, or the selected capsule set drifts too far. It does not assert
-recall-plan `quality_score` or rendered-evidence fields; for budget-selection QA,
-run `recall-plan --json` and review `visible_capsules`,
+Each case checks expected terms against rendered memory evidence, excluding
+query echo, hot memory, matched tags, and graph hints. Forbidden terms still
+scan the full pack. Cases must include visible capsule evidence, so a selected
+capsule that is later trimmed away cannot pass the gate. With a baseline, the
+gate also fails when a previously passing case breaks, token use jumps, or the
+visible capsule set drifts too far; old baselines fall back to selected capsule
+overlap. JSON details include `capsules_visible`, `visible_capsule_ids`,
+`overlap_basis`, and `evidence_overlap`. For budget-selection QA, run
+`recall-plan --json` and review `visible_capsules`,
 `query_terms_visible_count`, `fallback_used`, and `quality_score`.
 
 Create a portable snapshot after important milestones:
@@ -582,7 +595,9 @@ It also supersedes stale artifact summaries so repeated file captures do not kee
 competing as separate long-term memories.
 Before promotion, a separate deterministic Memory Auditor scores poisoning risk.
 High-risk behavioral, secret-like, or self-serving memories are quarantined
-instead of becoming stable memory. Direct identifiers and keyword-stuffed
+instead of becoming stable memory. Capsule title, body, and tags are risk
+scored; instruction-like, secret-like, or direct-identifier tags are not
+rendered in recall tag surfaces. Direct identifiers and keyword-stuffed
 capsules are also kept out of hot memory so the always-on context stays small
 and harder to manipulate. The same deterministic boundary protects default
 recall, manual promotion, quality review, and external advisor payloads.

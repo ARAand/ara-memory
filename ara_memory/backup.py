@@ -28,8 +28,9 @@ class BackupResult:
 
 def create_backup(store: MemoryStore, *, output: Path | None = None, include_archive: bool = True) -> BackupResult:
     store.init()
-    output_path = output or _default_backup_path(store.root)
+    output_path = (output or _default_backup_path(store.root)).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    excluded_paths = {output_path}
 
     manifest = {
         "created_at": utc_now(),
@@ -46,11 +47,11 @@ def create_backup(store: MemoryStore, *, output: Path | None = None, include_arc
         with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
             zf.write(tmp_db, "memory.db")
-            _write_tree(zf, store.ledger_dir, "ledger")
-            _write_tree(zf, store.hot_dir, "hot")
-            _write_tree(zf, store.root / "spool", "spool")
+            _write_tree(zf, store.ledger_dir, "ledger", exclude=excluded_paths)
+            _write_tree(zf, store.hot_dir, "hot", exclude=excluded_paths)
+            _write_tree(zf, store.root / "spool", "spool", exclude=excluded_paths)
             if include_archive:
-                _write_tree(zf, store.archive_dir, "archive")
+                _write_tree(zf, store.archive_dir, "archive", exclude=excluded_paths)
 
     return BackupResult(path=output_path, manifest=manifest)
 
@@ -188,11 +189,12 @@ def _snapshot_sqlite(source: Path, target: Path) -> None:
         source_conn.close()
 
 
-def _write_tree(zf: zipfile.ZipFile, root: Path, arc_root: str) -> None:
+def _write_tree(zf: zipfile.ZipFile, root: Path, arc_root: str, *, exclude: set[Path] | None = None) -> None:
     if not root.exists():
         return
+    excluded = exclude or set()
     for path in sorted(root.rglob("*")):
-        if path.is_file():
+        if path.is_file() and path.resolve() not in excluded:
             zf.write(path, f"{arc_root}/{path.relative_to(root).as_posix()}")
 
 
