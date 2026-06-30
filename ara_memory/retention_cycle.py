@@ -133,7 +133,8 @@ class RetentionCycleRunner:
             bool(backup_verification.get("passed"))
             and bool(cold_verification.get("passed"))
             and plan.passed
-            and (shadow_payload is None or bool(shadow_payload.get("passed")))
+            and shadow_payload is not None
+            and bool(shadow_payload.get("passed"))
         )
         report = RetentionCycleReport(
             scope=scope,

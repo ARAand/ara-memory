@@ -12,12 +12,13 @@ COLD_STATUSES = {
     MemoryStatus.REJECTED.value,
     MemoryStatus.QUARANTINED.value,
 }
+STORAGE_PRESSURE_BYTES = 50_000_000
 
 
 @dataclass(slots=True)
 class RetentionReport:
     scope: str | None
-    totals: dict[str, int]
+    totals: dict[str, Any]
     by_status: list[dict[str, Any]]
     by_kind_status: list[dict[str, Any]]
     cold_candidates: list[dict[str, Any]]
@@ -39,7 +40,9 @@ class RetentionReport:
         lines.append(
             "totals: "
             f"events={self.totals['events']}, capsules={self.totals['capsules']}, "
-            f"cold={self.totals['cold_capsules']}, storage_bytes={self.totals['storage_bytes']}"
+            f"cold={self.totals['cold_capsules']}, "
+            f"live_storage_bytes={self.totals.get('live_storage_bytes', self.totals['storage_bytes'])}, "
+            f"storage_bytes={self.totals['storage_bytes']}"
         )
         lines.append("## By Status")
         for row in self.by_status:
@@ -114,12 +117,13 @@ class RetentionAnalyzer:
                 )
             ]
 
-        totals = {
+        storage = self.store.storage_breakdown()
+        totals: dict[str, Any] = {
             "events": events,
             "capsules": capsules,
             "cold_capsules": cold_capsules,
-            "storage_bytes": self.store.storage_bytes(),
         }
+        totals.update(storage)
         return RetentionReport(
             scope=scope,
             totals=totals,
@@ -130,19 +134,27 @@ class RetentionAnalyzer:
         )
 
 
-def _recommend(totals: dict[str, int], by_status: list[dict[str, Any]]) -> list[str]:
+def _recommend(totals: dict[str, Any], by_status: list[dict[str, Any]]) -> list[str]:
     recommendations = []
     status_counts = {row["status"]: row["count"] for row in by_status}
     cold = totals["cold_capsules"]
     capsules = max(1, totals["capsules"])
+    live_storage_bytes = totals.get("live_storage_bytes", totals["storage_bytes"])
+    backup_or_evidence_bytes = totals.get("backup_bytes", 0) + totals.get("evidence_storage_bytes", 0)
     if cold:
         recommendations.append(
             f"{cold} cold capsules ({cold / capsules:.0%}) are superseded/rejected/quarantined; keep them for provenance unless storage pressure requires pruning."
         )
     if status_counts.get(MemoryStatus.CANDIDATE.value, 0) > status_counts.get(MemoryStatus.STABLE.value, 0) * 2:
         recommendations.append("Candidate capsules dominate stable memory; run sleep/review before relying on recall quality.")
-    if totals["storage_bytes"] > 50_000_000:
-        recommendations.append("Storage exceeds 50MB; create a verified backup before considering destructive pruning.")
+    if live_storage_bytes > STORAGE_PRESSURE_BYTES:
+        recommendations.append(
+            "Live memory storage exceeds 50MB; run maintenance, create a verified backup, and pass retention-cycle before considering destructive pruning."
+        )
+    elif totals["storage_bytes"] > STORAGE_PRESSURE_BYTES and backup_or_evidence_bytes:
+        recommendations.append(
+            "Total memory folder exceeds 50MB while live memory is below threshold; rotate verified backups/export evidence before touching live memory."
+        )
     if not recommendations:
         recommendations.append("Retention pressure is low; prefer maintenance and backup over destructive pruning.")
     return recommendations

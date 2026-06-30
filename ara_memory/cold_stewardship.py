@@ -199,7 +199,7 @@ def _totals(
         else:
             capsules = conn.execute("SELECT COUNT(*) FROM capsules").fetchone()[0]
             events = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    return {
+    totals = {
         "scope": scope,
         "events": events,
         "capsules": capsules,
@@ -208,8 +208,9 @@ def _totals(
         "cold_source_events": len(cold_source_events),
         "protected_source_events": len(protected_source_events),
         "prunable_source_events": len(prunable_source_events),
-        "storage_bytes": store.storage_bytes(),
     }
+    totals.update(store.storage_breakdown())
+    return totals
 
 
 def _groups(

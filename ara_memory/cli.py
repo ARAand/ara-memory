@@ -825,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
             input_usd_per_million=args.input_usd_per_million,
             output_usd_per_million=args.output_usd_per_million,
         )
+        stats = memory.stats()
         payload = {
             "recall": result.diagnostics,
             "api_cost": {
@@ -834,7 +835,9 @@ def main(argv: list[str] | None = None) -> int:
                 "output_cost_usd": estimate.output_cost_usd,
                 "total_cost_usd": estimate.total_cost_usd,
             },
-            "storage_bytes": memory.stats()["storage_bytes"],
+            "storage_bytes": stats["storage_bytes"],
+            "live_storage_bytes": stats["live_storage_bytes"],
+            "storage_breakdown": stats["storage_breakdown"],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return 0

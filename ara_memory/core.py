@@ -99,9 +99,11 @@ class AraMemory:
     def audit(self) -> str:
         return MemoryAuditor(self.store).audit()
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         stats = self.store.stats()
-        stats["storage_bytes"] = self.store.storage_bytes()
+        storage = self.store.storage_breakdown()
+        stats.update(storage)
+        stats["storage_breakdown"] = dict(storage)
         return stats
 
     def promote(self, capsule_id: str, *, actor: str = "manual", reason: str = "") -> bool:

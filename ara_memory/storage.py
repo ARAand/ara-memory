@@ -14,6 +14,30 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 SCHEMA_VERSION = 4
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+STORAGE_CATEGORY_KEYS = (
+    "db_bytes",
+    "ledger_bytes",
+    "hot_bytes",
+    "spool_bytes",
+    "archive_object_bytes",
+    "cold_export_bytes",
+    "retention_cycle_bytes",
+    "archive_other_bytes",
+    "backup_bytes",
+    "support_bytes",
+)
+LIVE_STORAGE_KEYS = {
+    "db_bytes",
+    "ledger_bytes",
+    "hot_bytes",
+    "spool_bytes",
+    "archive_object_bytes",
+}
+EVIDENCE_STORAGE_KEYS = {
+    "cold_export_bytes",
+    "retention_cycle_bytes",
+    "archive_other_bytes",
+}
 
 
 SCHEMA = """
@@ -223,6 +247,7 @@ class MemoryStore:
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -486,13 +511,26 @@ class MemoryStore:
             row = conn.execute("SELECT value FROM memory_meta WHERE key = 'schema_version'").fetchone()
             return int(row[0]) if row else 0
 
-    def storage_bytes(self) -> int:
+    def storage_breakdown(self) -> dict[str, int]:
         self.init()
-        total = 0
+        breakdown = {key: 0 for key in STORAGE_CATEGORY_KEYS}
         for path in self.root.rglob("*"):
             if path.is_file():
-                total += path.stat().st_size
-        return total
+                size = path.stat().st_size
+                breakdown[_storage_category(self.root, path)] += size
+        breakdown["live_storage_bytes"] = sum(breakdown[key] for key in LIVE_STORAGE_KEYS)
+        breakdown["evidence_storage_bytes"] = sum(breakdown[key] for key in EVIDENCE_STORAGE_KEYS)
+        breakdown["archive_bytes"] = (
+            breakdown["archive_object_bytes"]
+            + breakdown["cold_export_bytes"]
+            + breakdown["retention_cycle_bytes"]
+            + breakdown["archive_other_bytes"]
+        )
+        breakdown["storage_bytes"] = sum(breakdown[key] for key in STORAGE_CATEGORY_KEYS)
+        return breakdown
+
+    def storage_bytes(self) -> int:
+        return self.storage_breakdown()["storage_bytes"]
 
     def update_capsule_status(
         self,
@@ -785,4 +823,34 @@ def _invalidate_hot_scope(hot_dir: Path, scope: str) -> None:
             path.unlink()
         except FileNotFoundError:
             continue
+
+
+def _storage_category(root: Path, path: Path) -> str:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        return "support_bytes"
+    if not parts:
+        return "support_bytes"
+    first = parts[0]
+    if first in {"memory.db", "memory.db-wal", "memory.db-shm"}:
+        return "db_bytes"
+    if first == "ledger":
+        return "ledger_bytes"
+    if first == "hot":
+        return "hot_bytes"
+    if first == "spool":
+        return "spool_bytes"
+    if first == "backups":
+        return "backup_bytes"
+    if first == "archive":
+        second = parts[1] if len(parts) > 1 else ""
+        if second == "objects":
+            return "archive_object_bytes"
+        if second == "cold":
+            return "cold_export_bytes"
+        if second == "retention-cycles":
+            return "retention_cycle_bytes"
+        return "archive_other_bytes"
+    return "support_bytes"
 

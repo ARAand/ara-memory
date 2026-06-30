@@ -33,6 +33,7 @@ LIVE_PRUNE_CONFIRMATION = "DELETE COLD CAPSULES"
 @dataclass(slots=True)
 class PrunePlanReport:
     scope: str | None
+    limit: int | None
     dry_run: bool
     passed: bool
     gates: list[dict[str, Any]]
@@ -40,12 +41,14 @@ class PrunePlanReport:
     recall_checks: list[dict[str, Any]]
     protected_event_ids: list[str]
     prunable_event_ids: list[str]
+    candidate_capsule_ids: list[str]
     candidate_capsules: list[dict[str, Any]]
     recommendations: list[str]
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "scope": self.scope,
+            "limit": self.limit,
             "dry_run": self.dry_run,
             "passed": self.passed,
             "gates": self.gates,
@@ -53,6 +56,7 @@ class PrunePlanReport:
             "recall_checks": self.recall_checks,
             "protected_event_ids": self.protected_event_ids,
             "prunable_event_ids": self.prunable_event_ids,
+            "candidate_capsule_ids": self.candidate_capsule_ids,
             "candidate_capsules": self.candidate_capsules,
             "recommendations": self.recommendations,
         }
@@ -221,6 +225,7 @@ class PrunePlanner:
         self.store.init()
         candidates = _cold_capsules(self.store, scope=scope, limit=limit)
         candidate_ids = {row["id"] for row in candidates}
+        ordered_candidate_ids = [row["id"] for row in candidates]
         source_event_ids = sorted({event_id for row in candidates for event_id in row["source_event_ids"]})
         active_event_ids = _active_event_ids(self.store, scope=scope)
         protected_event_ids = sorted(set(source_event_ids).intersection(active_event_ids))
@@ -268,6 +273,7 @@ class PrunePlanner:
         recommendations = _recommend(totals, gates, recall_queries=recall_queries or [])
         return PrunePlanReport(
             scope=scope,
+            limit=limit,
             dry_run=True,
             passed=all(gate["passed"] for gate in gates),
             gates=gates,
@@ -275,6 +281,7 @@ class PrunePlanner:
             recall_checks=recall_checks,
             protected_event_ids=protected_event_ids,
             prunable_event_ids=prunable_event_ids,
+            candidate_capsule_ids=ordered_candidate_ids,
             candidate_capsules=[
                 {
                     "id": row["id"],
@@ -462,18 +469,40 @@ class LivePruneController:
         scope = approval["scope"]
         shadow = json.loads(approval["shadow_json"])
         plan = shadow["plan"]
-        candidate_ids = [row["id"] for row in _cold_capsules(self.store, scope=scope, limit=None)]
-        expected_count = plan["totals"]["cold_capsules"]
-        if len(candidate_ids) != expected_count:
+        approved_candidate_ids = plan.get("candidate_capsule_ids")
+        if not approved_candidate_ids:
             return _blocked_live_report(
                 approval,
-                f"Live cold capsule count changed from approved {expected_count} to {len(candidate_ids)}.",
+                "Approved prune plan does not contain exact capsule IDs; rerun prepare-live-prune.",
+            )
+        current_candidate_ids = [
+            row["id"] for row in _cold_capsules(self.store, scope=scope, limit=plan.get("limit"))
+        ]
+        if set(current_candidate_ids) != set(approved_candidate_ids):
+            return _blocked_live_report(
+                approval,
+                "Approved cold capsule set changed or no longer matches live memory; rerun retention-cycle and prepare-live-prune.",
             )
         verification = verify_cold_export(Path(approval["cold_export_path"]))
         if not verification.get("passed"):
             return _blocked_live_report(approval, "Approved cold export no longer verifies.")
+        exported_ids = _exported_capsule_ids(Path(approval["cold_export_path"]))
+        missing_export_ids = sorted(set(approved_candidate_ids) - exported_ids)
+        if missing_export_ids:
+            return _blocked_live_report(
+                approval,
+                "Approved cold export no longer covers the approved capsule IDs; rerun retention-cycle and prepare-live-prune.",
+            )
 
-        deletion = _delete_capsules_only(self.store, candidate_ids)
+        deletion = _delete_capsules_only(self.store, approved_candidate_ids)
+        if deletion.get("blocked") or deletion.get("capsules_removed", 0) != len(approved_candidate_ids):
+            return _blocked_live_report(
+                approval,
+                deletion.get(
+                    "block_reason",
+                    "Approved cold capsule set changed during deletion; rerun retention-cycle and prepare-live-prune.",
+                ),
+            )
         operation_id = new_id("irrev_op")
         manifest = {
             "approval_id": approval["id"],
@@ -482,6 +511,7 @@ class LivePruneController:
             "cold_export_path": approval["cold_export_path"],
             "deletion": deletion,
             "approved_plan_totals": plan["totals"],
+            "approved_candidate_ids": approved_candidate_ids,
             "event_deletion_policy": "events are never deleted by live-prune",
         }
         now = utc_now()
@@ -708,15 +738,46 @@ def _delete_capsules_only(store: MemoryStore, capsule_ids: list[str]) -> dict[st
     store.init()
     if not capsule_ids:
         return {
+            "blocked": False,
             "capsules_requested": 0,
             "capsules_removed": 0,
             "fts_removed": 0,
             "edges_removed": 0,
             "actions_removed": 0,
+            "quality_scores_removed": 0,
+            "review_queue_removed": 0,
+            "source_links_removed": 0,
             "events_removed": 0,
         }
     placeholders = ",".join("?" for _ in capsule_ids)
     with store.session() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            f"SELECT id, status FROM capsules WHERE id IN ({placeholders})",
+            capsule_ids,
+        ).fetchall()
+        found_ids = {row["id"] for row in rows}
+        missing_ids = sorted(set(capsule_ids) - found_ids)
+        non_prunable_ids = sorted(row["id"] for row in rows if row["status"] not in PRUNABLE_STATUSES)
+        if missing_ids or non_prunable_ids:
+            return {
+                "blocked": True,
+                "block_reason": (
+                    "Approved cold capsule set changed during deletion; "
+                    "rerun retention-cycle and prepare-live-prune."
+                ),
+                "missing_capsule_ids": missing_ids,
+                "non_prunable_capsule_ids": non_prunable_ids,
+                "capsules_requested": len(capsule_ids),
+                "capsules_removed": 0,
+                "fts_removed": 0,
+                "edges_removed": 0,
+                "actions_removed": 0,
+                "quality_scores_removed": 0,
+                "review_queue_removed": 0,
+                "source_links_removed": 0,
+                "events_removed": 0,
+            }
         before_capsules = conn.execute(
             f"SELECT COUNT(*) FROM capsules WHERE id IN ({placeholders})",
             capsule_ids,
@@ -733,17 +794,45 @@ def _delete_capsules_only(store: MemoryStore, capsule_ids: list[str]) -> dict[st
             f"SELECT COUNT(*) FROM memory_actions WHERE capsule_id IN ({placeholders})",
             capsule_ids,
         ).fetchone()[0]
+        before_quality = conn.execute(
+            f"SELECT COUNT(*) FROM memory_quality_scores WHERE capsule_id IN ({placeholders})",
+            capsule_ids,
+        ).fetchone()[0]
+        before_review_queue = conn.execute(
+            f"SELECT COUNT(*) FROM memory_review_queue WHERE capsule_id IN ({placeholders})",
+            capsule_ids,
+        ).fetchone()[0]
+        before_source_links = conn.execute(
+            f"SELECT COUNT(*) FROM capsule_source_events WHERE capsule_id IN ({placeholders})",
+            capsule_ids,
+        ).fetchone()[0]
         conn.execute(f"DELETE FROM temporal_edges WHERE source_capsule_id IN ({placeholders})", capsule_ids)
         conn.execute(f"DELETE FROM memory_actions WHERE capsule_id IN ({placeholders})", capsule_ids)
+        conn.execute(f"DELETE FROM memory_quality_scores WHERE capsule_id IN ({placeholders})", capsule_ids)
+        conn.execute(f"DELETE FROM memory_review_queue WHERE capsule_id IN ({placeholders})", capsule_ids)
         conn.execute(f"DELETE FROM capsules_fts WHERE id IN ({placeholders})", capsule_ids)
-        conn.execute(f"DELETE FROM capsules WHERE id IN ({placeholders})", capsule_ids)
+        status_placeholders = ",".join("?" for _ in PRUNABLE_STATUSES)
+        cur = conn.execute(
+            f"""
+            DELETE FROM capsules
+            WHERE id IN ({placeholders})
+              AND status IN ({status_placeholders})
+            """,
+            [*capsule_ids, *PRUNABLE_STATUSES],
+        )
+        if cur.rowcount != before_capsules:
+            raise RuntimeError("Approved cold capsule set changed during deletion.")
         conn.execute("INSERT INTO capsules_fts(capsules_fts) VALUES ('optimize')")
         return {
+            "blocked": False,
             "capsules_requested": len(capsule_ids),
             "capsules_removed": before_capsules,
             "fts_removed": before_fts,
             "edges_removed": before_edges,
             "actions_removed": before_actions,
+            "quality_scores_removed": before_quality,
+            "review_queue_removed": before_review_queue,
+            "source_links_removed": before_source_links,
             "events_removed": 0,
         }
 

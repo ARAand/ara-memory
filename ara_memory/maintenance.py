@@ -20,6 +20,11 @@ class MaintenanceReport:
             "sqlite_integrity": self.sqlite_integrity,
             "operations": self.operations,
             "bytes_reclaimed": max(0, self.before["storage_bytes"] - self.after["storage_bytes"]),
+            "live_bytes_reclaimed": max(
+                0,
+                self.before.get("live_storage_bytes", self.before["storage_bytes"])
+                - self.after.get("live_storage_bytes", self.after["storage_bytes"]),
+            ),
         }
 
 
@@ -55,5 +60,5 @@ def run_maintenance(store: MemoryStore, *, vacuum: bool = True) -> MaintenanceRe
 
 def _stats_with_bytes(store: MemoryStore) -> dict[str, int]:
     stats = store.stats()
-    stats["storage_bytes"] = store.storage_bytes()
+    stats.update(store.storage_breakdown())
     return stats

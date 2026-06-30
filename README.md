@@ -317,11 +317,12 @@ integrity check, and VACUUM.
 any destructive pruning is considered.
 `retention-cycle` is the preferred non-destructive pruning readiness gate. It
 creates a fresh backup, verifies it, exports cold capsules, verifies that export,
-runs prune-plan with representative recall queries, and optionally runs
-shadow-prune in a restored sandbox. It does not modify the live store. Each run
-writes a compact report under `.ara-memory/archive/retention-cycles/`; `health`
-uses the latest passing report to distinguish unmanaged cold pressure from
-reviewed pruning readiness evidence.
+runs prune-plan with representative recall queries, and runs shadow-prune in a
+restored sandbox. It does not modify the live store. `--no-shadow` is allowed
+only for partial evidence collection and does not pass pruning readiness. Each
+run writes a compact report under `.ara-memory/archive/retention-cycles/`;
+`health` uses the latest passing report to distinguish unmanaged cold pressure
+from reviewed pruning readiness evidence.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
 events into a portable zip so pruning can later be audited or reversed.
 `prune-plan` is still a dry-run: it requires a verified cold export, runs
@@ -357,7 +358,9 @@ python -m ara_memory restore-backup .ara-memory/backups/milestone.zip --target-r
 ```
 
 Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger,
-hot memory files, archived artifacts, and a manifest with schema/stats.
+hot memory files, archived artifacts, durable spool envelopes, and a manifest
+with schema/stats. Verification checks SQLite integrity and foreign-key
+consistency so old or externally modified stores with orphan rows do not pass.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
 Restore refuses to overwrite a non-empty target unless `--force` is passed.
