@@ -3238,6 +3238,59 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("spool-turn", pack)
             self.assertIn("drain-spool", pack)
 
+    def test_drain_spool_stabilize_folds_post_capture_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            commands = [
+                {"cmd": f"python -m ara_memory verification-{index}", "exit_code": 0, "output": "OK"}
+                for index in range(5)
+            ]
+            decisions = [
+                "Decision: memory drain stabilization should fold command episode noise after capture.",
+                "Decision: memory recall should not be destabilized by freshly captured verification commands.",
+                "Decision: memory policy decisions from one turn should consolidate before the next recall.",
+            ]
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_stabilize_drain",
+                    "prompt": "Jongseo asks Ara to preserve a turn and keep recall stable.",
+                    "assistant": "Ara drains the turn and stabilizes post-capture noise.",
+                    "commands": commands,
+                    "decisions": decisions,
+                },
+                scope="stabilize-drain",
+                hot_budget=700,
+            )
+
+            report = memory.drain_spool(limit=10, stabilize=True)
+
+            self.assertTrue(report.passed, report.as_dict())
+            payload = report.as_dict()
+            self.assertEqual(payload["succeeded"], 1)
+            self.assertIn("stabilization", payload)
+            self.assertEqual(payload["stabilization"]["summaries_created"], 2)
+            self.assertEqual(payload["stabilization"]["superseded"], 8)
+            self.assertIsNotNone(payload["stabilization"]["scopes"][0]["hot"])
+
+            remaining_episode_candidates = memory.list_capsules(
+                scope="stabilize-drain",
+                status="candidate",
+                kind="episode",
+                limit=20,
+            )
+            self.assertFalse(any(item["title"].startswith("Command:") for item in remaining_episode_candidates))
+            remaining_decisions = memory.list_capsules(
+                scope="stabilize-drain",
+                status="candidate",
+                kind="decision",
+                limit=20,
+            )
+            self.assertEqual(remaining_decisions, [])
+            stable_summaries = memory.list_capsules(scope="stabilize-drain", status="stable", kind="summary", limit=10)
+            titles = {item["title"] for item in stable_summaries}
+            self.assertTrue(any("Consolidated command episode outcomes" in title for title in titles))
+            self.assertTrue(any("Consolidated memory policy decisions" in title for title in titles))
+
     def test_spool_turn_duplicate_turn_ids_do_not_overwrite_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

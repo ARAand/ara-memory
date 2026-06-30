@@ -48,13 +48,14 @@ class DrainReport:
     failed: int
     recovered: int = 0
     items: list[DrainItem] = field(default_factory=list)
+    stabilization: dict[str, Any] | None = None
 
     @property
     def passed(self) -> bool:
-        return self.failed == 0
+        return self.failed == 0 and (self.stabilization is None or bool(self.stabilization.get("passed", True)))
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "passed": self.passed,
             "processed": self.processed,
             "succeeded": self.succeeded,
@@ -62,6 +63,9 @@ class DrainReport:
             "recovered": self.recovered,
             "items": [item.as_dict() for item in self.items],
         }
+        if self.stabilization is not None:
+            payload["stabilization"] = self.stabilization
+        return payload
 
 
 def enqueue_turn(
@@ -149,11 +153,18 @@ def drain_spool(
     limit: int = 25,
     stop_on_error: bool = False,
     processing_stale_seconds: int = 3600,
+    stabilize: bool = False,
+    stabilization_scope: str | None = None,
+    stabilization_episode_min_group_size: int = 5,
+    stabilization_candidate_min_group_size: int = 3,
+    stabilization_limit: int = 80,
 ) -> DrainReport:
     memory.init()
     paths = _spool_paths(memory.store.root)
     recovered = _recover_stale_processing(paths, stale_seconds=processing_stale_seconds)
     items: list[DrainItem] = []
+    succeeded_scopes: set[str] = set()
+    scope_hot_budgets: dict[str, int] = {}
     for pending_path in sorted(paths["pending"].glob("*.json"))[:limit]:
         processing_path = paths["processing"] / pending_path.name
         try:
@@ -189,6 +200,11 @@ def drain_spool(
             )
             done_path = _archive_spool_record(paths["done"], processing_path, payload, result=result)
             items.append(DrainItem(spool_id=spool_id, state="done", path=str(done_path), result=result))
+            succeeded_scopes.add(options["scope"])
+            scope_hot_budgets[options["scope"]] = max(
+                int(options["hot_budget"]),
+                scope_hot_budgets.get(options["scope"], 0),
+            )
         except Exception as exc:  # Keep the original envelope for inspection and retry decisions.
             failed_path = _archive_spool_record(
                 paths["failed"],
@@ -199,12 +215,28 @@ def drain_spool(
             items.append(DrainItem(spool_id=spool_id, state="failed", path=str(failed_path), error=str(exc)))
             if stop_on_error:
                 break
+    if stabilization_scope:
+        succeeded_scopes.add(stabilization_scope)
+        scope_hot_budgets.setdefault(stabilization_scope, 1200)
+    stabilization = (
+        _stabilize_after_drain(
+            memory,
+            scopes=sorted(succeeded_scopes),
+            hot_budgets=scope_hot_budgets,
+            episode_min_group_size=stabilization_episode_min_group_size,
+            candidate_min_group_size=stabilization_candidate_min_group_size,
+            limit=stabilization_limit,
+        )
+        if stabilize and succeeded_scopes
+        else None
+    )
     return DrainReport(
         processed=len(items),
         succeeded=sum(1 for item in items if item.state == "done"),
         failed=sum(1 for item in items if item.state == "failed"),
         recovered=recovered,
         items=items,
+        stabilization=stabilization,
     )
 
 
@@ -212,6 +244,66 @@ def spool_stats(memory: Any) -> dict[str, int]:
     memory.init()
     paths = _spool_paths(memory.store.root)
     return {name: len(list(path.glob("*.json"))) for name, path in paths.items()}
+
+
+def _stabilize_after_drain(
+    memory: Any,
+    *,
+    scopes: list[str],
+    hot_budgets: dict[str, int],
+    episode_min_group_size: int,
+    candidate_min_group_size: int,
+    limit: int,
+) -> dict[str, Any]:
+    scope_reports = []
+    total_summaries = 0
+    total_superseded = 0
+    for scope in scopes:
+        scope_summaries = 0
+        scope_superseded = 0
+        episode_patterns = []
+        for pattern in ("command", "file_artifact", "git_status"):
+            min_group_size = min(episode_min_group_size, 3) if pattern == "git_status" else episode_min_group_size
+            report = memory.episode_summary(
+                scope=scope,
+                pattern=pattern,
+                min_group_size=min_group_size,
+                limit=limit,
+                dry_run=False,
+            ).as_dict()
+            episode_patterns.append(report)
+            scope_summaries += int(report["summaries_created"])
+            scope_superseded += int(report["superseded"])
+        candidate_report = memory.candidate_summary(
+            scope=scope,
+            pattern="all",
+            min_group_size=candidate_min_group_size,
+            limit=limit,
+            dry_run=False,
+        ).as_dict()
+        scope_summaries += int(candidate_report["summaries_created"])
+        scope_superseded += int(candidate_report["superseded"])
+        total_summaries += scope_summaries
+        total_superseded += scope_superseded
+        hot_state = None
+        hot_budget = hot_budgets.get(scope, 0)
+        if hot_budget > 0 and (scope_summaries or scope_superseded):
+            state = memory.build_hot(scope=scope, budget=hot_budget)
+            hot_state = {"path": str(state.path), "estimated_tokens": state.estimated_tokens}
+        scope_reports.append(
+            {
+                "scope": scope,
+                "episode_summary": {"patterns": episode_patterns},
+                "candidate_summary": candidate_report,
+                "hot": hot_state,
+            }
+        )
+    return {
+        "passed": True,
+        "scopes": scope_reports,
+        "summaries_created": total_summaries,
+        "superseded": total_superseded,
+    }
 
 
 def _spool_paths(root: Path) -> dict[str, Path]:

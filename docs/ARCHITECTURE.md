@@ -25,6 +25,7 @@ spool_turn(envelope)
   -> later drain_spool()
   -> recover stale .ara-memory/spool/processing records
   -> remember_turn(envelope)
+  -> optional post-drain stabilization summaries
   -> done/failed archive with original envelope preserved
 
 consolidate()
@@ -64,6 +65,7 @@ recall_regression(manifest, baseline)
 worker(scope)
   -> acquire .ara-memory/locks/worker.lock
   -> drain_spool()
+  -> episode_summary() + candidate_summary()
   -> quality(persist=True)
   -> review_worker(dry_run=True by default)
   -> review_triage()
@@ -113,6 +115,13 @@ artifact, later file edit/delete, or later worker failure does not erase or
 rewrite the user's prompt, files, or worktree evidence. If a worker dies after
 moving a file into `processing`, the next drain/worker recovers stale processing
 records back to `pending` before continuing.
+
+When the foreground session needs to recall immediately after draining, use
+`drain-spool --stabilize`. It performs the same conservative episode/candidate
+summary folds that the worker uses for repeated command, file, git-status, and
+memory-policy decision noise, then refreshes hot memory for the drained scopes.
+This keeps raw turn preservation crash-safe while preventing fresh operational
+evidence from destabilizing the next recall pack.
 
 `worker` is the separate memory processor. Codex can keep acting as the live
 reasoning agent while the worker drains queued turns and runs quality, review,
@@ -174,10 +183,11 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 10. Keep the background worker conservative: score and verify by default, mutate only with explicit review.
 11. Serialize background workers with a lock; concurrency belongs at the queue boundary, not inside maintenance.
 12. Recover stale processing records before draining pending work.
-13. Keep full cold evidence in SQLite/ledger/archive, but keep FTS recall indexes limited to candidate and stable capsules.
-14. Triage review queues by groups before asking a human or model to inspect individual items.
-15. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
-16. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
+13. Stabilize drained turns before immediate recall when the background worker has not run yet.
+14. Keep full cold evidence in SQLite/ledger/archive, but keep FTS recall indexes limited to candidate and stable capsules.
+15. Triage review queues by groups before asking a human or model to inspect individual items.
+16. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
+17. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 
 ## Future Extension Points
 

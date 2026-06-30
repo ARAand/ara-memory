@@ -127,7 +127,7 @@ Crash-safe variant:
 }
 '@ | python -m ara_memory spool-turn --scope project --capture-cwd . --sleep
 python -m ara_memory spool-stats
-python -m ara_memory drain-spool --limit 25
+python -m ara_memory drain-spool --limit 25 --stabilize
 ```
 
 Successful spooled turns move to `.ara-memory/spool/done/`. Failed turns move to
@@ -138,6 +138,10 @@ only part of a turn.
 If a worker crashes after moving a file to `.ara-memory/spool/processing/`, the
 next `drain-spool` or `worker` recovers stale processing files back into pending
 before processing them. Tune that threshold with `--processing-stale-seconds`.
+Use `drain-spool --stabilize` when the next recall may happen before the
+background worker runs. It folds repeated command/file/git episode candidates
+and memory-policy decision candidates into stable summaries, supersedes the raw
+candidate noise, and refreshes hot memory for the drained scopes.
 
 Recall stays cheap because future turns should read only hot memory plus a
 budgeted cold pack:

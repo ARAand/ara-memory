@@ -91,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     drain_spool.add_argument("--limit", type=int, default=25)
     drain_spool.add_argument("--stop-on-error", action="store_true")
     drain_spool.add_argument("--processing-stale-seconds", type=int, default=3600)
+    drain_spool.add_argument("--stabilize", action="store_true", help="After draining, fold repeated episode/candidate noise and rebuild hot memory.")
+    drain_spool.add_argument("--stabilization-scope", default=None, help="Scope to stabilize even when no item was drained.")
+    drain_spool.add_argument("--stabilization-episode-min-group-size", type=int, default=5)
+    drain_spool.add_argument("--stabilization-candidate-min-group-size", type=int, default=3)
+    drain_spool.add_argument("--stabilization-limit", type=int, default=80)
 
     sub.add_parser("spool-stats")
 
@@ -661,6 +666,11 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             stop_on_error=args.stop_on_error,
             processing_stale_seconds=args.processing_stale_seconds,
+            stabilize=args.stabilize,
+            stabilization_scope=args.stabilization_scope,
+            stabilization_episode_min_group_size=args.stabilization_episode_min_group_size,
+            stabilization_candidate_min_group_size=args.stabilization_candidate_min_group_size,
+            stabilization_limit=args.stabilization_limit,
         )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result.passed else 1
