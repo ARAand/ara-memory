@@ -208,6 +208,25 @@ def main(argv: list[str] | None = None) -> int:
     memory_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
     memory_impact.add_argument("--json", action="store_true")
 
+    govern_turn = sub.add_parser(
+        "govern-turn",
+        help="Plan capture and recall actions for a turn without storing anything.",
+    )
+    govern_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
+    govern_turn.add_argument("--scope", default="global")
+    govern_turn.add_argument("--capture-cwd", type=Path, default=None)
+    govern_turn.add_argument("--budgets", default="800,1600,2500")
+    govern_turn.add_argument("--working-budget", type=int, default=900)
+    govern_turn.add_argument("--no-global", action="store_true")
+    govern_turn.add_argument("--no-hot", action="store_true")
+    govern_turn.add_argument("--direct-text-threshold", type=int, default=16000)
+    govern_turn.add_argument("--max-file-chars", type=int, default=8000)
+    govern_turn.add_argument("--max-text-chars", type=int, default=12000)
+    govern_turn.add_argument("--output-tokens", type=int, default=0)
+    govern_turn.add_argument("--input-usd-per-million", type=float, default=0.0)
+    govern_turn.add_argument("--output-usd-per-million", type=float, default=0.0)
+    govern_turn.add_argument("--json", action="store_true")
+
     purpose_check = sub.add_parser("purpose-check")
     purpose_check.add_argument("--scope", default="global")
     purpose_check.add_argument("--query", default="purpose of Ara natural memory and long-running goal")
@@ -862,6 +881,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(payload, ensure_ascii=False))
         return 0
+
+    if args.cmd == "govern-turn":
+        payload = _read_json_arg(args.file)
+        result = memory.govern_turn(
+            payload,
+            scope=args.scope,
+            capture_cwd=args.capture_cwd,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            direct_text_threshold=args.direct_text_threshold,
+            max_file_chars=args.max_file_chars,
+            max_text_chars=args.max_text_chars,
+            output_tokens=args.output_tokens,
+            input_usd_per_million=args.input_usd_per_million,
+            output_usd_per_million=args.output_usd_per_million,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "purpose-check":
         result = memory.purpose_check(

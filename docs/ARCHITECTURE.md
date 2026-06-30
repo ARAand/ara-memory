@@ -25,9 +25,18 @@ remember_turn(envelope)
   -> bounded synthetic turn episode with evidence ids
   -> consolidation + optional sleep + hot refresh
 
+govern_turn(envelope)
+  -> model-free capture plan
+  -> recall_candidates probe over small budgets
+  -> working_memory projection only when visible evidence exists
+  -> action recommendation: capture, working-memory, recall-context, or current evidence
+  -> no event retention and no AI API call
+
 spool_turn(envelope)
   -> atomic JSON write under .ara-memory/spool/pending
+  -> local HMAC seal over the pending envelope
   -> later drain_spool()
+  -> verify seal and strict option bounds before retention
   -> recover stale .ara-memory/spool/processing records
   -> remember_turn(envelope)
   -> optional post-drain stabilization summaries
@@ -143,9 +152,11 @@ compression later.
 `spool-turn` is the unattended boundary. It writes the same envelope to an
 atomic local file queue before touching the memory database, copies existing
 file/image artifacts into `spool/snapshots`, and stores a bounded worktree
-snapshot inside the envelope. `drain-spool` processes pending envelopes through
-`remember-turn`; successful records move to `done`, and failed records move to
-`failed` with the original envelope and error details intact. This is the
+snapshot inside the envelope. It also seals the pending JSON with a local HMAC
+key stored under the memory root. `drain-spool` verifies the seal, strict option
+types, integer bounds, and enqueue-time artifact snapshots before processing the
+envelope through `remember-turn`; successful records move to `done`, and failed
+records move to `failed` with the original envelope and error details intact. This is the
 preferred bridge for always-on capture because a Codex crash, DB lock, missing
 artifact, later file edit/delete, or later worker failure does not erase or
 rewrite the user's prompt, files, or worktree evidence. If a worker dies after

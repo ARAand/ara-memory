@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from ara_memory.compressors import extract_keywords
+from ara_memory.compressors import extract_keywords, is_search_term
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 
@@ -1058,7 +1058,7 @@ def _fts_query(query: str) -> str:
     tokens = []
     for token in query.replace('"', " ").replace("'", " ").split():
         cleaned = "".join(ch for ch in token if ch.isalnum() or ch == "_")
-        if len(cleaned) >= 2:
+        if is_search_term(cleaned):
             tokens.append(f'"{cleaned}"')
     return " OR ".join(tokens[:12])
 

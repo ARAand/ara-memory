@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords
+from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, is_search_term
 from ara_memory.models import MemoryStatus
 from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
@@ -774,7 +774,7 @@ def _impact_boosts(rows: list[dict[str, Any]], terms: list[str]) -> tuple[dict[s
         elif helped == 0:
             base = -1.0
         else:
-            base = 0.18
+            continue
         recency_decay = max(0.45, 1.0 - min(index, 20) * 0.025)
         delta = base * (0.35 + 0.65 * similarity) * recency_decay
         boosts[capsule_id] = max(-1.25, min(1.5, boosts.get(capsule_id, 0.0) + delta))
@@ -816,7 +816,7 @@ def _bm25_bonus(cap: dict) -> float:
 
 def _text_hit_count(text: str, terms: list[str]) -> int:
     lowered = text.lower()
-    stems = {_stem(term) for term in terms if len(term) >= 3}
+    stems = {_stem(term) for term in terms if is_search_term(term)}
     return sum(1 for stem in stems if stem and stem in lowered)
 
 

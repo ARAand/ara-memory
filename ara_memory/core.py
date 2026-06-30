@@ -310,6 +310,11 @@ class AraMemory:
 
         return record_memory_impact(self, **kwargs)
 
+    def govern_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
+        from ara_memory.governor import govern_turn
+
+        return govern_turn(self, turn, **kwargs)
+
     def purpose_check(self, **kwargs: Any) -> Any:
         from ara_memory.purpose import run_purpose_check
 

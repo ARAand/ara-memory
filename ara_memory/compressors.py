@@ -167,6 +167,19 @@ def extract_keywords(text: str, *, limit: int = 12) -> list[str]:
     return [word for word, _ in counts.most_common(limit)]
 
 
+def is_search_term(term: str) -> bool:
+    if len(term) >= 3:
+        return True
+    if len(term) < 2:
+        return False
+    return any(
+        "\u3040" <= ch <= "\u30ff"
+        or "\u3400" <= ch <= "\u9fff"
+        or "\uac00" <= ch <= "\ud7a3"
+        for ch in term
+    )
+
+
 def estimate_tokens(text: str) -> int:
     # Conservative mixed Korean/English estimate.
     return max(1, int(len(text) / 2.7))

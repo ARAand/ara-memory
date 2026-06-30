@@ -6,6 +6,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from hashlib import sha256
+import hmac
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +135,7 @@ def enqueue_turn(
             "max_text_chars": max_text_chars,
         },
     }
+    payload["seal"] = _seal_payload(payload, root=memory.store.root)
     final_path = paths["pending"] / f"{_safe_name(spool_id)}.json"
     temp_path = paths["pending"] / f".{_safe_name(spool_id)}.{new_id('tmp')}.tmp"
     temp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
@@ -182,11 +184,12 @@ def drain_spool(
             payload = json.loads(processing_path.read_text(encoding="utf-8"))
             if payload.get("format") != "ara-memory-spooled-turn-v1":
                 raise ValueError("Unsupported spool record format.")
+            validate_spool_envelope(payload, root=memory.store.root)
             options = _options(payload.get("options"))
             turn_payload = _turn(payload.get("turn"))
             capture_cwd = (
                 None
-                if turn_payload.get("worktree_snapshot")
+                if "worktree_snapshot" in turn_payload
                 else Path(options["capture_cwd"])
                 if options["capture_cwd"]
                 else None
@@ -251,6 +254,144 @@ def spool_stats(memory: Any) -> dict[str, int]:
     memory.init()
     paths = _spool_paths(memory.store.root)
     return {name: len(list(path.glob("*.json"))) for name, path in paths.items()}
+
+
+def validate_spool_envelope(payload: dict[str, Any], *, root: Path) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("Spooled turn must be a JSON object.")
+    if payload.get("format") != "ara-memory-spooled-turn-v1":
+        raise ValueError("Unsupported spool record format.")
+    _verify_spool_seal(payload, root=root)
+    options = payload.get("options")
+    if not isinstance(options, dict):
+        raise ValueError("Spooled turn must include options.")
+    for key in ("consolidate", "sleep", "include_untracked_content"):
+        if not isinstance(options.get(key), bool):
+            raise ValueError(f"Spooled option {key} must be a JSON boolean.")
+    _bounded_int(options.get("hot_budget"), "hot_budget", minimum=0, maximum=5000)
+    _bounded_int(options.get("max_file_chars"), "max_file_chars", minimum=0, maximum=100000)
+    _bounded_int(options.get("max_text_chars"), "max_text_chars", minimum=100, maximum=200000)
+    if not isinstance(options.get("scope", ""), str) or len(str(options.get("scope", ""))) > 160:
+        raise ValueError("Spooled scope must be a short string.")
+    if not isinstance(options.get("source", ""), str) or len(str(options.get("source", ""))) > 160:
+        raise ValueError("Spooled source must be a short string.")
+    turn_payload = payload.get("turn")
+    if not isinstance(turn_payload, dict):
+        raise ValueError("Spooled turn must contain a JSON object in 'turn'.")
+    total_text = _turn_text_size(turn_payload)
+    max_text = int(options.get("max_text_chars", 12000))
+    if total_text > max(200000, max_text * 20):
+        raise ValueError("Spooled turn text exceeds deterministic capture bounds.")
+    capture_cwd = options.get("capture_cwd")
+    if capture_cwd and "worktree_snapshot" not in turn_payload:
+        raise ValueError("Spooled capture_cwd must be represented by an enqueue-time worktree snapshot.")
+    _validate_artifact_snapshot_metadata(turn_payload, root=root)
+
+
+def _seal_payload(payload: dict[str, Any], *, root: Path) -> dict[str, str]:
+    key = _spool_key(root, create=True)
+    digest = hmac.new(key, _canonical_spool_payload(payload), sha256).hexdigest()
+    return {"algorithm": "hmac-sha256", "value": digest}
+
+
+def _verify_spool_seal(payload: dict[str, Any], *, root: Path) -> None:
+    seal = payload.get("seal")
+    if not isinstance(seal, dict):
+        raise ValueError("Spooled turn is missing a local seal.")
+    if seal.get("algorithm") != "hmac-sha256":
+        raise ValueError("Unsupported spool seal algorithm.")
+    actual = seal.get("value")
+    if not isinstance(actual, str) or not actual:
+        raise ValueError("Spooled turn seal is empty.")
+    key = _spool_key(root, create=False)
+    expected = hmac.new(key, _canonical_spool_payload(payload), sha256).hexdigest()
+    if not hmac.compare_digest(actual, expected):
+        raise ValueError("Spooled turn seal verification failed.")
+
+
+def _spool_key(root: Path, *, create: bool) -> bytes:
+    path = root / "spool" / ".seal-key"
+    if not path.exists():
+        if not create:
+            raise ValueError("Local spool seal key is missing.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(os.urandom(32).hex(), encoding="ascii")
+    raw = path.read_text(encoding="ascii").strip()
+    try:
+        key = bytes.fromhex(raw)
+    except ValueError as exc:
+        raise ValueError("Local spool seal key is invalid.") from exc
+    if len(key) < 32:
+        raise ValueError("Local spool seal key is too short.")
+    return key
+
+
+def _canonical_spool_payload(payload: dict[str, Any]) -> bytes:
+    sealed = dict(payload)
+    for key in ("seal", "drained_at", "result", "error"):
+        sealed.pop(key, None)
+    return json.dumps(sealed, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _bounded_int(value: Any, name: str, *, minimum: int, maximum: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"Spooled option {name} must be an integer.")
+    if value < minimum or value > maximum:
+        raise ValueError(f"Spooled option {name} is outside allowed bounds.")
+    return value
+
+
+def _turn_text_size(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, dict):
+        return sum(_turn_text_size(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_turn_text_size(item) for item in value)
+    return len(str(value))
+
+
+def _validate_artifact_snapshot_metadata(turn_payload: dict[str, Any], *, root: Path) -> None:
+    snapshot_root = (root / "spool" / "snapshots").resolve()
+    for key in ("files", "images"):
+        for item in _as_list(turn_payload.get(key)):
+            path, _, metadata = _artifact_item(item)
+            resolved = _resolve_snapshot_path(path, root=root)
+            try:
+                resolved.relative_to(snapshot_root)
+            except ValueError as exc:
+                raise ValueError("Spooled artifacts must use enqueue-time snapshots.") from exc
+            if not resolved.is_file():
+                raise ValueError("Spooled artifact snapshot is missing.")
+            expected = metadata.get("spool_snapshot_sha256")
+            if not isinstance(expected, str) or not expected:
+                raise ValueError("Spooled artifact snapshot is missing sha256 metadata.")
+            if _sha256_file(resolved) != expected:
+                raise ValueError("Spooled artifact snapshot sha256 mismatch.")
+            if isinstance(item, dict):
+                item["path"] = str(resolved)
+                item_metadata = dict(item.get("metadata")) if isinstance(item.get("metadata"), dict) else {}
+                item_metadata["spool_snapshot_path"] = str(resolved)
+                item["metadata"] = item_metadata
+
+
+def _resolve_snapshot_path(path: Path, *, root: Path) -> Path:
+    resolved = path.resolve()
+    snapshot_root = (root / "spool" / "snapshots").resolve()
+    try:
+        resolved.relative_to(snapshot_root)
+        return resolved
+    except ValueError:
+        pass
+    parts = resolved.parts
+    for index in range(len(parts) - 1):
+        if parts[index].lower() == "spool" and parts[index + 1].lower() == "snapshots":
+            candidate = (root / Path(*parts[index:])).resolve()
+            if candidate.exists():
+                return candidate
+    return resolved
 
 
 def _stabilize_after_drain(

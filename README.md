@@ -54,6 +54,7 @@ python -m ara_memory hot --scope global --budget 1200
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000 --hot --diagnostics
 python -m ara_memory recall-plan "What should Ara remember about Jongseo?" --budgets 800,1600,2500 --json
+python -m ara_memory govern-turn --scope project --file ./turn.json --json
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory doctor --scope global
 python -m ara_memory audit
@@ -80,6 +81,12 @@ spending AI API tokens. This keeps the always-on ingress honest: raw prompts and
 files can be preserved locally, while future Codex calls receive only hot memory
 plus a budgeted recall pack.
 
+Use `govern-turn` when the acting session needs a deterministic front door. It
+does not store the turn. It inspects the same envelope, chooses the capture
+mode, probes recall candidates, projects a working-memory pack only when
+visible evidence exists, reports avoided raw-token cost, and recommends whether
+to use working memory, broader recall context, or current evidence only.
+
 ```powershell
 @'
 {
@@ -89,6 +96,7 @@ plus a budgeted recall pack.
   "decisions": ["Decision: separate raw local retention from model recall."]
 }
 '@ | python -m ara_memory plan-turn --capture-cwd .
+python -m ara_memory govern-turn --file ./turn.json --scope project --capture-cwd . --json
 ```
 
 For the always-on path, use `ingress-turn`. It runs the same plan and then
@@ -111,7 +119,9 @@ spool is a durable local file queue under `.ara-memory/spool/`: a capture can
 survive Codex restarts, DB locks, missing files, or a later worker crash without
 losing the original turn envelope. Existing file/image artifacts and worktree
 evidence are snapshotted at enqueue time, so later edits or deletes do not
-change what the spooled turn remembers.
+change what the spooled turn remembers. Each queued envelope also carries a
+local HMAC seal; `drain-spool` rejects unsealed or edited pending JSON before
+retaining any events.
 
 ```powershell
 @'
@@ -143,9 +153,9 @@ python -m ara_memory drain-spool --limit 25 --stabilize
 
 Successful spooled turns move to `.ara-memory/spool/done/`. Failed turns move to
 `.ara-memory/spool/failed/` with the original envelope and error details intact
-for inspection or manual replay. Malformed queue files keep a raw copy next to
-the failed record, and artifact preflight prevents a failed drain from retaining
-only part of a turn.
+for inspection. Malformed queue files keep a raw copy next to the failed record,
+and sealed-envelope plus artifact-snapshot preflight prevents a failed drain from
+retaining only part of a turn or later reading an unsnapshotted live path.
 If a worker crashes after moving a file to `.ara-memory/spool/processing/`, the
 next `drain-spool` or `worker` recovers stale processing files back into pending
 before processing them. Tune that threshold with `--processing-stale-seconds`.
@@ -199,8 +209,8 @@ Should Change My Next Action. Use `working-memory-impact` after a turn to record
 which capsule ids actually changed the outcome; those notes let later
 recall ranking learn which memories were useful instead of only which ones were
 stored. Matching positive impact gives a small capped boost; matching negative
-impact gives a small capped penalty, so feedback guides recall without turning
-it into an unchecked reward signal.
+impact gives a small capped penalty, and unknown impact is diagnostic-only, so
+feedback guides recall without turning it into an unchecked reward signal.
 
 ## Codex Skill
 

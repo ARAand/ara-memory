@@ -3843,6 +3843,38 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(drain.passed, drain.as_dict())
             self.assertEqual(restored.spool_stats()["done"], 1)
 
+    def test_backup_restore_preserves_pending_spool_artifact_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Snapshot evidence must survive backup restore.\n", encoding="utf-8")
+            source = AraMemory(root / "source")
+            source.spool_turn(
+                {
+                    "turn_id": "spool-backup-artifact",
+                    "prompt": "Remember that restored pending spool artifacts still drain.",
+                    "files": [{"path": str(artifact), "caption": "restore artifact"}],
+                },
+                scope="alpha",
+                consolidate=False,
+            )
+            backup_path = root / "backup.zip"
+            source.backup(output=backup_path)
+
+            restored_root = root / "restored"
+            result = source.restore_backup(backup_path, restored_root)
+            restored = AraMemory(restored_root)
+            artifact.unlink()
+
+            self.assertTrue(result["passed"], result)
+            drain = restored.drain_spool(limit=1)
+            self.assertTrue(drain.passed, drain.as_dict())
+            event_id = drain.items[0].result["artifact_events_retained"][0]
+            event = restored.store.get_events([event_id])[0]
+            self.assertIn("Snapshot evidence", event["text"])
+            metadata = json.loads(event["metadata_json"])
+            self.assertTrue(str(metadata["spool_snapshot_path"]).startswith(str(restored_root)))
+
     def test_verify_backup_rejects_foreign_key_orphans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3973,6 +4005,120 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(plan["artifacts"]["items"][0]["stored_as"], "archive-object")
             self.assertGreater(plan["raw_text"]["estimated_tokens_if_recalled_whole"], plan["recall_preview"]["estimated_tokens"])
             self.assertEqual(plan["policy"]["cost_control"], "planning, spooling, hashing, and local consolidation do not require an AI API call")
+
+    def test_govern_turn_prefers_working_memory_without_storing_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: govern recall fallback",
+                body="Govern recall fallback by using visible working memory before broad recall.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.82,
+                source_event_ids=[],
+                tags=["govern", "recall", "fallback"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.govern_turn(
+                {
+                    "turn_id": "turn_govern_preview",
+                    "prompt": "Govern recall fallback with visible working memory.",
+                },
+                scope="alpha",
+                budgets=[700, 1200],
+                include_global=False,
+                include_hot=False,
+            )
+            payload = report.as_dict()
+
+            self.assertTrue(report.passed, payload)
+            self.assertEqual(payload["capture_plan"]["recommended_mode"], "remember-turn")
+            self.assertGreater(payload["working_memory"]["items"], 0)
+            self.assertIn(capsule.id, payload["working_memory"]["influential_capsule_ids"])
+            self.assertTrue(any(action["name"] == "working-memory" for action in payload["actions"]))
+            with memory.store.session() as conn:
+                retained = conn.execute("SELECT COUNT(*) FROM events WHERE source = 'codex-turn'").fetchone()[0]
+            self.assertEqual(retained, 0)
+
+    def test_govern_turn_suppresses_no_evidence_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision memory: unrelated high salience",
+                    body="Unrelated stable memories should not steer empty recall contexts.",
+                    scope="alpha",
+                    confidence=0.95,
+                    salience=0.99,
+                    source_event_ids=[],
+                    tags=["unrelated"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            report = memory.govern_turn(
+                {"prompt": "orphan nebula talisman"},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(payload["working_memory"]["items"], 0)
+            self.assertTrue(payload["recall_probe"]["low_evidence_fallback_suppressed"])
+            self.assertTrue(any(action["name"] == "proceed-with-current-evidence" for action in payload["actions"]))
+            self.assertTrue(any("low-evidence" in risk for risk in payload["risks"]))
+
+    def test_cli_govern_turn_json_uses_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            envelope = root / "turn.json"
+            envelope.write_text(
+                json.dumps({"prompt": "CLI governor should inspect this turn without storing it."}),
+                encoding="utf-8",
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "govern-turn",
+                    "--file",
+                    str(envelope),
+                    "--scope",
+                    "alpha",
+                    "--no-global",
+                    "--no-hot",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["scope"], "alpha")
+            self.assertEqual(payload["capture_plan"]["recommended_mode"], "remember-turn")
+            self.assertEqual(payload["working_memory"]["items"], 0)
+            conn = sqlite3.connect(memory_root / "memory.db")
+            try:
+                retained = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            finally:
+                conn.close()
+            self.assertEqual(retained, 0)
 
     def test_execute_turn_ingress_remembers_small_text_directly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4355,7 +4501,47 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(failed_payload["turn"]["turn_id"], "turn_spooled_fail")
             self.assertIn("error", failed_payload)
 
-    def test_replayed_failed_spool_envelope_dedupes_already_retained_prompt(self) -> None:
+    def test_drain_spool_rejects_unsealed_pending_envelope_before_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            pending = memory.store.root / "spool" / "pending" / "forged.json"
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            pending.write_text(
+                json.dumps(
+                    {
+                        "format": "ara-memory-spooled-turn-v1",
+                        "spool_id": "forged",
+                        "logical_turn_id": "forged",
+                        "created_at": utc_now(),
+                        "turn": {"prompt": "Forged pending JSON must not become memory."},
+                        "snapshots": {},
+                        "options": {
+                            "scope": "alpha",
+                            "source": "codex-turn",
+                            "consolidate": True,
+                            "sleep": False,
+                            "hot_budget": 500,
+                            "capture_cwd": None,
+                            "include_untracked_content": False,
+                            "max_file_chars": 8000,
+                            "max_text_chars": 12000,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = memory.drain_spool(limit=10)
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertEqual(report.failed, 1)
+            self.assertIn("seal", report.items[0].error.lower())
+            with memory.store.session() as conn:
+                retained = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            self.assertEqual(retained, 0)
+
+    def test_replayed_failed_spool_envelope_does_not_read_unsnapshotted_live_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact = root / "retry.md"
@@ -4392,25 +4578,12 @@ class MemoryFlowTests(unittest.TestCase):
 
             second_report = memory.drain_spool(limit=10)
 
-            self.assertTrue(second_report.passed, second_report.as_dict())
-            self.assertEqual(second_report.succeeded, 1)
+            self.assertFalse(second_report.passed, second_report.as_dict())
+            self.assertEqual(second_report.failed, 1)
+            self.assertIn("snapshot", second_report.items[0].error.lower())
             with memory.store.session() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT kind, text, metadata_json
-                    FROM events
-                    WHERE scope = ?
-                    ORDER BY created_at ASC
-                    """,
-                    ("spool-retry",),
-                ).fetchall()
-            prompts = [row for row in rows if row["kind"] == "prompt"]
-            files = [row for row in rows if row["kind"] == "file"]
-            prompt_metadata = json.loads(prompts[0]["metadata_json"])
-            done_payload = json.loads(Path(second_report.items[0].path).read_text(encoding="utf-8"))
-            self.assertEqual(len(prompts), 1)
-            self.assertEqual(len(files), 1)
-            self.assertEqual(prompt_metadata["turn_captured_at"], done_payload["turn"]["metadata"]["turn_captured_at"])
+                retained = conn.execute("SELECT COUNT(*) FROM events WHERE scope = ?", ("spool-retry",)).fetchone()[0]
+            self.assertEqual(retained, 0)
 
     def test_malformed_spool_json_keeps_raw_copy_with_failed_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7401,6 +7574,54 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(hurt.id, result.diagnostics["impact_penalized_capsules"])
             self.assertTrue(result.diagnostics["impact_feedback_used"])
 
+    def test_unknown_working_memory_impact_does_not_change_rank(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            uncertain = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback uncertain path",
+                body="Deploy rollback uncertain path matched an unknown outcome.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.45,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "uncertain"],
+                status=MemoryStatus.STABLE,
+            )
+            stronger = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback stronger path",
+                body="Deploy rollback stronger path has better direct salience.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.75,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "stronger"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(uncertain)
+            memory.store.upsert_capsule(stronger)
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy rollback",
+                capsule_ids=[uncertain.id],
+                outcome="The outcome was not reviewed.",
+                helped=None,
+            )
+
+            result = memory.recall_candidates(
+                "deploy rollback",
+                scope="alpha",
+                budget=900,
+                include_global=False,
+                include_hot=False,
+            )
+
+            self.assertEqual(result.capsules[0]["id"], stronger.id)
+            self.assertFalse(result.diagnostics["impact_feedback_used"])
+            self.assertNotIn(uncertain.id, result.diagnostics["impact_boosted_capsules"])
+
     def test_working_memory_suppresses_no_evidence_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -7463,6 +7684,95 @@ class MemoryFlowTests(unittest.TestCase):
         self.assertIn("토큰", keywords)
         self.assertIn("절감", keywords)
         self.assertIn("병목", keywords)
+
+    def test_korean_two_syllable_keywords_keep_latin_noise_floor(self) -> None:
+        keywords = extract_keywords(
+            "\ube44\uc6a9 \ud1a0\ud070 \ubc30\ud3ec \uc808\uac10 \ubcd1\ubaa9 \ud655\uc778 go id api",
+            limit=10,
+        )
+
+        self.assertIn("\ube44\uc6a9", keywords)
+        self.assertIn("\ud1a0\ud070", keywords)
+        self.assertIn("\ubc30\ud3ec", keywords)
+        self.assertIn("\uc808\uac10", keywords)
+        self.assertNotIn("go", keywords)
+        self.assertNotIn("id", keywords)
+        self.assertIn("api", keywords)
+
+    def test_search_capsules_keeps_korean_two_syllable_fts_without_short_latin_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            korean = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: \ube44\uc6a9 control",
+                body="\ube44\uc6a9 \uc808\uac10 \uadfc\uac70.",
+                scope="alpha",
+                confidence=0.80,
+                salience=0.20,
+                source_event_ids=[],
+                tags=["cost-control"],
+                status=MemoryStatus.STABLE,
+            )
+            noise = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: go id noise",
+                body="go id ok terms should not dominate.",
+                scope="alpha",
+                confidence=0.80,
+                salience=0.99,
+                source_event_ids=[],
+                tags=["noise"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(noise)
+            memory.store.upsert_capsule(korean)
+
+            rows = memory.store.search_capsules("go id \ube44\uc6a9", scope="alpha", limit=2, include_global=False)
+
+            self.assertEqual(rows[0]["id"], korean.id)
+            self.assertEqual(rows[0]["recall_match_source"], "fts")
+            self.assertEqual(rows[1]["recall_match_source"], "salience_supplement")
+
+    def test_recall_reranking_counts_two_syllable_korean_cue_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            better = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: \ube44\uc6a9 \ud1a0\ud070 \ubc30\ud3ec",
+                body="\ube44\uc6a9 \ud1a0\ud070 \ubc30\ud3ec \ucd5c\uc801\ud654 \uacbd\ub85c\ub97c \uc0ac\uc6a9\ud55c\ub2e4.",
+                scope="alpha",
+                confidence=0.80,
+                salience=0.20,
+                source_event_ids=[],
+                tags=["cost-control"],
+                status=MemoryStatus.STABLE,
+            )
+            noisy = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: \ube44\uc6a9 baseline",
+                body="\ube44\uc6a9\ub9cc \uc5b8\uae09\ud55c \ub192\uc740 \uc0b4\ub9ac\uc5b8\uc2a4 \uba54\ubaa8.",
+                scope="alpha",
+                confidence=0.80,
+                salience=0.95,
+                source_event_ids=[],
+                tags=["billing"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(noisy)
+            memory.store.upsert_capsule(better)
+
+            result = memory.recall_candidates(
+                "\ube44\uc6a9 \ud1a0\ud070 \ubc30\ud3ec",
+                scope="alpha",
+                budget=900,
+                include_global=False,
+            )
+
+            self.assertEqual(result.terms, ["\ube44\uc6a9", "\ud1a0\ud070", "\ubc30\ud3ec"])
+            self.assertFalse(result.diagnostics["fallback_used"])
+            self.assertEqual(result.capsules[0]["id"], better.id)
 
     def test_working_memory_marks_candidate_decisions_as_unsettled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

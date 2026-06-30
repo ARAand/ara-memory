@@ -36,9 +36,10 @@
 - External advisor commands are opt-in and fall back to deterministic review on invalid output.
 - Stale and malformed summaries are superseded instead of deleted, preserving provenance.
 - Hidden chain-of-thought is not stored; only observable decisions and summaries are retained.
-- `spool-turn` writes pending envelopes atomically before database ingestion and snapshots existing file/image artifacts plus bounded worktree evidence at enqueue time.
+- `spool-turn` writes pending envelopes atomically before database ingestion, seals each envelope with a local HMAC, and snapshots existing file/image artifacts plus bounded worktree evidence at enqueue time.
+- `drain-spool` verifies the local seal, strict option types, bounded sizes, and artifact snapshot hashes before retaining any events; unsealed or edited pending JSON is moved to failed.
 - `drain-spool` moves failures to `.ara-memory/spool/failed/` with the original envelope and error details intact; malformed queue files keep a raw sidecar there.
-- Artifact preflight runs before retaining turn text so a failed drain does not leave partial prompt-only memory.
+- Artifact preflight runs before retaining turn text so a failed drain does not leave partial prompt-only memory or later read an unsnapshotted live artifact path.
 - Recall regression blocks retrieval drift, token jumps, and forbidden-text reintroduction after memory system changes.
 - `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`.
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
@@ -60,6 +61,7 @@
 - Treat secret-like values as quarantine candidates, not useful memory. Direct identifiers and keyword-stuffed memories must not enter hot memory unless a future reviewed policy explicitly allows it.
 - Treat spooled envelopes as untrusted input until `sleep`, audit, risk, and recall-regression gates have run.
 - Treat `spool/snapshots` as part of live queued evidence; do not clean it independently from its pending/done/failed envelope.
+- Treat `.ara-memory/spool/.seal-key` as private local trust material; backups preserve it so pending sealed envelopes remain drainable after restore.
 - Keep project scopes isolated unless the user asks for cross-project recall.
 - Never use memory as a substitute for reading current files when coding.
 - Treat `ARA_MEMORY_ADVISOR_COMMAND` as trusted code, not as data.
@@ -84,6 +86,5 @@
 - Periodic stale-memory review.
 - Poisoning benchmark suite based on OWASP ASI06-style cases.
 - Signed or allow-listed advisor providers.
-- Per-envelope signatures for high-trust automation sources.
 - A pre-push privacy gate that rejects tracked memory roots, databases, archives, absolute user paths, and secret-like patterns.
 - Encrypted backups and cold exports, with raw source events opt-in for portable archives.
