@@ -75,6 +75,7 @@ def build_goal_roadmap(
         repair_hot=repair_hot,
     )
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
+    lifecycle = memory.lifecycle(scope=scope, limit=1000, examples_per_tier=0)
     worker_schedule = memory.verify_worker_schedule(
         output=memory.store.root / "scripts" / "install-worker-task.ps1",
         scope=scope,
@@ -137,6 +138,12 @@ def build_goal_roadmap(
             "Run cold-stewardship to inspect cold groups and keep retention-cycle evidence current before live pruning.",
         ),
         RoadmapItem(
+            "purpose-aware lifecycle policy",
+            "fail" if lifecycle.status == "fail" else "watch" if lifecycle.status == "watch" else "pass",
+            _lifecycle_evidence(lifecycle),
+            "Run lifecycle and promote/review/summarize memories until hot memory is core-only and query recall stays bounded.",
+        ),
+        RoadmapItem(
             "scheduled worker script readiness",
             "pass" if worker_schedule.passed else "watch",
             _worker_schedule_evidence(worker_schedule),
@@ -176,6 +183,17 @@ def _worker_schedule_evidence(worker_schedule: Any) -> str:
     if worker_schedule.issues:
         return "; ".join(worker_schedule.issues[:3])
     return f"script={worker_schedule.path}"
+
+
+def _lifecycle_evidence(lifecycle: Any) -> str:
+    totals = lifecycle.totals
+    policy = lifecycle.token_policy
+    return (
+        f"{lifecycle.status}, core={totals['core_capsules']}, working={totals['working_capsules']}, "
+        f"guarded={totals['guarded_capsules']}, archive={totals['archive_capsules']}, "
+        f"core_tokens={policy['core_tokens']}/{policy['target_hot_tokens']}, "
+        f"raw_to_core_reduction={policy['raw_to_core_reduction']:.1f}x"
+    )
 
 
 def _status(items: list[RoadmapItem]) -> str:

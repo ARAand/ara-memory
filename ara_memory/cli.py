@@ -508,6 +508,15 @@ def main(argv: list[str] | None = None) -> int:
     cold_stewardship.add_argument("--examples-per-group", type=int, default=2)
     cold_stewardship.add_argument("--max-cycle-age-hours", type=float, default=72.0)
     cold_stewardship.add_argument("--json", action="store_true")
+    lifecycle = sub.add_parser(
+        "lifecycle",
+        help="Classify memory into purpose-aware lifecycle tiers for hot, working, guarded, and cold recall policy.",
+    )
+    lifecycle.add_argument("--scope", default=None)
+    lifecycle.add_argument("--limit", type=int, default=1000)
+    lifecycle.add_argument("--examples-per-tier", type=int, default=3)
+    lifecycle.add_argument("--target-hot-tokens", type=int, default=1200)
+    lifecycle.add_argument("--json", action="store_true")
     retention_cycle = sub.add_parser("retention-cycle")
     retention_cycle.add_argument("--scope", default=None)
     retention_cycle.add_argument("--backup-output", type=Path, default=None)
@@ -1274,6 +1283,19 @@ def main(argv: list[str] | None = None) -> int:
             group_limit=args.group_limit,
             examples_per_group=args.examples_per_group,
             max_cycle_age_hours=args.max_cycle_age_hours,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "lifecycle":
+        result = memory.lifecycle(
+            scope=args.scope,
+            limit=args.limit,
+            examples_per_tier=args.examples_per_tier,
+            target_hot_tokens=args.target_hot_tokens,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

@@ -46,6 +46,7 @@
 - `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
 - `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation.
+- `lifecycle` is analysis-only: it separates core, working, guarded, evidence, archive, and reject memory without changing capsule status or deleting provenance.
 
 ## Operating Rules
 
@@ -68,6 +69,7 @@
 - Treat `worker-schedule-verify` as pre-install static evidence only; runtime evidence requires the generated status script plus recent worker log review.
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
 - Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
+- Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
 
 ## Recommended Future Defenses
 

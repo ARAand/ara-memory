@@ -13,6 +13,7 @@ from ara_memory.curator import MemoryCurator
 from ara_memory.doctor import DoctorReport, MemoryDoctor
 from ara_memory.hot import HotState, HotStateBuilder
 from ara_memory.maintenance import MaintenanceReport, run_maintenance
+from ara_memory.memory_lifecycle import MemoryLifecycleReport
 from ara_memory.models import Event, EventKind, MemoryStatus
 from ara_memory.prune import (
     LivePruneApproval,
@@ -363,6 +364,11 @@ class AraMemory:
         from ara_memory.cold_stewardship import ColdStewardshipAnalyzer
 
         return ColdStewardshipAnalyzer(self.store).run(**kwargs)
+
+    def lifecycle(self, **kwargs: Any) -> MemoryLifecycleReport:
+        from ara_memory.memory_lifecycle import MemoryLifecycleAnalyzer
+
+        return MemoryLifecycleAnalyzer(self.store).run(**kwargs)
 
     def retention_cycle(self, **kwargs: Any) -> RetentionCycleReport:
         return RetentionCycleRunner(self.store).run(**kwargs)

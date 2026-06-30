@@ -188,7 +188,8 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 15. Triage review queues by groups before asking a human or model to inspect individual items.
 16. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
 17. Rotate redundant verified backups with `backup-stewardship` against a target backup-byte budget before touching live memory or cold evidence; keep latest backups, retention-cycle evidence, failed-verification backups, and active live-prune approval backups.
-18. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
+18. Use purpose-aware lifecycle tiers before recall or pruning: long-running purpose, identity, and preference anchors may enter hot memory, working memories require query selection, guarded memories require review, and cold evidence requires export/prune gates.
+19. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 
 ## Future Extension Points
 

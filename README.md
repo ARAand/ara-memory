@@ -218,6 +218,7 @@ python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
+python -m ara_memory lifecycle --scope ara-memory
 python -m ara_memory cold-export --scope ara-memory --output .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory prune-plan --scope ara-memory --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --query "current memory architecture"
@@ -247,13 +248,20 @@ clean, then create a verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
-stewardship. It is deliberately local and deterministic, so it can be run before
-spending model context.
+stewardship, plus purpose-aware lifecycle policy. It is deliberately local and
+deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event
 preservation in shadow-prune. High cold pressure can pass stewardship only when
 that evidence is current; otherwise it remains a watch item.
+`lifecycle` classifies every selected capsule into `core`, `working`,
+`guarded`, `evidence`, `archive`, or `reject` tiers. This is the deterministic
+policy layer between purpose and storage: hot memory should come from reviewed
+long-running goal, identity, and preference anchors; stable decisions and
+procedures stay query-selected unless a future reviewed policy marks them as
+always-on; guarded memory requires review; and cold evidence stays out of active
+recall indexes until export/prune gates prove it is safe to clean up.
 `failure-kind-audit` finds old decisions, successful commands, worktree
 evidence, and progress updates that were misfiled as `failure` capsules. It is
 dry-run by default; use `--apply` only after reviewing the proposed
@@ -470,6 +478,9 @@ backups are preserved for manual inspection instead of being silently removed.
   evidence, high salience, or explicit user confirmation.
 - Goals are first-class capsules, separate from decisions and procedures, so
   recall can answer why the work exists before choosing how to act.
+- Lifecycle tiers separate long-running purpose, identity, and preference
+  anchors from working, guarded, evidence, archive, and reject memory so token
+  reduction is a policy choice rather than accidental truncation.
 - Retrieval is graph/symbol/BM25 first, with optional embeddings left as a later
   extension point.
 

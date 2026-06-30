@@ -1334,6 +1334,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "operational health",
                     "milestone readiness",
                     "cold-memory stewardship",
+                    "purpose-aware lifecycle policy",
                     "scheduled worker script readiness",
                 },
             )
@@ -2509,6 +2510,162 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["totals"]["cold_capsules"], 1)
             self.assertEqual(payload["groups"][0]["pattern"], "Project memory: Untracked file")
             self.assertIn("cycle_evidence", payload)
+
+    def test_lifecycle_maps_memory_into_purpose_aware_tiers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            shared_event = memory.retain(
+                kind="decision",
+                text="Decision: stable goal provenance should anchor hot memory.",
+                source="test",
+                scope="alpha",
+            )
+            working_event = memory.retain(
+                kind="note",
+                text="Working note: implementation detail should stay query-selected.",
+                source="test",
+                scope="alpha",
+            )
+            cold_only_event = memory.retain(
+                kind="note",
+                text="Old note: archive-only source can stay outside recall indexes.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural memory",
+                body="Build natural memory that recalls purpose without rereading raw history.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.92,
+                source_event_ids=[shared_event.id],
+                tags=["goal"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory: Ara judgment",
+                body="Ara should use judgment, refuse wrong frames, and preserve evidence.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.9,
+                source_event_ids=[shared_event.id],
+                tags=["identity"],
+                status=MemoryStatus.STABLE,
+            )
+            working = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: current implementation detail",
+                body="A working project note belongs in query-selected recall, not hot memory.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.65,
+                source_event_ids=[working_event.id],
+                tags=["project"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            evidence = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: old shared evidence",
+                body="Cold evidence still shares source provenance with active goal memory.",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[shared_event.id],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            archive = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: old isolated evidence",
+                body="Cold-only evidence can be exported before destructive cleanup.",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[cold_only_event.id],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            rejected = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="risky rejected procedure",
+                body="Rejected procedure should remain audit-only.",
+                scope="alpha",
+                confidence=0.2,
+                salience=0.2,
+                source_event_ids=[cold_only_event.id],
+                tags=["risk"],
+                status=MemoryStatus.QUARANTINED,
+            )
+            for capsule in (goal, self_memory, working, evidence, archive, rejected):
+                memory.store.upsert_capsule(capsule)
+
+            report = memory.lifecycle(scope="alpha", examples_per_tier=2, target_hot_tokens=1200)
+
+            self.assertEqual(report.status, "pass")
+            self.assertEqual(report.totals["core_capsules"], 2)
+            self.assertEqual(report.totals["working_capsules"], 1)
+            self.assertEqual(report.totals["evidence_capsules"], 1)
+            self.assertEqual(report.totals["archive_capsules"], 1)
+            self.assertEqual(report.totals["reject_capsules"], 1)
+            self.assertTrue(report.token_policy["hot_budget_ok"])
+            self.assertGreater(report.token_policy["raw_to_core_reduction"], 1.0)
+            tiers = {tier.name: tier for tier in report.tiers}
+            self.assertEqual(tiers["evidence"].examples[0].source_role, "active-linked")
+            self.assertEqual(tiers["archive"].examples[0].source_role, "cold-only")
+            text = report.to_text()
+            self.assertIn("Ara Memory Lifecycle", text)
+            self.assertIn("core-only", text)
+
+    def test_lifecycle_cli_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            event = memory.retain(
+                kind="decision",
+                text="Decision: lifecycle CLI needs a stable purpose anchor.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: lifecycle CLI",
+                    body="Lifecycle CLI should expose the long-running natural memory objective token policy as JSON.",
+                    scope="alpha",
+                    confidence=0.95,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "lifecycle",
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["scope"], "alpha")
+            self.assertEqual(payload["status"], "pass")
+            self.assertEqual(payload["totals"]["core_capsules"], 1)
+            self.assertIn("token_policy", payload)
 
     def test_prune_plan_requires_export_and_protects_active_source_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
