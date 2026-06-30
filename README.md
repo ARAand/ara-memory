@@ -236,8 +236,11 @@ python -m ara_memory live-prune --approval-token <token> --confirm "DELETE COLD 
 memory budget/format, and recall-pack budget/format.
 `health` is the one-page operations report. It combines doctor, spool state,
 review pressure, candidate/stable ratio, cold-memory pressure, latest verified
-backup age, and optional recall regression into a pass/watch/fail status with
-concrete next actions.
+backup age, retention-cycle freshness/current-match checks, and optional recall
+regression into a pass/watch/fail status with concrete next actions. When cold
+pressure is high, health treats a stale or drifted retention-cycle as watch
+evidence and points back to `cold-stewardship`/`retention-cycle` before any live
+cleanup.
 `purpose-check` is the goal-alignment report. It verifies that stable goal
 memory exists, hot memory exposes Active Goals, and a purpose query can actually
 retrieve goal context. Use `--repair-hot` before declaring major memory

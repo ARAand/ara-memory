@@ -417,6 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--hot-budget", type=int, default=1200)
     health.add_argument("--review-limit", type=int, default=500)
     health.add_argument("--backup-max-age-hours", type=float, default=72.0)
+    health.add_argument("--retention-cycle-max-age-hours", type=float, default=72.0)
     health.add_argument("--regression-manifest", type=Path, default=None)
     health.add_argument("--regression-baseline", type=Path, default=None)
     health.add_argument("--json", action="store_true")
@@ -1119,6 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
             hot_budget=args.hot_budget,
             review_limit=args.review_limit,
             backup_max_age_hours=args.backup_max_age_hours,
+            retention_cycle_max_age_hours=args.retention_cycle_max_age_hours,
             regression_cases=cases,
             regression_baseline=baseline,
         )

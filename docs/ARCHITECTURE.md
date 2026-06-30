@@ -64,6 +64,13 @@ recall_regression(manifest, baseline)
   -> token growth checks
   -> visible capsule overlap checks when available
 
+health(scope)
+  -> doctor + spool + review pressure
+  -> candidate/cold retention ratios
+  -> cold_stewardship when cold pressure is high
+  -> retention-cycle freshness and live cold-total drift checks
+  -> backup age + optional recall_regression
+
 worker(scope)
   -> acquire .ara-memory/locks/worker.lock
   -> drain_spool(scope)

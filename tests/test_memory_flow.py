@@ -3335,6 +3335,77 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(any("retention-cycle evidence exists" in item for item in report.recommendations))
             self.assertTrue(any("cold-stewardship" in item for item in report.recommendations))
 
+    def test_health_warns_when_retention_cycle_totals_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: health should detect drift in retention-cycle cold evidence.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="active drift health decision",
+                body="retention-cycle drift evidence remains queryable",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["retention-cycle", "health"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(stable)
+            for index in range(3):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.PROJECT,
+                        title=f"old drift retention project {index}",
+                        body="old cold memory covered by retention-cycle evidence",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["retention-cycle", "health"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+            memory.build_hot(scope="alpha", budget=500)
+            memory.retention_cycle(
+                scope="alpha",
+                backup_output=root / "cycle-backup.zip",
+                cold_output=root / "cycle-cold.zip",
+                report_output=root / "memory" / "archive" / "retention-cycles" / "alpha-cycle.json",
+                recall_queries=["retention-cycle drift evidence"],
+                recall_budget=900,
+                doctor_query="retention-cycle drift evidence",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="new drift cold capsule after cycle",
+                    body="cold memory added after retention-cycle evidence",
+                    scope="alpha",
+                    confidence=0.4,
+                    salience=0.3,
+                    source_event_ids=[event.id],
+                    tags=["retention-cycle", "health"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
+
+            report = memory.health(scope="alpha", query="retention-cycle drift evidence", recall_budget=900, hot_budget=500)
+            retention_signal = next(signal for signal in report.signals if signal.name == "retention_cycle")
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.status, "watch")
+            self.assertFalse(retention_signal.passed, report.as_dict())
+            self.assertEqual(retention_signal.severity, "warning")
+            self.assertIn("drifted", retention_signal.detail)
+            self.assertIn("cold_stewardship", report.stats)
+            self.assertFalse(report.stats["cold_stewardship"]["cycle_evidence"]["matches_current"])
+
     def test_live_prune_requires_approval_and_records_irreversible_operation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

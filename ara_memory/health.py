@@ -71,6 +71,7 @@ def run_health_check(
     hot_budget: int = 1200,
     review_limit: int = 500,
     backup_max_age_hours: float = 72.0,
+    retention_cycle_max_age_hours: float = 72.0,
     regression_cases: list[Any] | None = None,
     regression_baseline: dict[str, Any] | None = None,
 ) -> HealthReport:
@@ -81,6 +82,17 @@ def run_health_check(
     triage = memory.review_triage(scope=scope, limit=review_limit, examples_per_group=1)
     latest_backup = _latest_backup(memory.store.root)
     latest_retention_cycle = _latest_retention_cycle(memory.store.root, scope=scope)
+    cold_signal = _cold_ratio_signal(retention.as_dict())
+    cold_stewardship = (
+        memory.cold_stewardship(
+            scope=scope,
+            group_limit=3,
+            examples_per_group=0,
+            max_cycle_age_hours=retention_cycle_max_age_hours,
+        )
+        if not cold_signal.passed
+        else None
+    )
 
     signals = [
         HealthSignal(
@@ -92,8 +104,13 @@ def run_health_check(
         _spool_signal(spool),
         _review_pressure_signal(triage.as_dict()),
         _candidate_ratio_signal(retention.as_dict()),
-        _cold_ratio_signal(retention.as_dict()),
-        _retention_cycle_signal(latest_retention_cycle, retention.as_dict()),
+        cold_signal,
+        _retention_cycle_signal(
+            latest_retention_cycle,
+            retention.as_dict(),
+            cold_stewardship.as_dict() if cold_stewardship else None,
+            max_age_hours=retention_cycle_max_age_hours,
+        ),
         _backup_signal(latest_backup, max_age_hours=backup_max_age_hours),
     ]
     if regression_cases is not None:
@@ -123,6 +140,7 @@ def run_health_check(
             "review_open": triage.total_open,
             "latest_backup": latest_backup,
             "latest_retention_cycle": latest_retention_cycle,
+            "cold_stewardship": cold_stewardship.as_dict() if cold_stewardship else None,
         },
         signals=signals,
         recommendations=_recommend(signals),
@@ -182,7 +200,13 @@ def _backup_signal(latest: dict[str, Any] | None, *, max_age_hours: float) -> He
     return HealthSignal("backup", True, f"latest verified backup is {age:.1f}h old", value=latest)
 
 
-def _retention_cycle_signal(latest: dict[str, Any] | None, retention: dict[str, Any]) -> HealthSignal:
+def _retention_cycle_signal(
+    latest: dict[str, Any] | None,
+    retention: dict[str, Any],
+    cold_stewardship: dict[str, Any] | None = None,
+    *,
+    max_age_hours: float = 72.0,
+) -> HealthSignal:
     totals = retention.get("totals", {})
     capsules = max(1, int(totals.get("capsules", 0)))
     cold = int(totals.get("cold_capsules", 0))
@@ -205,6 +229,15 @@ def _retention_cycle_signal(latest: dict[str, Any] | None, retention: dict[str, 
             severity="warning",
             value=latest,
         )
+    age = float(latest.get("age_hours") or 0.0)
+    if age > max_age_hours:
+        return HealthSignal(
+            "retention_cycle",
+            False,
+            f"latest retention-cycle is stale: {age:.1f}h old",
+            severity="warning",
+            value=latest,
+        )
     shadow = latest.get("shadow_prune") or {}
     deletion = shadow.get("deletion") or {}
     if shadow and not shadow.get("passed"):
@@ -215,6 +248,30 @@ def _retention_cycle_signal(latest: dict[str, Any] | None, retention: dict[str, 
             severity="warning",
             value=latest,
         )
+    if cold_stewardship:
+        evidence = cold_stewardship.get("cycle_evidence") or {}
+        if evidence.get("required"):
+            if not evidence.get("matches_current"):
+                current = evidence.get("current") or {}
+                cycle = evidence.get("cycle") or {}
+                return HealthSignal(
+                    "retention_cycle",
+                    False,
+                    "cold totals drifted since latest retention-cycle: "
+                    f"current cold={current.get('cold_capsules')}, protected={current.get('protected_events')}, "
+                    f"prunable={current.get('prunable_events')} vs cycle cold={cycle.get('cold_capsules')}, "
+                    f"protected={cycle.get('protected_events')}, prunable={cycle.get('prunable_events')}",
+                    severity="warning",
+                    value=latest,
+                )
+            if not evidence.get("shadow_events_preserved"):
+                return HealthSignal(
+                    "retention_cycle",
+                    False,
+                    "latest retention-cycle did not prove source-event preservation",
+                    severity="warning",
+                    value=latest,
+                )
     return HealthSignal(
         "retention_cycle",
         True,
