@@ -161,6 +161,7 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 11. Serialize background workers with a lock; concurrency belongs at the queue boundary, not inside maintenance.
 12. Recover stale processing records before draining pending work.
 13. Triage review queues by groups before asking a human or model to inspect individual items.
+14. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
 
 ## Future Extension Points
 

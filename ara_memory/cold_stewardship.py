@@ -52,6 +52,7 @@ class ColdStewardshipReport:
     totals: dict[str, Any]
     groups: list[ColdGroup]
     latest_retention_cycle: dict[str, Any] | None
+    cycle_evidence: dict[str, Any]
     recommendations: list[str]
 
     @property
@@ -65,6 +66,7 @@ class ColdStewardshipReport:
             "totals": self.totals,
             "groups": [group.as_dict() for group in self.groups],
             "latest_retention_cycle": self.latest_retention_cycle,
+            "cycle_evidence": self.cycle_evidence,
             "recommendations": self.recommendations,
         }
 
@@ -87,6 +89,13 @@ class ColdStewardshipReport:
             )
         else:
             lines.append("latest_retention_cycle: none")
+        if self.cycle_evidence:
+            lines.append(
+                "cycle_evidence: "
+                f"fresh={self.cycle_evidence.get('fresh')}, "
+                f"matches_current={self.cycle_evidence.get('matches_current')}, "
+                f"shadow_events_preserved={self.cycle_evidence.get('shadow_events_preserved')}"
+            )
         lines.append("## Top Cold Groups")
         if not self.groups:
             lines.append("- None")
@@ -115,6 +124,7 @@ class ColdStewardshipAnalyzer:
         scope: str | None = None,
         group_limit: int = 12,
         examples_per_group: int = 2,
+        max_cycle_age_hours: float = 72.0,
     ) -> ColdStewardshipReport:
         self.store.init()
         rows = _cold_rows(self.store, scope=scope)
@@ -137,14 +147,20 @@ class ColdStewardshipAnalyzer:
             examples_per_group=examples_per_group,
         )
         latest_cycle = _latest_retention_cycle(self.store.root, scope=scope)
-        status = _status(totals, latest_cycle)
+        cycle_evidence = _cycle_evidence(
+            totals,
+            latest_cycle,
+            max_cycle_age_hours=max_cycle_age_hours,
+        )
+        status = _status(totals, latest_cycle, cycle_evidence)
         return ColdStewardshipReport(
             scope=scope,
             status=status,
             totals=totals,
             groups=groups,
             latest_retention_cycle=latest_cycle,
-            recommendations=_recommend(totals, groups, latest_cycle),
+            cycle_evidence=cycle_evidence,
+            recommendations=_recommend(totals, groups, latest_cycle, cycle_evidence),
         )
 
 
@@ -336,13 +352,66 @@ def _created_at(path: Path, payload: dict[str, Any]) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
-def _status(totals: dict[str, Any], latest_cycle: dict[str, Any] | None) -> str:
+def _cycle_evidence(
+    totals: dict[str, Any],
+    latest_cycle: dict[str, Any] | None,
+    *,
+    max_cycle_age_hours: float,
+) -> dict[str, Any]:
+    current = {
+        "cold_capsules": totals["cold_capsules"],
+        "protected_events": totals["protected_source_events"],
+        "prunable_events": totals["prunable_source_events"],
+    }
+    if not latest_cycle:
+        return {
+            "required": totals["cold_capsules"] > 0 and totals["cold_ratio"] > 0.5,
+            "fresh": False,
+            "max_age_hours": max_cycle_age_hours,
+            "matches_current": False,
+            "shadow_events_preserved": False,
+            "current": current,
+            "cycle": None,
+        }
+
+    plan_totals = dict(latest_cycle.get("plan_totals") or {})
+    shadow_deletion = dict(latest_cycle.get("shadow_deletion") or {})
+    cycle = {
+        "cold_capsules": plan_totals.get("cold_capsules"),
+        "protected_events": plan_totals.get("protected_events"),
+        "prunable_events": plan_totals.get("prunable_events"),
+    }
+    fresh = float(latest_cycle.get("age_hours") or 0) <= max_cycle_age_hours
+    matches_current = all(current[key] == cycle.get(key) for key in current)
+    shadow_events_preserved = bool(shadow_deletion) and shadow_deletion.get("events_removed", 0) == 0
+    return {
+        "required": totals["cold_capsules"] > 0 and totals["cold_ratio"] > 0.5,
+        "fresh": fresh,
+        "max_age_hours": max_cycle_age_hours,
+        "matches_current": matches_current,
+        "shadow_events_preserved": shadow_events_preserved,
+        "current": current,
+        "cycle": cycle,
+    }
+
+
+def _status(
+    totals: dict[str, Any],
+    latest_cycle: dict[str, Any] | None,
+    cycle_evidence: dict[str, Any],
+) -> str:
     if totals["cold_capsules"] == 0:
         return "pass"
     if totals["cold_ratio"] <= 0.5:
         return "pass"
-    if latest_cycle and latest_cycle.get("passed"):
-        return "watch"
+    if (
+        latest_cycle
+        and latest_cycle.get("passed")
+        and cycle_evidence.get("fresh")
+        and cycle_evidence.get("matches_current")
+        and cycle_evidence.get("shadow_events_preserved")
+    ):
+        return "pass"
     return "watch"
 
 
@@ -350,6 +419,7 @@ def _recommend(
     totals: dict[str, Any],
     groups: list[ColdGroup],
     latest_cycle: dict[str, Any] | None,
+    cycle_evidence: dict[str, Any],
 ) -> list[str]:
     recommendations: list[str] = []
     if totals["cold_capsules"] == 0:
@@ -369,8 +439,19 @@ def _recommend(
         recommendations.append(
             f"{totals['prunable_source_events']} source events are only cited by cold capsules; export before any destructive cleanup."
         )
-    if latest_cycle and latest_cycle.get("passed"):
-        recommendations.append("Latest retention-cycle passed; use it as evidence, not approval, before any live prune.")
-    else:
+    if not latest_cycle or not latest_cycle.get("passed"):
         recommendations.append("Run retention-cycle with representative recall queries before preparing live pruning.")
+    else:
+        if cycle_evidence.get("fresh") and cycle_evidence.get("matches_current") and cycle_evidence.get("shadow_events_preserved"):
+            recommendations.append(
+                "Latest retention-cycle is fresh, matches the current cold set, and preserved source events in shadow-prune."
+            )
+        else:
+            if not cycle_evidence.get("fresh"):
+                recommendations.append("Latest retention-cycle is stale; rerun it before relying on cold stewardship evidence.")
+            if not cycle_evidence.get("matches_current"):
+                recommendations.append("Cold memory totals drifted since the latest retention-cycle; rerun retention-cycle.")
+            if not cycle_evidence.get("shadow_events_preserved"):
+                recommendations.append("Latest shadow-prune did not prove source-event preservation; rerun retention-cycle.")
+        recommendations.append("Latest retention-cycle passed; use it as evidence, not approval, before any live prune.")
     return recommendations

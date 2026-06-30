@@ -42,6 +42,7 @@
 - Backups include durable spool envelopes and `verify-backup` runs SQLite foreign-key checks.
 - `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
+- `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation.
 
 ## Operating Rules
 
@@ -60,6 +61,7 @@
 - Lower `--processing-stale-seconds` only when you know no worker is still processing those envelopes.
 - Run `worker-loop` with `--iterations 1` under external schedulers unless a foreground operator is watching the loop output.
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
+- Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
 
 ## Recommended Future Defenses
 

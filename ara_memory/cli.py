@@ -423,6 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     cold_stewardship.add_argument("--scope", default=None)
     cold_stewardship.add_argument("--group-limit", type=int, default=12)
     cold_stewardship.add_argument("--examples-per-group", type=int, default=2)
+    cold_stewardship.add_argument("--max-cycle-age-hours", type=float, default=72.0)
     cold_stewardship.add_argument("--json", action="store_true")
     retention_cycle = sub.add_parser("retention-cycle")
     retention_cycle.add_argument("--scope", default=None)
@@ -1155,6 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             group_limit=args.group_limit,
             examples_per_group=args.examples_per_group,
+            max_cycle_age_hours=args.max_cycle_age_hours,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

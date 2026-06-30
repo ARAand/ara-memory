@@ -234,6 +234,11 @@ map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
 stewardship. It is deliberately local and deterministic, so it can be run before
 spending model context.
+`cold-stewardship` groups cold capsules, separates source events still cited by
+active memories from cold-only provenance, and checks whether the latest
+retention-cycle is fresh, matches the current cold set, and proved source-event
+preservation in shadow-prune. High cold pressure can pass stewardship only when
+that evidence is current; otherwise it remains a watch item.
 `failure-kind-audit` finds old decisions, successful commands, worktree
 evidence, and progress updates that were misfiled as `failure` capsules. It is
 dry-run by default; use `--apply` only after reviewing the proposed
@@ -326,7 +331,8 @@ restored sandbox. It does not modify the live store. `--no-shadow` is allowed
 only for partial evidence collection and does not pass pruning readiness. Each
 run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 `health` uses the latest passing report to distinguish unmanaged cold pressure
-from reviewed pruning readiness evidence.
+from reviewed pruning readiness evidence, while `cold-stewardship` additionally
+checks freshness and drift against the current live cold set.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
 events into a portable zip so pruning can later be audited or reversed.
 `prune-plan` is still a dry-run: it requires a verified cold export, runs
