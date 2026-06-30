@@ -280,6 +280,16 @@ class AraMemory:
 
         return build_recall_context(self, query, **kwargs)
 
+    def working_memory(self, **kwargs: Any) -> Any:
+        from ara_memory.working_memory import build_working_memory
+
+        return build_working_memory(self, **kwargs)
+
+    def record_memory_impact(self, **kwargs: Any) -> Any:
+        from ara_memory.working_memory import record_memory_impact
+
+        return record_memory_impact(self, **kwargs)
+
     def purpose_check(self, **kwargs: Any) -> Any:
         from ara_memory.purpose import run_purpose_check
 

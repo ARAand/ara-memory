@@ -6,6 +6,13 @@ It is not a vector database wrapper. It keeps raw events in an append-only
 ledger, consolidates them into typed memory capsules, links them through a
 temporal graph, and compiles small recall packs for the current task.
 
+Ara Memory OS is an associative working memory system: it does not merely store
+old text, it selects task-relevant memory through purpose, scope, temporal
+links, symbolic/FTS recall, and budgeted context packing. Purpose controls
+memory residency: core memories can stay hot, working memories must be selected
+by the query, guarded memories require review, and cold evidence stays
+preserved but inactive.
+
 ## Purpose
 
 - Continuity: Ara should not restart from zero every session.
@@ -47,6 +54,7 @@ python -m ara_memory hot --scope global --budget 1200
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000 --hot --diagnostics
 python -m ara_memory recall-plan "What should Ara remember about Jongseo?" --budgets 800,1600,2500 --json
+python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory doctor --scope global
 python -m ara_memory audit
 python -m ara_memory eval
@@ -153,6 +161,7 @@ budgeted cold pack:
 ```powershell
 python -m ara_memory recall-plan "current project memory" --scope project --budgets 800,1600,2500
 python -m ara_memory recall-context "current project memory" --scope project --budgets 800,1600,2500
+python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
 ```
 
@@ -176,23 +185,33 @@ temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
 `recent_supplement_used` when this path is active.
 
+`working-memory` is the smaller action layer between hot memory and cold
+recall. It turns the current prompt, active files, command errors, constraints,
+and temporal hints into a cue frame, recalls only directly visible evidence,
+then emits three compact sections: Keep In Mind, Risk / Friction, and This
+Should Change My Next Action. Use `working-memory-impact` after a turn to record
+which capsule ids actually changed the outcome; those notes let later
+consolidation learn which memories were useful instead of only which ones were
+stored.
+
 ## Codex Skill
 
 This workspace also installs a personal Codex skill at
-`C:\Users\Owner\.codex\skills\ara-memory`. The skill gives future Codex sessions
+`$env:USERPROFILE\.codex\skills\ara-memory`. The skill gives future Codex sessions
 the following low-friction operations:
 
 ```powershell
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall "current task" --scope ara-memory
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall-plan "current task" --scope ara-memory --budgets 800,1600,2500
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py recall-context "current task" --scope ara-memory --budgets 800,1600,2500
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py purpose-check --scope ara-memory --repair-hot
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py identity-check --scope ara-memory --repair-hot
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py milestone-check --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py goal-roadmap --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py failure-kind-audit --scope ara-memory
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py self-kind-audit --scope ara-memory
-python C:\Users\Owner\.codex\skills\ara-memory\scripts\ara_memory_skill.py capture --scope ara-memory --prompt "..." --assistant "..." --sleep
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall "current task" --scope ara-memory
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-plan "current task" --scope ara-memory --budgets 800,1600,2500
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-context "current task" --scope ara-memory --budgets 800,1600,2500
+python -m ara_memory working-memory "current task" --scope ara-memory --active-file ara_memory/working_memory.py
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" purpose-check --scope ara-memory --repair-hot
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" identity-check --scope ara-memory --repair-hot
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" milestone-check --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" goal-roadmap --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" failure-kind-audit --scope ara-memory
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" self-kind-audit --scope ara-memory
+python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" capture --scope ara-memory --prompt "..." --assistant "..." --sleep
 ```
 
 Use it as the operational bridge: recall a small context pack before work,
@@ -386,7 +405,7 @@ wrapper is configured for a path the worker drains.
 Always-on worker runbook:
 
 ```powershell
-Set-Location -LiteralPath 'C:\Users\Owner\Documents\R&D'
+Set-Location -LiteralPath '<repo>'
 
 python -m ara_memory health --scope ara-memory --query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 0 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json

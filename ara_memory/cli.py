@@ -171,6 +171,31 @@ def main(argv: list[str] | None = None) -> int:
     recall_context.add_argument("--pack-only", action="store_true", help="Print only the selected pack, hiding the plan.")
     recall_context.add_argument("--json", action="store_true")
 
+    working_memory = sub.add_parser(
+        "working-memory",
+        help="Build a tiny cue-led working memory pack for the current situation.",
+    )
+    working_memory.add_argument("prompt", nargs="?", default=None)
+    working_memory.add_argument("--scope", default="global")
+    working_memory.add_argument("--active-file", action="append", default=[])
+    working_memory.add_argument("--command-error", action="append", default=[])
+    working_memory.add_argument("--budget", type=int, default=900)
+    working_memory.add_argument("--recall-budget", type=int, default=1600)
+    working_memory.add_argument("--no-global", action="store_true")
+    working_memory.add_argument("--no-hot", action="store_true")
+    working_memory.add_argument("--json", action="store_true")
+
+    memory_impact = sub.add_parser(
+        "working-memory-impact",
+        help="Record which working-memory capsules influenced a turn.",
+    )
+    memory_impact.add_argument("--scope", default="global")
+    memory_impact.add_argument("--cue", required=True)
+    memory_impact.add_argument("--capsule-id", action="append", default=[])
+    memory_impact.add_argument("--outcome", required=True)
+    memory_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
+    memory_impact.add_argument("--json", action="store_true")
+
     purpose_check = sub.add_parser("purpose-check")
     purpose_check.add_argument("--scope", default="global")
     purpose_check.add_argument("--query", default="purpose of Ara natural memory and long-running goal")
@@ -778,6 +803,40 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(result.to_text(include_plan=not args.pack_only))
+        return 0
+
+    if args.cmd == "working-memory":
+        prompt = args.prompt if args.prompt is not None else sys.stdin.read().strip()
+        result = memory.working_memory(
+            prompt=prompt,
+            scope=args.scope,
+            active_files=args.active_file,
+            command_errors=args.command_error,
+            budget=args.budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "working-memory-impact":
+        helped = None if args.helped == "unknown" else args.helped == "true"
+        event = memory.record_memory_impact(
+            scope=args.scope,
+            cue=args.cue,
+            capsule_ids=args.capsule_id,
+            outcome=args.outcome,
+            helped=helped,
+        )
+        payload = {"event_id": event.id, "scope": event.scope, "capsule_ids": list(dict.fromkeys(args.capsule_id))}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(json.dumps(payload, ensure_ascii=False))
         return 0
 
     if args.cmd == "purpose-check":

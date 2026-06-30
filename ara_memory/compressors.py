@@ -5,7 +5,8 @@ from collections import Counter
 from typing import Any
 
 
-KEYWORD_RE = re.compile(r"[A-Za-z가-힣0-9_./:-]{3,}")
+LATIN_KEYWORD_RE = re.compile(r"[A-Za-z0-9_./:-]{3,}")
+HANGUL_KEYWORD_RE = re.compile(r"[\uac00-\ud7a3]{2,}")
 
 
 def compact_text(text: str, *, limit: int = 900) -> str:
@@ -144,7 +145,8 @@ def _point_key(text: str) -> str:
 
 def extract_keywords(text: str, *, limit: int = 12) -> list[str]:
     lowered = text.lower()
-    words = [w.strip(".,;:()[]{}<>") for w in KEYWORD_RE.findall(lowered)]
+    words = [w.strip(".,;:()[]{}<>") for w in LATIN_KEYWORD_RE.findall(lowered)]
+    words.extend(HANGUL_KEYWORD_RE.findall(lowered))
     stop = {
         "the",
         "and",

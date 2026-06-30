@@ -6,6 +6,10 @@ Ara Memory OS treats memory as a typed, temporal, auditable substrate.
 It deliberately avoids a vectorDB-first design. Similarity search can be added
 later, but it is not the center of recall.
 
+The working-memory model is associative: recall combines explicit purpose,
+scope, temporal edges, graph neighbors, FTS/BM25 matches, and budget selection
+instead of treating memory as one flat similarity search space.
+
 ## Memory Flow
 
 ```text
@@ -47,6 +51,13 @@ recall(query, scope, budget)
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
   -> suppress no-evidence salience fallback bodies
   -> compute recall-pack quality for budget selection
+
+working_memory(prompt, scope, files, errors)
+  -> cue frame from prompt, active files, command errors, constraints, temporal hints
+  -> associative recall over hot memory plus a bounded cold pack
+  -> suppress unrelated fallback capsules when there is no direct evidence
+  -> project only visible recalled capsules into Keep / Risk / Next Action
+  -> optional working-memory-impact event for outcome feedback
 
 audit()
   -> poisoning heuristics
@@ -214,11 +225,17 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 20. Treat temporal recall as explicit: only temporal words or phrases should
     trigger recency boosts, while ordinary substrings such as `knowledge` or
     `blast` must stay lexical.
+21. Treat working memory as a cue-led action pack, not another cache: it should
+    change the next step, record whether it helped, and stay empty when recall
+    has no visible evidence.
 
 ## Future Extension Points
 
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
+- Candidate-only recall API so working memory can avoid rendering a full pack
+  before projecting Keep / Risk / Next Action.
+- Impact-weighted recall edges from `working-memory-impact` events.
 - OCR/caption ingestion for images.
 - Memvid-style cold archives for large old sessions.
 - Small local curator model for better consolidation.

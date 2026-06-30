@@ -19,7 +19,7 @@ import ara_memory.prune as prune_module
 import ara_memory.storage as storage_module
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
-from ara_memory.compressors import estimate_tokens
+from ara_memory.compressors import estimate_tokens, extract_keywords
 from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
@@ -7133,6 +7133,227 @@ class MemoryFlowTests(unittest.TestCase):
             recalled = memory.recall_result("alpha working detail", scope="alpha", include_hot=True, budget=1200)
             self.assertIn("alpha working detail", recalled.pack.lower())
             self.assertIn(decision.id, recalled.diagnostics["selected_capsule_ids"])
+
+    def test_working_memory_builds_associative_pack_from_cue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: fix recall fallback regression without inventing remembered context.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: evidence-first recall",
+                body="Fix recall fallback regression without inventing remembered context.",
+                scope="alpha",
+                confidence=0.90,
+                salience=0.80,
+                source_event_ids=[event.id],
+                tags=["recall", "fallback", "regression", "evidence"],
+                status=MemoryStatus.STABLE,
+            )
+            failure = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: low evidence fallback",
+                body="A prior recall fallback surfaced unrelated high-salience memory when no direct evidence matched.",
+                scope="alpha",
+                confidence=0.86,
+                salience=0.92,
+                source_event_ids=[event.id],
+                tags=["recall", "fallback", "evidence", "risk"],
+                status=MemoryStatus.STABLE,
+            )
+            procedure = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure memory: check diagnostics",
+                body="When recall quality changes, inspect low_evidence_fallback_suppressed before trusting the pack.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.70,
+                source_event_ids=[event.id],
+                tags=["recall", "diagnostics", "procedure"],
+                status=MemoryStatus.STABLE,
+            )
+            for capsule in (goal, failure, procedure):
+                memory.store.upsert_capsule(capsule)
+
+            report = memory.working_memory(
+                prompt="We need to fix recall fallback regression without inventing remembered context.",
+                scope="alpha",
+                budget=900,
+                recall_budget=1400,
+                include_hot=False,
+            )
+            text = report.to_text()
+
+            self.assertTrue(report.items)
+            self.assertIn("Ara Associative Working Memory", text)
+            self.assertIn("Keep In Mind", text)
+            self.assertIn("Risk / Friction", text)
+            self.assertIn("This Should Change My Next Action", text)
+            self.assertIn(failure.id, report.influential_capsule_ids)
+            self.assertTrue(any(item.section == "risk" for item in report.items))
+            self.assertTrue(any(item.section == "action" for item in report.items))
+
+    def test_working_memory_ignores_selected_but_invisible_capsules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: invisible selected recall capsules must not influence the next action.",
+                source="test",
+                scope="alpha",
+            )
+            hidden = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: invisible selected capsule",
+                body="Invisible selected recall capsules must not influence the next action.",
+                scope="alpha",
+                confidence=0.90,
+                salience=0.95,
+                source_event_ids=[event.id],
+                tags=["invisible", "selected", "capsule"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(hidden)
+
+            report = memory.working_memory(
+                prompt="invisible selected capsule",
+                scope="alpha",
+                budget=900,
+                recall_budget=1,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertIn(hidden.id, report.recall_diagnostics["selected_capsule_ids"])
+            self.assertEqual(report.recall_diagnostics["visible_capsule_ids"], [])
+            self.assertEqual(report.items, [])
+
+    def test_working_memory_suppresses_no_evidence_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: unrelated stable memories should not fill empty recall contexts.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision memory: unrelated",
+                    body="Unrelated stable memories should not fill empty recall contexts.",
+                    scope="alpha",
+                    confidence=0.95,
+                    salience=0.99,
+                    source_event_ids=[event.id],
+                    tags=["unrelated"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            report = memory.working_memory(
+                prompt="orphan nebula talisman",
+                scope="alpha",
+                budget=900,
+                recall_budget=1000,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertEqual(report.items, [])
+            self.assertTrue(report.recall_diagnostics["low_evidence_fallback_suppressed"])
+            self.assertIn("No direct associative memory", report.to_text())
+
+    def test_working_memory_records_korean_constraints_and_temporal_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            report = memory.working_memory(
+                prompt="반드시 최근 테스트 결과를 확인하고 불확실하면 하지마.",
+                scope="alpha",
+                budget=900,
+                recall_budget=1000,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertEqual(len(report.cue.constraints), 1)
+            self.assertIn("반드시", report.cue.constraints[0])
+            self.assertIn("최근", report.cue.temporal_hints)
+
+    def test_korean_two_syllable_keywords_survive_extraction(self) -> None:
+        keywords = extract_keywords("비용 토큰 절감 병목 확인", limit=6)
+
+        self.assertIn("비용", keywords)
+        self.assertIn("토큰", keywords)
+        self.assertIn("절감", keywords)
+        self.assertIn("병목", keywords)
+
+    def test_working_memory_marks_candidate_decisions_as_unsettled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision candidate: tentative deploy memory needs review before use.",
+                source="test",
+                scope="alpha",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision candidate: tentative deploy memory",
+                body="Tentative deploy memory needs review before use.",
+                scope="alpha",
+                confidence=0.72,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["tentative", "deploy", "memory"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+
+            report = memory.working_memory(
+                prompt="tentative deploy memory",
+                scope="alpha",
+                budget=900,
+                recall_budget=1200,
+                include_hot=False,
+                include_global=False,
+            )
+            text = report.to_text()
+
+            self.assertTrue(any(item.capsule_id == candidate.id and item.status == "candidate" for item in report.items))
+            self.assertIn("[decision/candidate]", text)
+            self.assertIn("Review this candidate decision", text)
+            self.assertNotIn("already decided", text)
+
+    def test_working_memory_impact_records_append_only_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            event = memory.record_memory_impact(
+                scope="alpha",
+                cue="recall fallback",
+                capsule_ids=["cap_a", "cap_b", "cap_a"],
+                outcome="Avoided inventing recalled context.",
+                helped=True,
+            )
+            rows = memory.store.get_events([event.id])
+            metadata = json.loads(rows[0]["metadata_json"])
+
+            self.assertEqual(event.kind.value, "note")
+            self.assertEqual(event.source, "working-memory-impact")
+            self.assertEqual(metadata["working_memory_impact"]["capsule_ids"], ["cap_a", "cap_b"])
+            self.assertTrue(metadata["working_memory_impact"]["helped"])
 
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

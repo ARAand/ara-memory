@@ -17,6 +17,7 @@
 13. Backup blind spot: pending spool work or orphaned FK rows appear healthy but cannot be restored safely.
 14. Live-prune drift: the approved cold capsule set changes before irreversible deletion.
 15. Evidence drift: queued file/worktree evidence changes between enqueue and drain.
+16. Plaintext memory spill: local ledgers, SQLite databases, backups, spool files, hot-memory packs, or cold exports are accidentally committed, copied, or uploaded.
 
 ## Current Defenses
 
@@ -48,6 +49,7 @@
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
 - `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation.
 - `lifecycle` is analysis-only: it separates core, working, guarded, evidence, archive, and reject memory without changing capsule status or deleting provenance.
+- Repository ignore rules block local memory roots, SQLite databases, backups, archives, logs, restored memory roots, and Codex-local folders from ordinary `git add .` publishing paths.
 
 ## Operating Rules
 
@@ -71,6 +73,7 @@
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
 - Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
 - Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
+- Treat `.ara-memory`, backups, cold exports, hot-memory files, spool envelopes, and SQLite databases as private plaintext evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
 
 ## Recommended Future Defenses
 
@@ -82,3 +85,5 @@
 - Poisoning benchmark suite based on OWASP ASI06-style cases.
 - Signed or allow-listed advisor providers.
 - Per-envelope signatures for high-trust automation sources.
+- A pre-push privacy gate that rejects tracked memory roots, databases, archives, absolute user paths, and secret-like patterns.
+- Encrypted backups and cold exports, with raw source events opt-in for portable archives.
