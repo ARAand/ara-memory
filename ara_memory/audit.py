@@ -28,6 +28,21 @@ class MemoryAuditor:
             issues.append(f"## {name}")
             for row in found[:10]:
                 issues.append(f"- {row['id']} [{row['kind']}/{row['status']}]: {row['title']}")
+        risk_issues = []
+        for verdict in risk.assess_scope(scope=None, limit=500):
+            row = self.store.get_capsule(verdict.capsule_id)
+            if row is None or row["status"] not in {"candidate", "stable"}:
+                continue
+            if verdict.should_quarantine or verdict.has_sensitive_text or verdict.has_self_serving_text:
+                risk_issues.append((row_to_capsule(row), verdict))
+        if risk_issues:
+            issues.append("## deterministic_risk")
+            for cap, verdict in risk_issues[:10]:
+                reason = "; ".join(verdict.reasons[:3])
+                issues.append(
+                    f"- {cap['id']} [{cap['kind']}/{cap['status']}]: {cap['title']} "
+                    f"(score={verdict.score:.2f}; {reason})"
+                )
         if not issues:
             return "No memory hygiene issues found by the local audit rules."
         return "\n".join(["# Ara Memory Audit", *issues])

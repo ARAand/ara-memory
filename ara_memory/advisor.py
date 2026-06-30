@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Protocol
 
-from ara_memory.risk import MemoryRiskAssessor
+from ara_memory.risk import MemoryRiskAssessor, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -55,6 +55,17 @@ class DeterministicMemoryAdvisor:
                     )
                 )
                 continue
+            if verdict.should_exclude_from_hot:
+                recommendations.append(
+                    MemoryRecommendation(
+                        capsule_id=cap["id"],
+                        action="keep",
+                        actor="memory-auditor",
+                        reason="excluded from hot memory by deterministic risk policy: " + "; ".join(verdict.reasons),
+                        risk_score=verdict.score,
+                    )
+                )
+                continue
             if _should_promote(cap):
                 recommendations.append(
                     MemoryRecommendation(
@@ -98,7 +109,7 @@ class ExternalCommandMemoryAdvisor:
             "version": 1,
             "task": "memory_review",
             "allowed_actions": ["promote", "quarantine", "keep"],
-            "candidates": [_candidate_payload(cap) for cap in candidates],
+            "candidates": [_candidate_payload(cap, fallback_recs[cap["id"]]) for cap in candidates],
         }
         try:
             completed = subprocess.run(
@@ -157,17 +168,28 @@ def _should_promote(cap: dict) -> bool:
     return cap["confidence"] >= 0.70 and cap["salience"] >= 0.70
 
 
-def _candidate_payload(cap: dict) -> dict[str, object]:
+def _candidate_payload(cap: dict, fallback: MemoryRecommendation | None = None) -> dict[str, object]:
+    redacted = bool(fallback and _is_deterministically_blocked(fallback))
+    title = cap["title"]
+    body = cap["body"][:1600]
+    tags = cap["tags"][:24]
+    source_event_ids = cap["source_event_ids"][:24]
+    if redacted:
+        title = redact_sensitive_text(str(title))
+        body = "[redacted by deterministic memory auditor]"
+        tags = [redact_sensitive_text(str(tag)) for tag in tags]
+        source_event_ids = []
     return {
         "id": cap["id"],
         "kind": cap["kind"],
-        "title": cap["title"],
-        "body": cap["body"][:1600],
+        "title": title,
+        "body": body,
         "scope": cap["scope"],
         "confidence": cap["confidence"],
         "salience": cap["salience"],
-        "tags": cap["tags"][:24],
-        "source_event_ids": cap["source_event_ids"][:24],
+        "tags": tags,
+        "source_event_ids": source_event_ids,
+        "risk_redacted": redacted,
     }
 
 
@@ -194,6 +216,8 @@ def _parse_external_recommendations(
         fallback = fallback_recs[capsule_id]
         if fallback.action == "quarantine" and action != "quarantine":
             continue
+        if action == "promote" and _is_deterministically_blocked(fallback):
+            continue
         reason = raw.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             reason = f"external advisor recommended {action}"
@@ -208,6 +232,12 @@ def _parse_external_recommendations(
             risk_score=max(0.0, min(1.0, float(risk_score))),
         )
     return out
+
+
+def _is_deterministically_blocked(fallback: MemoryRecommendation) -> bool:
+    return fallback.action == "quarantine" or fallback.reason.startswith(
+        "excluded from hot memory by deterministic risk policy"
+    )
 
 
 def _env_int(name: str, *, default: int) -> int:

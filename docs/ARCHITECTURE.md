@@ -37,6 +37,7 @@ recall(query, scope, budget)
   -> keyword extraction
   -> graph neighbor lookup
   -> FTS/BM25 capsule search
+  -> deterministic risk filter for quarantined and hot-excluded candidates
   -> typed context pack
   -> token budget trimming
   -> count rendered capsules, visible sections, and visible query-term coverage
@@ -123,6 +124,10 @@ reading hundreds of repeated rows. The worker also takes a filesystem lock by
 default, so overlapping scheduler invocations skip safely instead of racing over
 the same spool and SQLite store.
 
+External advisor providers receive redacted candidate projections when the
+deterministic auditor has already marked a memory as unsafe for promotion or hot
+recall.
+
 `worker-loop` is the scheduler-friendly wrapper around `worker`. In production,
 an OS scheduler can call it with `--iterations 1`; in a foreground session it can
 run multiple iterations with a fixed interval and compact reports.
@@ -163,7 +168,7 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 4. Keep hot memory tiny.
 5. Compile recall packs by budget before calling a large model.
 6. Treat code, prose, terminal output, and images as different compression domains.
-7. Put only stable, compressed state into hot memory; keep raw history cold.
+7. Put only stable, compressed, low-risk state into hot memory; keep raw history cold.
 8. Queue unattended captures before analysis so ingestion failure does not lose raw evidence.
 9. Run recall regression after retrieval, compression, sleep, pruning, or quality changes.
 10. Keep the background worker conservative: score and verify by default, mutate only with explicit review.

@@ -534,7 +534,12 @@ class QualityScorer:
         quality = _clamp(quality)
 
         decay = _clamp((age_days / 180.0) * 0.40 + (1.0 - float(cap["salience"])) * 0.30 + (1.0 - quality) * 0.30)
-        action, reasons = _action_for(cap, quality=quality, decay=decay, risk_score=risk.score)
+        if risk.should_quarantine:
+            action, reasons = "quarantine", ["high memory safety risk"]
+        elif risk.should_exclude_from_hot:
+            action, reasons = "review", ["excluded from hot memory by deterministic risk policy"]
+        else:
+            action, reasons = _action_for(cap, quality=quality, decay=decay)
         reasons.extend(risk.reasons[:3])
         priority = _priority(action, quality=quality, decay=decay, risk_score=risk.score)
         return QualityItem(
@@ -631,10 +636,8 @@ class QualityScorer:
             ]
 
 
-def _action_for(cap: dict[str, Any], *, quality: float, decay: float, risk_score: float) -> tuple[str, list[str]]:
+def _action_for(cap: dict[str, Any], *, quality: float, decay: float) -> tuple[str, list[str]]:
     reasons = []
-    if risk_score >= 0.65:
-        return "quarantine", ["high poisoning or instruction risk"]
     if cap["status"] == MemoryStatus.CANDIDATE.value and quality >= PROMOTE_THRESHOLD:
         reasons.append("candidate has high confidence/salience/provenance")
         return "promote", reasons
@@ -729,6 +732,12 @@ def _reason_bucket(reason: str) -> str:
         return "unspecified"
     if any("instruction-like text" in part for part in parts):
         return "instruction-like artifact"
+    if any("sensitive data" in part for part in parts):
+        return "sensitive data"
+    if any("self-serving identity claim" in part for part in parts):
+        return "self-serving identity"
+    if any("keyword stuffing" in part for part in parts):
+        return "keyword stuffing"
     if any("low quality score" in part for part in parts):
         return "low quality score"
     if any("decay" in part or "stale" in part for part in parts):

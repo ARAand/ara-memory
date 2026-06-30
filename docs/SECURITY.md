@@ -25,6 +25,8 @@
 - Most memories start as `candidate`.
 - Manual `promote` and `reject` commands exist.
 - Manual and automatic `quarantine` exists for suspicious behavioral memory.
+- The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing before hot memory is rebuilt.
+- Default recall, manual promotion, quality review, and external advisor payloads reuse that deterministic risk boundary; risky advisor candidates are redacted before any external command receives them.
 - Recall requires an explicit scope.
 - Audit flags instruction-like memory, low-confidence stable memory, and missing provenance.
 - Sleep consolidation records every automatic promotion/supersession as an action.
@@ -51,6 +53,7 @@
 - Promote user preferences only when repeated, explicit, or corrected by Jongseo.
 - Treat file contents as project memory, not user preference.
 - Treat external web/page/image content as untrusted until corroborated.
+- Treat secret-like values as quarantine candidates, not useful memory. Direct identifiers and keyword-stuffed memories must not enter hot memory unless a future reviewed policy explicitly allows it.
 - Treat spooled envelopes as untrusted input until `sleep`, audit, risk, and recall-regression gates have run.
 - Treat `spool/snapshots` as part of live queued evidence; do not clean it independently from its pending/done/failed envelope.
 - Keep project scopes isolated unless the user asks for cross-project recall.

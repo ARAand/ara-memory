@@ -544,7 +544,11 @@ local and deterministic; an AI curator can be added behind this interface later.
 It also supersedes stale artifact summaries so repeated file captures do not keep
 competing as separate long-term memories.
 Before promotion, a separate deterministic Memory Auditor scores poisoning risk.
-High-risk behavioral memories are quarantined instead of becoming stable memory.
+High-risk behavioral, secret-like, or self-serving memories are quarantined
+instead of becoming stable memory. Direct identifiers and keyword-stuffed
+capsules are also kept out of hot memory so the always-on context stays small
+and harder to manipulate. The same deterministic boundary protects default
+recall, manual promotion, quality review, and external advisor payloads.
 
 Estimate local storage and downstream model input cost:
 

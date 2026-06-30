@@ -113,13 +113,16 @@ class AraMemory:
         cap = row_to_capsule(row)
         if cap["status"] == MemoryStatus.QUARANTINED.value:
             return False
-        if MemoryRiskAssessor(self.store).assess_capsule(cap).should_quarantine:
+        verdict = MemoryRiskAssessor(self.store).assess_capsule(cap)
+        if verdict.should_quarantine:
             self.store.update_capsule_status(
                 capsule_id,
                 MemoryStatus.QUARANTINED,
                 actor="memory-auditor",
                 reason="blocked unsafe manual promotion",
             )
+            return False
+        if verdict.should_exclude_from_hot:
             return False
         return self.store.update_capsule_status(capsule_id, MemoryStatus.STABLE, actor=actor, reason=reason)
 
