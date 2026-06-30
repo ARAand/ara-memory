@@ -187,7 +187,7 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 14. Keep full cold evidence in SQLite/ledger/archive, but keep FTS recall indexes limited to candidate and stable capsules.
 15. Triage review queues by groups before asking a human or model to inspect individual items.
 16. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
-17. Rotate redundant verified backups with `backup-stewardship` before touching live memory or cold evidence.
+17. Rotate redundant verified backups with `backup-stewardship` against a target backup-byte budget before touching live memory or cold evidence; keep latest backups, retention-cycle evidence, failed-verification backups, and active live-prune approval backups.
 18. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 
 ## Future Extension Points

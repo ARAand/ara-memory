@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from ara_memory.backup_stewardship import DEFAULT_TARGET_BACKUP_BYTES
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
 from ara_memory.ingest import ingest_file
@@ -424,6 +425,12 @@ def main(argv: list[str] | None = None) -> int:
     backup_stewardship = sub.add_parser("backup-stewardship")
     backup_stewardship.add_argument("--keep-latest", type=int, default=3)
     backup_stewardship.add_argument("--keep-retention-cycles", type=int, default=2)
+    backup_stewardship.add_argument(
+        "--target-backup-bytes",
+        type=int,
+        default=DEFAULT_TARGET_BACKUP_BYTES,
+        help="Target backup bytes after deleting selected candidates. Defaults to 67108864 (64 MiB).",
+    )
     backup_stewardship.add_argument("--apply", action="store_true")
     backup_stewardship.add_argument("--confirm", default="")
     backup_stewardship.add_argument("--json", action="store_true")
@@ -1118,6 +1125,7 @@ def main(argv: list[str] | None = None) -> int:
         result = memory.backup_stewardship(
             keep_latest=args.keep_latest,
             keep_retention_cycles=args.keep_retention_cycles,
+            target_backup_bytes=args.target_backup_bytes,
             apply=args.apply,
             confirm=args.confirm,
         )

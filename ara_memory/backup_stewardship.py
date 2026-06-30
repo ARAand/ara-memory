@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import stat
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from os import stat_result
 from pathlib import Path
@@ -13,6 +14,7 @@ from ara_memory.storage import MemoryStore
 
 
 BACKUP_DELETE_CONFIRMATION = "DELETE OLD BACKUPS"
+DEFAULT_TARGET_BACKUP_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -73,8 +75,10 @@ class BackupStewardshipReport:
                 "totals: "
                 f"backups={self.totals['backups']}, "
                 f"bytes={self.totals['bytes']}, "
+                f"target_backup_bytes={self.totals['target_backup_bytes']}, "
                 f"delete_candidates={self.totals['delete_candidates']}, "
                 f"candidate_bytes={self.totals['candidate_bytes']}, "
+                f"bytes_after_candidates={self.totals['bytes_after_candidates']}, "
                 f"deleted={self.totals['deleted']}, "
                 f"delete_errors={self.totals['delete_errors']}, "
                 f"verification_cache_hits={self.totals['verification_cache_hits']}"
@@ -100,6 +104,7 @@ def run_backup_stewardship(
     *,
     keep_latest: int = 3,
     keep_retention_cycles: int = 2,
+    target_backup_bytes: int | None = DEFAULT_TARGET_BACKUP_BYTES,
     apply: bool = False,
     confirm: str = "",
 ) -> BackupStewardshipReport:
@@ -107,12 +112,18 @@ def run_backup_stewardship(
         raise ValueError("keep_latest must be at least 1")
     if keep_retention_cycles < 0:
         raise ValueError("keep_retention_cycles must be non-negative")
+    if target_backup_bytes is not None and target_backup_bytes < 0:
+        raise ValueError("target_backup_bytes must be non-negative")
     store.init()
     root = store.root
     backup_dir = root / "backups"
     backup_dir.mkdir(parents=True, exist_ok=True)
     if _is_reparse_point(backup_dir):
-        totals = _empty_totals(keep_latest=keep_latest, keep_retention_cycles=keep_retention_cycles)
+        totals = _empty_totals(
+            keep_latest=keep_latest,
+            keep_retention_cycles=keep_retention_cycles,
+            target_backup_bytes=target_backup_bytes,
+        )
         return BackupStewardshipReport(
             root=str(root),
             dry_run=not apply,
@@ -125,7 +136,8 @@ def run_backup_stewardship(
             ],
         )
 
-    referenced = _referenced_backup_paths(root, keep_retention_cycles=keep_retention_cycles)
+    retention_refs = _referenced_backup_paths(root, keep_retention_cycles=keep_retention_cycles)
+    prune_refs = _active_prune_approval_backup_paths(store)
     verification_cache = _load_verification_cache(root)
     current_cache: dict[str, Any] = {}
     scanned, scan_errors = _scan_backup_paths(backup_dir)
@@ -136,14 +148,17 @@ def run_backup_stewardship(
         info = _backup_item(path, metadata, verification_cache=verification_cache, current_cache=current_cache)
         if index < keep_latest:
             info.keep_reasons.append(f"latest-{index + 1}-of-{keep_latest}")
-        if resolved in referenced:
+        if resolved in retention_refs:
             info.keep_reasons.append("referenced-by-retention-cycle")
-            info.referenced_by.extend(referenced[resolved])
+            info.referenced_by.extend(retention_refs[resolved])
+        if resolved in prune_refs:
+            info.keep_reasons.append("referenced-by-active-prune-approval")
+            info.referenced_by.extend(prune_refs[resolved])
         if not info.verified:
             info.keep_reasons.append("verification-failed-inspect-manually")
-        info.delete_candidate = info.verified and not info.keep_reasons
         items.append(info)
     items.extend(scan_errors)
+    bytes_after_candidates = _mark_delete_candidates(items, target_backup_bytes=target_backup_bytes)
 
     passed = True
     if apply and confirm != BACKUP_DELETE_CONFIRMATION:
@@ -153,7 +168,12 @@ def run_backup_stewardship(
             "Rerun without --apply for review, or pass the exact confirmation string after reviewing candidates.",
         ]
     else:
-        recommendations = _recommend(items, apply=apply)
+        recommendations = _recommend(
+            items,
+            apply=apply,
+            target_backup_bytes=target_backup_bytes,
+            bytes_after_candidates=bytes_after_candidates,
+        )
 
     deleted_bytes = 0
     deleted = 0
@@ -193,7 +213,12 @@ def run_backup_stewardship(
             "Successfully deleted candidates remain deleted; failed candidates were preserved in the report.",
         ]
     elif apply and passed and confirm == BACKUP_DELETE_CONFIRMATION:
-        recommendations = _recommend(items, apply=True)
+        recommendations = _recommend(
+            items,
+            apply=True,
+            target_backup_bytes=target_backup_bytes,
+            bytes_after_candidates=bytes_after_candidates,
+        )
 
     candidate_bytes = sum(item.bytes for item in items if item.delete_candidate)
     totals = {
@@ -201,6 +226,11 @@ def run_backup_stewardship(
         "bytes": sum(item.bytes for item in items),
         "verified": sum(1 for item in items if item.verified),
         "verification_cache_hits": sum(1 for item in items if item.verification_cached),
+        "target_backup_bytes": target_backup_bytes,
+        "bytes_after_candidates": bytes_after_candidates,
+        "target_reached": target_backup_bytes is None or bytes_after_candidates <= target_backup_bytes,
+        "protected_bytes": sum(item.bytes for item in items if item.keep_reasons),
+        "eligible_bytes": sum(item.bytes for item in items if item.verified and not item.keep_reasons),
         "delete_candidates": sum(1 for item in items if item.delete_candidate),
         "candidate_bytes": candidate_bytes,
         "deleted": deleted,
@@ -222,6 +252,24 @@ def run_backup_stewardship(
 
 def _item_cache_key(item: BackupStewardshipItem) -> str:
     return str(Path(item.path).resolve(strict=False))
+
+
+def _mark_delete_candidates(items: list[BackupStewardshipItem], *, target_backup_bytes: int | None) -> int:
+    for item in items:
+        item.delete_candidate = False
+    eligible = [item for item in items if item.verified and not item.keep_reasons]
+    if target_backup_bytes is None:
+        for item in eligible:
+            item.delete_candidate = True
+        return sum(item.bytes for item in items if not item.delete_candidate)
+
+    remaining_bytes = sum(item.bytes for item in items)
+    for item in reversed(eligible):
+        if remaining_bytes <= target_backup_bytes:
+            break
+        item.delete_candidate = True
+        remaining_bytes -= item.bytes
+    return remaining_bytes
 
 
 def _backup_item(
@@ -307,6 +355,36 @@ def _referenced_backup_paths(root: Path, *, keep_retention_cycles: int) -> dict[
     return refs
 
 
+def _active_prune_approval_backup_paths(store: MemoryStore) -> dict[Path, list[str]]:
+    refs: dict[Path, list[str]] = {}
+    now = datetime.now(timezone.utc)
+    with store.session() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, backup_path, expires_at
+            FROM prune_approvals
+            WHERE status = 'prepared'
+            """
+        ).fetchall()
+    for row in rows:
+        expires_at = _parse_datetime(row["expires_at"])
+        if expires_at is None or expires_at <= now:
+            continue
+        resolved = _resolve_recorded_path(store.root, str(row["backup_path"]))
+        refs.setdefault(resolved, []).append(f"prune-approval:{row['id']}")
+    return refs
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _resolve_recorded_path(root: Path, value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
@@ -348,12 +426,22 @@ def _is_reparse_point(path: Path) -> bool:
     return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
 
 
-def _empty_totals(*, keep_latest: int, keep_retention_cycles: int) -> dict[str, Any]:
+def _empty_totals(
+    *,
+    keep_latest: int,
+    keep_retention_cycles: int,
+    target_backup_bytes: int | None,
+) -> dict[str, Any]:
     return {
         "backups": 0,
         "bytes": 0,
         "verified": 0,
         "verification_cache_hits": 0,
+        "target_backup_bytes": target_backup_bytes,
+        "bytes_after_candidates": 0,
+        "target_reached": True,
+        "protected_bytes": 0,
+        "eligible_bytes": 0,
         "delete_candidates": 0,
         "candidate_bytes": 0,
         "deleted": 0,
@@ -413,19 +501,38 @@ def _cache_entry(*, metadata: stat_result, verification: dict[str, Any]) -> dict
     }
 
 
-def _recommend(items: list[BackupStewardshipItem], *, apply: bool) -> list[str]:
+def _recommend(
+    items: list[BackupStewardshipItem],
+    *,
+    apply: bool,
+    target_backup_bytes: int | None,
+    bytes_after_candidates: int,
+) -> list[str]:
     candidates = [item for item in items if item.delete_candidate]
     failed = [item for item in items if not item.verified]
     if apply:
-        return [
+        recommendations = [
             f"Deleted {len(candidates)} redundant verified backups.",
             "Latest backups, retention-cycle-referenced backups, and failed-verification backups were preserved.",
         ]
+        if target_backup_bytes is not None and bytes_after_candidates > target_backup_bytes:
+            recommendations.append(
+                "Backup bytes still exceed the target because protected backups alone are above the budget."
+            )
+        return recommendations
     if candidates:
-        return [
+        recommendations = [
             f"{len(candidates)} redundant verified backups can be deleted after review.",
             f"Run with --apply --confirm {BACKUP_DELETE_CONFIRMATION!r} to delete only those candidates.",
         ]
+        if target_backup_bytes is not None:
+            recommendations.insert(
+                1,
+                f"Candidate set is sized to leave about {bytes_after_candidates} backup bytes against target {target_backup_bytes}.",
+            )
+        return recommendations
     if failed:
         return ["No verified redundant backups found; inspect failed-verification backups manually."]
+    if target_backup_bytes is not None:
+        return [f"Backup pressure is low under the current target budget ({target_backup_bytes} bytes)."]
     return ["Backup pressure is low under the current keep policy."]

@@ -1994,20 +1994,26 @@ class MemoryFlowTests(unittest.TestCase):
                 os.utime(path, (1000 + index, 1000 + index))
                 paths.append(path)
 
-            dry = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0)
+            dry = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0, target_backup_bytes=0)
 
             self.assertTrue(dry.passed, dry.as_dict())
             self.assertTrue(dry.dry_run)
             self.assertEqual(dry.totals["delete_candidates"], 3)
             self.assertTrue(all(path.exists() for path in paths))
 
-            blocked = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0, apply=True)
+            blocked = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+                apply=True,
+            )
             self.assertFalse(blocked.passed, blocked.as_dict())
             self.assertTrue(all(path.exists() for path in paths))
 
             applied = memory.backup_stewardship(
                 keep_latest=1,
                 keep_retention_cycles=0,
+                target_backup_bytes=0,
                 apply=True,
                 confirm="DELETE OLD BACKUPS",
             )
@@ -2040,6 +2046,7 @@ class MemoryFlowTests(unittest.TestCase):
             applied = memory.backup_stewardship(
                 keep_latest=1,
                 keep_retention_cycles=1,
+                target_backup_bytes=0,
                 apply=True,
                 confirm="DELETE OLD BACKUPS",
             )
@@ -2084,6 +2091,7 @@ class MemoryFlowTests(unittest.TestCase):
                 report = memory.backup_stewardship(
                     keep_latest=1,
                     keep_retention_cycles=0,
+                    target_backup_bytes=0,
                     apply=True,
                     confirm="DELETE OLD BACKUPS",
                 )
@@ -2095,6 +2103,84 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(new.exists())
             failed = next(item for item in report.items if Path(item.path).resolve() == old.resolve())
             self.assertIn("delete-failed-inspect-manually", failed.keep_reasons)
+
+    def test_backup_stewardship_target_budget_selects_oldest_needed_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: backup budget should delete only enough old backups.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            paths = []
+            for index in range(4):
+                path = backup_dir / f"budget-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (6000 + index, 6000 + index))
+                paths.append(path)
+            sizes = [path.stat().st_size for path in paths]
+            target = sum(sizes) - sizes[0]
+
+            report = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=target,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.totals["delete_candidates"], 1)
+            self.assertEqual(report.totals["bytes_after_candidates"], target)
+            candidates = [Path(item.path).resolve() for item in report.items if item.delete_candidate]
+            self.assertEqual(candidates, [paths[0].resolve()])
+
+    def test_backup_stewardship_preserves_active_prune_approval_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: active prune approvals keep their backup evidence.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            old = backup_dir / "old.zip"
+            approved = backup_dir / "approved.zip"
+            latest = backup_dir / "latest.zip"
+            for index, path in enumerate([old, approved, latest]):
+                memory.backup(output=path)
+                os.utime(path, (7000 + index, 7000 + index))
+            with memory.store.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO prune_approvals(
+                      id, token_hash, scope, backup_path, cold_export_path, recall_queries_json,
+                      plan_json, shadow_json, expires_at, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "approval-active",
+                        "hash-active",
+                        "alpha",
+                        str(approved),
+                        str(memory.store.root / "archive" / "cold" / "cold.zip"),
+                        "[]",
+                        "{}",
+                        "{}",
+                        "2999-01-01T00:00:00+00:00",
+                        "prepared",
+                        utc_now(),
+                    ),
+                )
+
+            report = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+                apply=True,
+                confirm="DELETE OLD BACKUPS",
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertFalse(old.exists())
+            self.assertTrue(approved.exists())
+            self.assertTrue(latest.exists())
+            kept = next(item for item in report.items if Path(item.path).resolve() == approved.resolve())
+            self.assertIn("referenced-by-active-prune-approval", kept.keep_reasons)
 
     def test_backup_stewardship_caches_unchanged_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

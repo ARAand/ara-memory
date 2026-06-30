@@ -217,7 +217,7 @@ python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
 python -m ara_memory cold-export --scope ara-memory --output .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory prune-plan --scope ara-memory --cold-export .ara-memory/archive/cold/ara-memory-cold.zip --query "current memory architecture"
@@ -445,14 +445,16 @@ dominate the local store even when live memory is small. Use
 memory:
 
 ```powershell
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --apply --confirm "DELETE OLD BACKUPS"
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --apply --confirm "DELETE OLD BACKUPS"
 ```
 
-The command is dry-run by default. Apply mode deletes only verified backups that
-are neither among the latest kept backups nor referenced by recent passing
-retention-cycle reports. Failed-verification backups are preserved for manual
-inspection instead of being silently removed.
+The command is dry-run by default. The default CLI target is 64 MiB of backup
+bytes, and candidate selection deletes only enough old redundant backups to move
+toward that budget. Apply mode deletes only verified backups that are neither
+among the latest kept backups, nor referenced by recent passing retention-cycle
+reports, nor referenced by active live-prune approvals. Failed-verification
+backups are preserved for manual inspection instead of being silently removed.
 
 ## Design Choices
 
