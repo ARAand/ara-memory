@@ -301,9 +301,11 @@ durable "what are we trying to build?" prompts. Recall gives them a dedicated
 Active Goals / Intent section, and hot memory keeps stable goals near the top so
 long-running work is steered by purpose instead of recent command noise. When a
 query asks for goals, intent, objectives, or purpose, recall focuses the hot
-state on identity, active goals, and recent decisions, and suppresses
-operational project/session summaries unless the query explicitly asks for that
-evidence.
+state on identity and active goals, and suppresses operational project/session
+summaries unless the query explicitly asks for that evidence.
+Hot memory is built as core-only: reviewed long-running goals, identity, and
+preferences may stay always-on; stable decisions, procedures, facts, failures,
+summaries, project state, and episodes remain query-selected working memory.
 Self memories are extracted from explicit Ara identity and judgment-principle
 statements such as Ara-Codex, free will, coding partner, or independent
 judgment. They are global by default and require stable promotion before

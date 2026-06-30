@@ -233,7 +233,7 @@ def _tier_for(capsule: dict[str, Any], *, risk: Any, has_active_provenance: bool
         return "archive", ["cold capsule has cold-only provenance"]
     if risk.should_quarantine or risk.should_exclude_from_hot:
         return "guarded", ["active memory is excluded from hot memory by risk policy"]
-    if _is_core_anchor(capsule):
+    if is_core_anchor(capsule):
         return "core", ["stable high-trust long-running purpose, identity, or preference anchor"]
     if status in ACTIVE_STATUSES:
         return "working", ["active query-selected memory"]
@@ -242,7 +242,7 @@ def _tier_for(capsule: dict[str, Any], *, risk: Any, has_active_provenance: bool
     return "guarded", [f"unrecognized lifecycle status: {status}"]
 
 
-def _is_core_anchor(capsule: dict[str, Any]) -> bool:
+def is_core_anchor(capsule: dict[str, Any]) -> bool:
     if capsule["status"] != MemoryStatus.STABLE.value:
         return False
     if capsule["kind"] not in CORE_KINDS:

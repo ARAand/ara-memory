@@ -250,6 +250,23 @@ def _enforce_budget(parts: list[str], budget: int) -> str:
             break
         trimmed[index] = next_part
         pack = "\n\n".join(trimmed).strip()
+    if estimate_tokens(pack) > budget:
+        compacted = _drop_empty_recall_parts(trimmed)
+        if len(compacted) < len(trimmed):
+            trimmed = compacted
+            pack = "\n\n".join(trimmed).strip()
+            while estimate_tokens(pack) > budget:
+                index = _longest_shrinkable_part(trimmed)
+                if index is None:
+                    break
+                next_part = _shrink_recall_part(trimmed[index])
+                if next_part == trimmed[index]:
+                    break
+                trimmed[index] = next_part
+                pack = "\n\n".join(trimmed).strip()
+    if estimate_tokens(pack) > budget:
+        trimmed = _drop_low_value_recall_parts(trimmed, budget=budget)
+        pack = "\n\n".join(trimmed).strip()
     return pack
 
 
@@ -296,6 +313,42 @@ def _shrink_recall_part(part: str) -> str:
         return f"{header}\n{_trim_nested_markdown(body, next_limit)}"
     compacted = compact_text(body, limit=next_limit)
     return f"{header}\n{compacted}"
+
+
+def _drop_empty_recall_parts(parts: list[str]) -> list[str]:
+    required_prefixes = ("# Ara Memory Pack", "Query:", "Scope:", "## Memory Safety Boundary", "## Hot Memory")
+    out: list[str] = []
+    for part in parts:
+        if part.startswith(required_prefixes):
+            out.append(part)
+            continue
+        if "\n" not in part:
+            out.append(part)
+            continue
+        header, body = part.split("\n", 1)
+        if header.startswith("## ") and body.strip() in {"- None found.", "- None."}:
+            continue
+        out.append(part)
+    return out
+
+
+def _drop_low_value_recall_parts(parts: list[str], *, budget: int) -> list[str]:
+    drop_order = [
+        "## Other Context",
+        "## Supporting Episodes",
+        "## Temporal Graph Hints",
+        "## Matched Tags",
+        "## Failure Warnings",
+        "## Project Memory",
+    ]
+    out = list(parts)
+    for header in drop_order:
+        if estimate_tokens("\n\n".join(out).strip()) <= budget:
+            break
+        next_out = [part for part in out if not part.startswith(header)]
+        if len(next_out) < len(out):
+            out = next_out
+    return out
 
 
 def _trim_nested_markdown(text: str, char_limit: int) -> str:
@@ -358,7 +411,6 @@ def _focus_hot_memory(hot_state: str, *, intent_query: bool) -> str:
         "Scope:",
         "## Stable Identity / Preferences",
         "## Active Goals",
-        "## Recent Decisions",
     }
     for block in blocks:
         first_line = block.splitlines()[0].strip()

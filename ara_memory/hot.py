@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ara_memory.compressors import compact_text, estimate_tokens
+from ara_memory.memory_lifecycle import is_core_anchor
 from ara_memory.models import MemoryStatus
 from ara_memory.risk import MemoryRiskAssessor
 from ara_memory.storage import MemoryStore, row_to_capsule
@@ -31,12 +32,11 @@ class HotStateBuilder:
             "# Ara Hot Memory",
             f"Scope: {scope}",
             "## Stable Identity / Preferences\n"
-            + self._section(scope=scope, kinds={"self", "preference", "fact"}, limit=6),
+            + self._section(scope=scope, kinds={"self", "preference"}, limit=6),
             "## Active Goals\n" + self._section(scope=scope, kinds={"goal"}, limit=5),
-            "## Current Project State\n" + self._section(scope=scope, kinds={"summary", "project"}, limit=8),
-            "## Procedures And Warnings\n"
-            + self._section(scope=scope, kinds={"procedure", "failure", "conflict"}, limit=8),
-            "## Recent Decisions\n" + self._section(scope=scope, kinds={"decision"}, limit=6),
+            "## Working Memory Boundary\n"
+            "- Stable decisions, procedures, summaries, project state, failures, conflicts, facts, and episodes "
+            "stay query-selected instead of always-on.",
         ]
         text = _enforce_hot_budget(parts, budget)
         path = self._path(scope)
@@ -66,7 +66,7 @@ class HotStateBuilder:
         capsules = [
             cap
             for cap in (row_to_capsule(row) for row in rows if row["status"] == "stable" and row["kind"] in kinds)
-            if not risk.assess_capsule(cap).should_exclude_from_hot
+            if is_core_anchor(cap) and not risk.assess_capsule(cap).should_exclude_from_hot
         ]
         capsules.sort(
             key=lambda cap: (
@@ -104,16 +104,10 @@ class HotStateBuilder:
 
 
 def _hot_kind_priority(kind: str) -> int:
-    if kind == "summary":
-        return 5
     if kind == "goal":
         return 5
-    if kind in {"decision", "procedure", "failure", "conflict"}:
+    if kind in {"self", "preference"}:
         return 4
-    if kind in {"self", "preference", "fact"}:
-        return 3
-    if kind == "project":
-        return 2
     return 1
 
 
@@ -142,8 +136,6 @@ def _initial_hot_limit(part: str, budget: int, part_count: int) -> int:
     base = max(160, int((budget * 2.35) / max(1, part_count)))
     if part.startswith("# Ara Hot Memory") or part.startswith("Scope:"):
         return max(base, len(part))
-    if part.startswith("## Current Project State"):
-        return max(base, int(budget * 0.9))
     return base
 
 

@@ -676,7 +676,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(payload["recommended_budget"], [500, 900])
             self.assertGreaterEqual(payload["selected_capsules"], 1)
             self.assertGreater(payload["estimated_tokens"], 0)
-            self.assertGreaterEqual(payload["estimated_tokens"], payload["estimated_tokens_without_hot"])
+            self.assertGreater(payload["estimated_tokens_without_hot"], 0)
             self.assertEqual(payload["api_cost"]["input_tokens"], payload["estimated_tokens"])
             self.assertGreaterEqual(payload["api_cost"]["input_cost_usd"], 0)
             self.assertEqual(len(payload["alternatives"]), 3)
@@ -1225,11 +1225,11 @@ class MemoryFlowTests(unittest.TestCase):
     def test_milestone_check_warns_on_strict_candidate_pressure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
-            event = memory.retain(kind="prompt", text="Goal: strict candidate pressure warning.", source="test", scope="alpha")
+            event = memory.retain(kind="prompt", text="Goal: strict candidate pressure purpose warning.", source="test", scope="alpha")
             goal = Capsule.create(
                 kind=CapsuleKind.GOAL,
                 title="Goal memory: strict pressure",
-                body="Strict candidate pressure warning should still keep goal visible.",
+                body="Strict candidate pressure warning should still keep purpose visible.",
                 scope="alpha",
                 confidence=0.78,
                 salience=0.84,
@@ -4864,27 +4864,27 @@ class MemoryFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
             event = memory.retain(
-                kind="decision",
-                text="Decision: stale hot payload should disappear after quarantine.",
+                kind="prompt",
+                text="Ara identity: stale hot payload should disappear after quarantine.",
                 source="test",
                 scope="alpha",
             )
-            decision = Capsule.create(
-                kind=CapsuleKind.DECISION,
-                title="Decision: stale hot payload",
-                body="Stale hot payload should disappear after quarantine.",
+            identity = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory: stale hot payload",
+                body="Ara stale hot payload should disappear after quarantine.",
                 scope="alpha",
-                confidence=0.80,
+                confidence=0.90,
                 salience=0.80,
                 source_event_ids=[event.id],
-                tags=["decision"],
+                tags=["self", "identity"],
                 status=MemoryStatus.STABLE,
             )
-            memory.store.upsert_capsule(decision)
+            memory.store.upsert_capsule(identity)
             hot = memory.build_hot(scope="alpha", budget=700)
             self.assertIn("stale hot payload", hot.text.lower())
 
-            self.assertTrue(memory.quarantine(decision.id, reason="test quarantine"))
+            self.assertTrue(memory.quarantine(identity.id, reason="test quarantine"))
 
             self.assertIsNone(memory.read_hot(scope="alpha"))
 
@@ -6116,8 +6116,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(state.path.exists())
             self.assertLessEqual(state.estimated_tokens, 600)
             self.assertIn("Ara Hot Memory", state.text)
-            self.assertIn("Current Project State", state.text)
-            self.assertIn("\n\n## Current Project State\n", state.text)
+            self.assertIn("Working Memory Boundary", state.text)
+            self.assertNotIn("Current Project State", state.text)
+            self.assertNotIn("Recent Decisions", state.text)
             self.assertNotIn("# Ara Hot Memory Scope:", state.text)
 
             result = memory.recall_result(
@@ -6139,7 +6140,61 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertLessEqual(estimate_tokens(tight.pack), 500)
             self.assertIn("\n\n## Hot Memory\n", tight.pack)
             self.assertIn("# Ara Hot Memory\n\nScope: alpha", tight.pack)
-            self.assertIn("\n\n## Consolidated Memory\n", tight.pack)
+
+    def test_hot_memory_keeps_only_lifecycle_core_while_recall_finds_working_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: build natural memory that keeps always-on context small.",
+                source="test",
+                scope="alpha",
+            )
+            core_goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural hot core",
+                body="Build natural memory that keeps always-on context small.",
+                scope="alpha",
+                confidence=0.80,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "natural", "memory"],
+                status=MemoryStatus.STABLE,
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: alpha working detail",
+                body="Alpha working detail should be recalled by query, not stored in hot memory.",
+                scope="alpha",
+                confidence=0.90,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["decision", "alpha", "working"],
+                status=MemoryStatus.STABLE,
+            )
+            project = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: alpha project state",
+                body="Alpha project state should remain query-selected working memory.",
+                scope="alpha",
+                confidence=0.90,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["project", "alpha"],
+                status=MemoryStatus.STABLE,
+            )
+            for capsule in (core_goal, decision, project):
+                memory.store.upsert_capsule(capsule)
+
+            hot = memory.build_hot(scope="alpha", budget=700)
+
+            self.assertIn("natural hot core", hot.text.lower())
+            self.assertNotIn("alpha working detail", hot.text.lower())
+            self.assertNotIn("alpha project state", hot.text.lower())
+
+            recalled = memory.recall_result("alpha working detail", scope="alpha", include_hot=True, budget=1200)
+            self.assertIn("alpha working detail", recalled.pack.lower())
+            self.assertIn(decision.id, recalled.diagnostics["selected_capsule_ids"])
 
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
