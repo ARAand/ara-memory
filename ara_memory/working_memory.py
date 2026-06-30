@@ -227,13 +227,15 @@ def record_memory_impact(
         f"Outcome: {compact_text(outcome, limit=500)}\n"
         f"Helped: {helped if helped is not None else 'unknown'}"
     )
-    return memory.retain(
+    event = memory.retain(
         kind="note",
         text=text,
         source=source,
         scope=scope,
         metadata={"working_memory_impact": payload},
     )
+    memory.store.record_working_memory_impact(event)
+    return event
 
 
 def _build_items(capsules: list[dict[str, Any]], cue: CueFrame) -> list[WorkingMemoryItem]:

@@ -197,8 +197,10 @@ a full pack, projects only items that fit the working-memory output budget,
 then emits three compact sections: Keep In Mind, Risk / Friction, and This
 Should Change My Next Action. Use `working-memory-impact` after a turn to record
 which capsule ids actually changed the outcome; those notes let later
-consolidation learn which memories were useful instead of only which ones were
-stored.
+recall ranking learn which memories were useful instead of only which ones were
+stored. Matching positive impact gives a small capped boost; matching negative
+impact gives a small capped penalty, so feedback guides recall without turning
+it into an unchecked reward signal.
 
 ## Codex Skill
 

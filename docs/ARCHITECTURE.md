@@ -51,6 +51,7 @@ recall_candidates(query, scope)
   -> FTS/BM25 capsule search
   -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
+  -> cue-matched working-memory-impact boost/penalty with bounded magnitude
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
   -> suppress no-evidence salience fallback bodies
   -> ranked capsule ids and diagnostics without rendering a pack
@@ -231,12 +232,15 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 21. Treat working memory as a cue-led action pack, not another cache: it should
     change the next step, record whether it helped, and stay empty when recall
     has no visible evidence.
+22. Treat feedback as bounded evidence, not reward maximization: impact rows may
+    nudge ranking only when their cue overlaps the current query, and the boost
+    or penalty is capped.
 
 ## Future Extension Points
 
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
-- Impact-weighted recall edges from `working-memory-impact` events.
+- Impact feedback analytics for drift, overfitting, and stale helpfulness.
 - OCR/caption ingestion for images.
 - Memvid-style cold archives for large old sessions.
 - Small local curator model for better consolidation.

@@ -9,10 +9,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from ara_memory.compressors import extract_keywords
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -215,6 +216,23 @@ CREATE TABLE IF NOT EXISTS memory_review_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON memory_review_queue(scope, status, priority);
+
+CREATE TABLE IF NOT EXISTS working_memory_impacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  cue TEXT NOT NULL,
+  cue_terms_json TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  helped INTEGER,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(event_id) REFERENCES events(id),
+  UNIQUE(event_id, capsule_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wmi_capsule_scope ON working_memory_impacts(capsule_id, scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_wmi_scope_time ON working_memory_impacts(scope, created_at);
 """
 
 
@@ -238,6 +256,8 @@ class MemoryStore:
                 _rebuild_capsule_source_events(conn)
             if old_version < 5:
                 _sync_capsules_fts(conn)
+            if old_version < 6:
+                _sync_working_memory_impacts(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -280,6 +300,7 @@ class MemoryStore:
                 (fingerprint,),
             ).fetchone()
             if existing is not None:
+                _sync_working_memory_impact_event(conn, row_to_event(existing))
                 return row_to_event(existing)
 
             with ledger_path.open("a", encoding="utf-8") as fh:
@@ -308,7 +329,13 @@ class MemoryStore:
                 "INSERT INTO event_fingerprints(fingerprint, event_id, created_at) VALUES (?, ?, ?)",
                 (fingerprint, event.id, utc_now()),
             )
+            _sync_working_memory_impact_event(conn, event)
             return event
+
+    def record_working_memory_impact(self, event: Event) -> None:
+        self.init()
+        with self.session() as conn:
+            _sync_working_memory_impact_event(conn, event)
 
     def upsert_capsule(self, capsule: Capsule) -> None:
         self.init()
@@ -770,6 +797,44 @@ class MemoryStore:
                 )
             )
 
+    def list_working_memory_impacts(
+        self,
+        *,
+        scope: str,
+        capsule_ids: list[str],
+        include_global: bool = True,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        self.init()
+        if not capsule_ids or limit <= 0:
+            return []
+        unique_ids = list(dict.fromkeys(capsule_ids))
+        rows: list[sqlite3.Row] = []
+        scope_filter = "(scope = ? OR scope = 'global')" if include_global and scope != "global" else "scope = ?"
+        with self.session() as conn:
+            for chunk in _chunks(unique_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                params: list[Any] = [scope, *chunk, limit]
+                rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT *
+                        FROM working_memory_impacts
+                        WHERE {scope_filter}
+                          AND capsule_id IN ({placeholders})
+                        ORDER BY created_at DESC, id ASC
+                        LIMIT ?
+                        """,
+                        params,
+                    )
+                )
+        out: list[dict[str, Any]] = []
+        for row in rows[:limit]:
+            item = dict(row)
+            item["cue_terms"] = json.loads(item.pop("cue_terms_json"))
+            out.append(item)
+        return out
+
     def record_consolidation_run(
         self,
         *,
@@ -820,6 +885,69 @@ def row_to_capsule(row: sqlite3.Row) -> dict[str, Any]:
 def _chunks(items: list[str], size: int) -> Iterator[list[str]]:
     for index in range(0, len(items), size):
         yield items[index : index + size]
+
+
+def _sync_working_memory_impacts(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        WHERE source = 'working-memory-impact'
+           OR metadata_json LIKE '%working_memory_impact%'
+        ORDER BY created_at ASC
+        """
+    )
+    for row in rows:
+        _sync_working_memory_impact_event(conn, row_to_event(row))
+
+
+def _sync_working_memory_impact_event(conn: sqlite3.Connection, event: Event) -> None:
+    payload = event.metadata.get("working_memory_impact")
+    if not isinstance(payload, dict):
+        return
+    rows = _working_memory_impact_rows(event, payload)
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO working_memory_impacts(
+          event_id, scope, cue, cue_terms_json, capsule_id, outcome, helped, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+
+def _working_memory_impact_rows(event: Event, payload: dict[str, Any]) -> list[tuple[Any, ...]]:
+    cue = str(payload.get("cue") or "").strip()
+    outcome = str(payload.get("outcome") or "").strip()
+    capsule_ids = [
+        str(capsule_id).strip()
+        for capsule_id in payload.get("capsule_ids", [])
+        if str(capsule_id).strip()
+    ]
+    if not capsule_ids:
+        return []
+    helped_raw = payload.get("helped")
+    helped = 1 if helped_raw is True else 0 if helped_raw is False else None
+    cue_terms = extract_keywords(cue or outcome, limit=24)
+    cue_terms_json = json.dumps(cue_terms, ensure_ascii=False)
+    rows = []
+    for capsule_id in dict.fromkeys(capsule_ids):
+        rows.append(
+            (
+                event.id,
+                event.scope,
+                cue,
+                cue_terms_json,
+                capsule_id,
+                outcome,
+                helped,
+                event.created_at,
+            )
+        )
+    return rows
 
 
 def row_to_event(row: sqlite3.Row) -> Event:

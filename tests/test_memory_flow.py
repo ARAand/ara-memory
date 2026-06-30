@@ -7302,6 +7302,105 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(result.diagnostics["selected_capsule_ids"][0], direct.id)
             self.assertEqual(result.diagnostics["renderable_capsule_ids"][0], direct.id)
 
+    def test_working_memory_helpful_impact_boosts_matching_recall_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            helped = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback tested path",
+                body="Deploy rollback should use the tested path that restored service.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.45,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "tested"],
+                status=MemoryStatus.STABLE,
+            )
+            louder = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback noisy path",
+                body="Deploy rollback noisy path is related but less useful.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.75,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "noisy"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(helped)
+            memory.store.upsert_capsule(louder)
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy rollback",
+                capsule_ids=[helped.id],
+                outcome="The tested rollback path restored service.",
+                helped=True,
+            )
+
+            result = memory.recall_candidates(
+                "deploy rollback",
+                scope="alpha",
+                budget=900,
+                include_global=False,
+                include_hot=False,
+            )
+
+            self.assertEqual(result.capsules[0]["id"], helped.id)
+            self.assertIn(helped.id, result.diagnostics["impact_boosted_capsules"])
+            self.assertTrue(result.diagnostics["impact_feedback_used"])
+
+    def test_working_memory_negative_impact_penalizes_matching_recall_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            hurt = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback stale path",
+                body="Deploy rollback stale path matched but caused delay.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.75,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "stale"],
+                status=MemoryStatus.STABLE,
+            )
+            safer = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: deploy rollback safer path",
+                body="Deploy rollback safer path is the current validated option.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.45,
+                source_event_ids=[],
+                tags=["deploy", "rollback", "safer"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(hurt)
+            memory.store.upsert_capsule(safer)
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy rollback",
+                capsule_ids=[hurt.id],
+                outcome="The stale rollback path slowed the fix.",
+                helped=False,
+            )
+
+            result = memory.recall_candidates(
+                "deploy rollback",
+                scope="alpha",
+                budget=900,
+                include_global=False,
+                include_hot=False,
+            )
+
+            self.assertLess(
+                result.diagnostics["selected_capsule_ids"].index(safer.id),
+                result.diagnostics["selected_capsule_ids"].index(hurt.id),
+            )
+            self.assertIn(hurt.id, result.diagnostics["impact_penalized_capsules"])
+            self.assertTrue(result.diagnostics["impact_feedback_used"])
+
     def test_working_memory_suppresses_no_evidence_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -7422,6 +7521,13 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(event.source, "working-memory-impact")
             self.assertEqual(metadata["working_memory_impact"]["capsule_ids"], ["cap_a", "cap_b"])
             self.assertTrue(metadata["working_memory_impact"]["helped"])
+            rows = memory.store.list_working_memory_impacts(
+                scope="alpha",
+                capsule_ids=["cap_a", "cap_b"],
+                include_global=False,
+            )
+            self.assertEqual([row["capsule_id"] for row in rows], ["cap_a", "cap_b"])
+            self.assertEqual(rows[0]["cue_terms"], ["recall", "fallback"])
 
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -76,6 +76,17 @@ class RecallCompiler:
                 include_global=include_global,
             )
         filtered_candidates = _filter_recall_candidates(self.store, candidates)
+        impact_rows = self.store.list_working_memory_impacts(
+            scope=scope,
+            capsule_ids=[str(cap["id"]) for cap in filtered_candidates],
+            include_global=include_global,
+            limit=500,
+        )
+        impact_boosts, impact_counts = _impact_boosts(impact_rows, terms)
+        for cap in filtered_candidates:
+            capsule_id = str(cap["id"])
+            cap["impact_boost"] = impact_boosts.get(capsule_id, 0.0)
+            cap["impact_match_count"] = impact_counts.get(capsule_id, 0)
         capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:candidate_limit]
         low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
         renderable_capsules = [] if low_evidence_fallback_suppressed else _renderable_capsules(capsules, intent_query=intent_query)
@@ -100,6 +111,18 @@ class RecallCompiler:
             "recent_supplement_used": any(
                 cap.get("recall_match_source") == "recent_supplement" for cap in capsules
             ),
+            "impact_feedback_used": any(float(cap.get("impact_boost") or 0.0) != 0.0 for cap in capsules),
+            "impact_feedback_rows": len(impact_rows),
+            "impact_boosted_capsules": [
+                cap["id"]
+                for cap in capsules
+                if float(cap.get("impact_boost") or 0.0) > 0.0
+            ],
+            "impact_penalized_capsules": [
+                cap["id"]
+                for cap in capsules
+                if float(cap.get("impact_boost") or 0.0) < 0.0
+            ],
             "temporal_query": temporal_query,
             "intent_query": intent_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
@@ -249,6 +272,10 @@ class RecallCompiler:
             "fallback_used": bool(candidate_result.diagnostics["fallback_used"]),
             "salience_supplement_used": bool(candidate_result.diagnostics["salience_supplement_used"]),
             "recent_supplement_used": bool(candidate_result.diagnostics["recent_supplement_used"]),
+            "impact_feedback_used": bool(candidate_result.diagnostics["impact_feedback_used"]),
+            "impact_feedback_rows": int(candidate_result.diagnostics["impact_feedback_rows"]),
+            "impact_boosted_capsules": list(candidate_result.diagnostics["impact_boosted_capsules"]),
+            "impact_penalized_capsules": list(candidate_result.diagnostics["impact_penalized_capsules"]),
             "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
             "relevance_score_avg": (
@@ -704,6 +731,7 @@ def _recall_score(cap: dict, terms: list[str], *, recency_boost: float = 0.0) ->
     score += tag_hits * 0.35
     score += min(2.4, title_hits * 0.45 + body_hits * 0.18)
     score += _bm25_bonus(cap)
+    score += float(cap.get("impact_boost") or 0.0)
     score += recency_boost
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score
@@ -719,6 +747,39 @@ def _should_suppress_low_evidence_fallback(capsules: list[dict], terms: list[str
         for cap in capsules
     )
     return not _matched_query_terms(evidence, terms)
+
+
+def _impact_boosts(rows: list[dict[str, Any]], terms: list[str]) -> tuple[dict[str, float], dict[str, int]]:
+    if not rows:
+        return {}, {}
+    query_stems = {_stem(term) for term in terms if _stem(term)}
+    boosts: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        capsule_id = str(row.get("capsule_id") or "")
+        if not capsule_id:
+            continue
+        cue_terms = [str(term) for term in row.get("cue_terms", []) if str(term)]
+        cue_stems = {_stem(term) for term in cue_terms if _stem(term)}
+        if query_stems and cue_stems:
+            overlap = len(query_stems.intersection(cue_stems))
+            if overlap <= 0:
+                continue
+            similarity = overlap / max(1, min(len(query_stems), len(cue_stems)))
+        else:
+            similarity = 0.25
+        helped = row.get("helped")
+        if helped == 1:
+            base = 0.85
+        elif helped == 0:
+            base = -1.0
+        else:
+            base = 0.18
+        recency_decay = max(0.45, 1.0 - min(index, 20) * 0.025)
+        delta = base * (0.35 + 0.65 * similarity) * recency_decay
+        boosts[capsule_id] = max(-1.25, min(1.5, boosts.get(capsule_id, 0.0) + delta))
+        counts[capsule_id] = counts.get(capsule_id, 0) + 1
+    return boosts, counts
 
 
 def _recency_boosts(capsules: list[dict]) -> dict[str, float]:
