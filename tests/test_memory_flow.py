@@ -1159,6 +1159,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "operational health",
                     "milestone readiness",
                     "cold-memory stewardship",
+                    "scheduled worker script readiness",
                 },
             )
             self.assertIn("Ara Goal Roadmap", roadmap.to_text())
@@ -3409,6 +3410,32 @@ class MemoryFlowTests(unittest.TestCase):
             root = Path(tmp)
             memory = AraMemory(root / "memory")
             output = root / "install-worker-task.ps1"
+            manifest = root / "examples" / "recall_regression_manifest.json"
+            baseline = root / ".ara-memory" / "archive" / "recall-regression-baseline.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            baseline.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(
+                json.dumps({"cases": [{"name": "worker", "query": "scheduled worker"}]}),
+                encoding="utf-8",
+            )
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "cases": [
+                            {
+                                "name": "worker",
+                                "passed": True,
+                                "details": {
+                                    "estimated_tokens": 100,
+                                    "selected_capsule_ids": ["capsule-1"],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             result = memory.write_worker_schedule(
                 output=output,
@@ -3428,14 +3455,174 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("worker-loop", script)
             self.assertIn("--iterations", script)
             self.assertIn("test-scope", script)
-            self.assertIn("Set-Location -LiteralPath '$WorkingDirectory'", script)
+            self.assertIn("Set-Location -LiteralPath `$WorkingDirectory", script)
             self.assertIn("-EncodedCommand", script)
             self.assertIn("worker-task.log", script)
-            self.assertIn("*>> '$LogPath'", script)
+            self.assertIn("& `$PythonPath @WorkerArgs *>> `$LogPath", script)
             self.assertIn("New-TimeSpan -Minutes 7", script)
+            self.assertIn("ExecutionTimeLimit", script)
+            self.assertIn("StartWhenAvailable", script)
+            self.assertIn("RestartCount 2", script)
             self.assertIn("Unregister-ScheduledTask", uninstall_script)
             self.assertIn("Get-ScheduledTaskInfo", status_script)
             self.assertIn("Get-Content -LiteralPath $LogPath -Tail 40", status_script)
+            verification = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertTrue(verification.passed, verification.as_dict())
+            self.assertEqual(verification.details["interval_minutes"], 7)
+            strict = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=3,
+            )
+            self.assertFalse(strict.passed)
+            self.assertTrue(any("exceeds max" in item for item in strict.issues))
+            wrong_scope = memory.verify_worker_schedule(
+                output=output,
+                scope="AraMemoryTestWorker",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(wrong_scope.passed)
+            self.assertTrue(any("does not match expected" in item for item in wrong_scope.issues))
+            baseline.write_text("[]", encoding="utf-8")
+            invalid_baseline = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(invalid_baseline.passed)
+            self.assertTrue(any("regression baseline is missing or invalid" in item for item in invalid_baseline.issues))
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "cases": [
+                            {
+                                "name": "worker",
+                                "passed": True,
+                                "details": {
+                                    "estimated_tokens": 100,
+                                    "selected_capsule_ids": ["capsule-1"],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output.write_text(
+                script.replace("    '1',\n    '--interval-seconds'", "    '2',\n    '--interval-seconds'"),
+                encoding="utf-8",
+            )
+            unsafe_loop = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(unsafe_loop.passed)
+            self.assertTrue(any("--iterations 1" in item for item in unsafe_loop.issues))
+
+    def test_worker_schedule_verify_cli_reports_missing_or_valid_scripts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            output = root / "install-worker-task.ps1"
+            manifest = root / "examples" / "recall_regression_manifest.json"
+            baseline = root / ".ara-memory" / "archive" / "recall-regression-baseline.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            baseline.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(
+                json.dumps({"cases": [{"name": "worker", "query": "scheduled worker"}]}),
+                encoding="utf-8",
+            )
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "cases": [
+                            {
+                                "name": "worker",
+                                "passed": True,
+                                "details": {
+                                    "estimated_tokens": 100,
+                                    "selected_capsule_ids": ["capsule-1"],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            missing = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "worker-schedule-verify",
+                    "--output",
+                    str(output),
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("missing install script", missing.stdout)
+
+            memory.write_worker_schedule(
+                output=output,
+                repo=root,
+                scope="alpha",
+                interval_minutes=5,
+                python_executable=Path(sys.executable),
+            )
+            valid = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "worker-schedule-verify",
+                    "--output",
+                    str(output),
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            payload = json.loads(valid.stdout)
+            self.assertTrue(payload["passed"])
+            self.assertEqual(payload["details"]["interval_minutes"], 5)
+            text = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "worker-schedule-verify",
+                    "--output",
+                    str(output),
+                    "--scope",
+                    "alpha",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(text.returncode, 0, text.stderr)
+            self.assertIn("PASS: worker schedule script readiness", text.stdout)
+            self.assertIn("Not checked:", text.stdout)
 
     def test_sleep_promotes_merges_and_records_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

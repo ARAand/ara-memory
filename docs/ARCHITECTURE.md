@@ -123,6 +123,12 @@ the same spool and SQLite store.
 `worker-loop` is the scheduler-friendly wrapper around `worker`. In production,
 an OS scheduler can call it with `--iterations 1`; in a foreground session it can
 run multiple iterations with a fixed interval and compact reports.
+`worker-schedule` writes reviewable Windows Task Scheduler install/status/
+uninstall scripts, and `worker-schedule-verify` checks that those scripts use
+structured one-shot worker-loop arguments, prevent overlapping scheduled
+instances, keep valid recall regression gates attached, and stay inside the
+configured interval budget. This is script-readiness evidence, not proof that
+the task is installed or recently succeeded.
 
 ## Memory Organs
 
@@ -162,6 +168,7 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 12. Recover stale processing records before draining pending work.
 13. Triage review queues by groups before asking a human or model to inspect individual items.
 14. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
+15. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 
 ## Future Extension Points
 

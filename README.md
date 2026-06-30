@@ -195,6 +195,7 @@ python -m ara_memory conflict-adjudicate --scope ara-memory
 python -m ara_memory worker --scope ara-memory --doctor-query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 60 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory worker-schedule --output .ara-memory/scripts/install-worker-task.ps1 --interval-minutes 5 --scope ara-memory
+python -m ara_memory worker-schedule-verify --output .ara-memory/scripts/install-worker-task.ps1 --scope ara-memory
 python -m ara_memory quality --scope ara-memory --persist
 python -m ara_memory review-queue --scope ara-memory
 python -m ara_memory review-triage --scope ara-memory
@@ -304,7 +305,10 @@ the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,
 runs the review worker in dry-run mode by
 default, summarizes the review queue through triage, runs doctor, optionally runs recall regression, and finishes with
-lossless maintenance. Use an OS scheduler to run it periodically; keep
+lossless maintenance. Its default is conservative, not read-only: it does not
+apply review-worker promotions/quarantines unless `--apply-review` is set, but
+it still drains queued turns, writes lossless summaries, persists quality scores,
+and runs storage maintenance. Use an OS scheduler to run it periodically; keep
 `--apply-review` off unless the dry-run output has already been reviewed. The
 worker takes `.ara-memory/locks/worker.lock` by default, so overlapping scheduled
 runs skip safely instead of draining the same queue twice. Use
@@ -320,6 +324,50 @@ running `worker-loop --iterations 1` periodically. It also writes matching
 status and uninstall scripts next to the install script, and routes scheduled
 worker output to `.ara-memory/logs/worker-task.log`. It does not register the
 task itself; inspect the generated scripts before running them.
+`worker-schedule-verify` checks that the install/status/uninstall scripts exist,
+use structured worker arguments for `worker-loop --iterations 1`, keep
+overlapping runs ignored, include valid recall regression gates, and stay within
+the configured interval budget. This is script-readiness evidence only: after
+reviewing the scripts, install with `.ara-memory/scripts/install-worker-task.ps1`,
+inspect with `.ara-memory/scripts/status-worker-task.ps1`, and remove with
+`.ara-memory/scripts/uninstall-worker-task.ps1`.
+It does not prove that the task is installed, enabled, running under the intended
+Windows account, able to execute Python, or producing healthy worker logs.
+Schedule verification itself does not spend AI API tokens; it reads local scripts
+and JSON regression files. Scheduled worker runs are local/deterministic by
+default and only spend external model/API cost if an external advisor/model
+wrapper is configured for a path the worker drains.
+
+Always-on worker runbook:
+
+```powershell
+cd C:\Users\Owner\Documents\R&D
+
+python -m ara_memory health --scope ara-memory --query "current memory health" --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory worker-loop --scope ara-memory --iterations 1 --interval-seconds 0 --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+
+python -m ara_memory worker-schedule --repo . --output .ara-memory/scripts/install-worker-task.ps1 --task-name AraMemoryWorker --interval-minutes 5 --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory worker-schedule-verify --output .ara-memory/scripts/install-worker-task.ps1 --scope ara-memory
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\.ara-memory\scripts\install-worker-task.ps1
+Start-ScheduledTask -TaskName AraMemoryWorker
+powershell -NoProfile -ExecutionPolicy Bypass -File .\.ara-memory\scripts\status-worker-task.ps1
+
+Stop-ScheduledTask -TaskName AraMemoryWorker
+Disable-ScheduledTask -TaskName AraMemoryWorker
+Enable-ScheduledTask -TaskName AraMemoryWorker
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\.ara-memory\scripts\uninstall-worker-task.ps1
+Get-ScheduledTask -TaskName AraMemoryWorker -ErrorAction SilentlyContinue
+```
+
+Do not install if `worker-schedule-verify` fails. If it reports missing
+`WorkerArgs`, regenerate the scripts with current `worker-schedule` instead of
+patching older scripts by hand. For recovery, stop or disable the task first,
+inspect `.ara-memory/logs/worker-task.log`, run the same `worker-loop` command
+in the foreground, inspect `.ara-memory/locks/worker.lock/owner.json`, lower
+stale thresholds only after confirming no worker is alive, and inspect
+`.ara-memory/spool/failed/` before replaying or rejecting failed envelopes.
 `maintenance` runs lossless storage upkeep: FTS optimize, WAL checkpoint, SQLite
 integrity check, and VACUUM.
 `retention` reports status/kind distribution and cold memory candidates before

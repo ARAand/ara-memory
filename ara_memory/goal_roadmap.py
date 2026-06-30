@@ -56,6 +56,7 @@ def build_goal_roadmap(
     scope: str = "global",
     regression_cases: list[Any] | None = None,
     regression_baseline: dict[str, Any] | None = None,
+    repair_hot: bool = False,
 ) -> GoalRoadmap:
     health = memory.health(
         scope=scope,
@@ -63,16 +64,21 @@ def build_goal_roadmap(
         regression_cases=regression_cases,
         regression_baseline=regression_baseline,
     )
-    purpose = memory.purpose_check(scope=scope, repair_hot=True)
-    identity = memory.identity_check(scope=scope, repair_hot=True)
+    purpose = memory.purpose_check(scope=scope, repair_hot=repair_hot)
+    identity = memory.identity_check(scope=scope, repair_hot=repair_hot)
     failure_audit = memory.failure_kind_audit(scope=scope, statuses=["candidate", "stable"], dry_run=True)
     self_audit = memory.self_kind_audit(scope=scope, statuses=["candidate", "stable"], dry_run=True)
     milestone = memory.milestone_check(
         scope=scope,
         regression_cases=regression_cases,
         regression_baseline=regression_baseline,
+        repair_hot=repair_hot,
     )
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
+    worker_schedule = memory.verify_worker_schedule(
+        output=memory.store.root / "scripts" / "install-worker-task.ps1",
+        scope=scope,
+    )
     context = memory.recall_context(
         "current Ara memory architecture, purpose, identity, and next work",
         scope=scope,
@@ -130,6 +136,12 @@ def build_goal_roadmap(
             _cold_evidence(health, cold_stewardship),
             "Run cold-stewardship to inspect cold groups and keep retention-cycle evidence current before live pruning.",
         ),
+        RoadmapItem(
+            "scheduled worker script readiness",
+            "pass" if worker_schedule.passed else "watch",
+            _worker_schedule_evidence(worker_schedule),
+            "Run worker-schedule, verify the generated scripts, then separately install and inspect the scheduled task.",
+        ),
     ]
     for item in items:
         if item.status == "pass":
@@ -152,6 +164,18 @@ def _cold_evidence(health: Any, cold_stewardship: Any) -> str:
     if retention:
         parts.append(retention.detail)
     return "; ".join(parts) if parts else "no cold pressure signal"
+
+
+def _worker_schedule_evidence(worker_schedule: Any) -> str:
+    details = worker_schedule.details
+    if worker_schedule.passed:
+        return (
+            f"script={worker_schedule.path}, interval={details.get('interval_minutes')}m, "
+            f"task={details.get('task_name')}"
+        )
+    if worker_schedule.issues:
+        return "; ".join(worker_schedule.issues[:3])
+    return f"script={worker_schedule.path}"
 
 
 def _status(items: list[RoadmapItem]) -> str:

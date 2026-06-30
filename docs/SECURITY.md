@@ -39,6 +39,7 @@
 - `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`.
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files back to pending before draining.
+- `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
 - Backups include durable spool envelopes and `verify-backup` runs SQLite foreign-key checks.
 - `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
@@ -60,6 +61,8 @@
 - Treat stale lock removal as an operational recovery step; lower `--lock-stale-seconds` only for known-crashed workers.
 - Lower `--processing-stale-seconds` only when you know no worker is still processing those envelopes.
 - Run `worker-loop` with `--iterations 1` under external schedulers unless a foreground operator is watching the loop output.
+- Run `worker-schedule-verify` after generating or editing scheduled-worker scripts and before installing them; verify the installed task and recent worker log separately.
+- Treat `worker-schedule-verify` as pre-install static evidence only; runtime evidence requires the generated status script plus recent worker log review.
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
 - Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
 

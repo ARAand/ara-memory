@@ -185,6 +185,11 @@ def main(argv: list[str] | None = None) -> int:
     goal_roadmap.add_argument("--scope", default="global")
     goal_roadmap.add_argument("--regression-manifest", type=Path, default=None)
     goal_roadmap.add_argument("--regression-baseline", type=Path, default=None)
+    goal_roadmap.add_argument(
+        "--repair-hot",
+        action="store_true",
+        help="Rebuild hot memory if purpose/identity checks need it.",
+    )
     goal_roadmap.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
@@ -321,16 +326,47 @@ def main(argv: list[str] | None = None) -> int:
     worker_loop.add_argument("--report-item-limit", type=int, default=20)
     worker_loop.add_argument("--no-lock", action="store_true")
     worker_loop.add_argument("--lock-stale-seconds", type=int, default=3600)
-    worker_schedule = sub.add_parser("worker-schedule")
-    worker_schedule.add_argument("--output", type=Path, default=Path(".ara-memory") / "scripts" / "install-worker-task.ps1")
-    worker_schedule.add_argument("--repo", type=Path, default=Path.cwd())
-    worker_schedule.add_argument("--task-name", default="AraMemoryWorker")
-    worker_schedule.add_argument("--interval-minutes", type=int, default=5)
-    worker_schedule.add_argument("--scope", default="ara-memory")
-    worker_schedule.add_argument("--python", type=Path, default=None)
-    worker_schedule.add_argument("--regression-manifest", type=Path, default=None)
-    worker_schedule.add_argument("--regression-baseline", type=Path, default=None)
-    worker_schedule.add_argument("--log-path", type=Path, default=None)
+    worker_schedule = sub.add_parser(
+        "worker-schedule",
+        description="Write reviewable Windows Task Scheduler scripts for a one-shot Ara Memory worker loop.",
+    )
+    worker_schedule.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".ara-memory") / "scripts" / "install-worker-task.ps1",
+        help="Path for the generated install script.",
+    )
+    worker_schedule.add_argument("--repo", type=Path, default=Path.cwd(), help="Repository working directory.")
+    worker_schedule.add_argument("--task-name", default="AraMemoryWorker", help="Windows scheduled task name.")
+    worker_schedule.add_argument("--interval-minutes", type=int, default=5, help="Scheduler repeat interval.")
+    worker_schedule.add_argument("--scope", default="ara-memory", help="Memory scope for scheduled worker runs.")
+    worker_schedule.add_argument("--python", type=Path, default=None, help="Python executable to run.")
+    worker_schedule.add_argument("--regression-manifest", type=Path, default=None, help="Recall regression manifest.")
+    worker_schedule.add_argument("--regression-baseline", type=Path, default=None, help="Recall regression baseline.")
+    worker_schedule.add_argument("--log-path", type=Path, default=None, help="Scheduled worker log path.")
+    worker_schedule_verify = sub.add_parser(
+        "worker-schedule-verify",
+        description="Statically verify generated scheduled-worker scripts before installation.",
+    )
+    worker_schedule_verify.add_argument(
+        "--output",
+        type=Path,
+        default=Path(".ara-memory") / "scripts" / "install-worker-task.ps1",
+        help="Generated install script to verify.",
+    )
+    worker_schedule_verify.add_argument("--scope", default="ara-memory", help="Expected worker scope.")
+    worker_schedule_verify.add_argument(
+        "--max-interval-minutes",
+        type=int,
+        default=15,
+        help="Maximum allowed repetition interval in the generated scheduled task.",
+    )
+    worker_schedule_verify.add_argument(
+        "--no-regression-gates",
+        action="store_true",
+        help="Do not require valid recall-regression manifest and baseline paths.",
+    )
+    worker_schedule_verify.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--scope", default="global")
     doctor.add_argument("--query", default="current memory state")
@@ -757,6 +793,7 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             regression_cases=cases,
             regression_baseline=baseline,
+            repair_hot=args.repair_hot,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
@@ -979,6 +1016,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
+
+    if args.cmd == "worker-schedule-verify":
+        result = memory.verify_worker_schedule(
+            output=args.output,
+            scope=args.scope,
+            max_interval_minutes=args.max_interval_minutes,
+            require_regression_gates=not args.no_regression_gates,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "doctor":
         report = memory.doctor(

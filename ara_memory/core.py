@@ -242,6 +242,11 @@ class AraMemory:
 
         return write_windows_worker_task_script(**kwargs)
 
+    def verify_worker_schedule(self, **kwargs: Any) -> Any:
+        from ara_memory.schedule import verify_windows_worker_task_script
+
+        return verify_windows_worker_task_script(**kwargs)
+
     def recall_regression(
         self,
         cases: list[Any],
