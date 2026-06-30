@@ -138,10 +138,11 @@ def _update_kind(store: MemoryStore, row: Any, kind: CapsuleKind, *, reason: str
             (kind.value, title, json.dumps(tags, ensure_ascii=False), now, row["id"]),
         )
         conn.execute("DELETE FROM capsules_fts WHERE id = ?", (row["id"],))
-        conn.execute(
-            "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
-            (row["id"], title, row["body"], kind.value, row["scope"], " ".join(tags)),
-        )
+        if row["status"] in {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}:
+            conn.execute(
+                "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                (row["id"], title, row["body"], kind.value, row["scope"], " ".join(tags)),
+            )
         conn.execute(
             """
             INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)

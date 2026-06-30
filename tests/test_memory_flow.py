@@ -1720,6 +1720,49 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
             self.assertEqual(memory.stats()["schema_version"], storage_module.SCHEMA_VERSION)
 
+    def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            active = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Active indexed memory",
+                body="active indexed memory should be searchable",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[],
+                tags=["active"],
+                status=MemoryStatus.STABLE,
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Cold unindexed memory",
+                body="cold unindexed memory should not stay in FTS",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.5,
+                source_event_ids=[],
+                tags=["cold"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(active)
+            memory.store.upsert_capsule(cold)
+
+            with memory.store.session() as conn:
+                fts_ids = {row["id"] for row in conn.execute("SELECT id FROM capsules_fts")}
+            self.assertEqual(fts_ids, {active.id})
+
+            memory.store.update_capsule_status(active.id, MemoryStatus.SUPERSEDED, actor="test", reason="cool active")
+            with memory.store.session() as conn:
+                fts_ids = {row["id"] for row in conn.execute("SELECT id FROM capsules_fts")}
+            self.assertEqual(fts_ids, set())
+
+            memory.store.update_capsule_status(cold.id, MemoryStatus.STABLE, actor="test", reason="reactivate cold")
+            with memory.store.session() as conn:
+                fts_ids = {row["id"] for row in conn.execute("SELECT id FROM capsules_fts")}
+            self.assertEqual(fts_ids, {cold.id})
+
     def test_sqlite_sessions_enforce_foreign_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1825,6 +1868,53 @@ class MemoryFlowTests(unittest.TestCase):
                 links = conn.execute("SELECT capsule_id, event_id FROM capsule_source_events").fetchall()
             self.assertEqual([(row["capsule_id"], row["event_id"]) for row in links], [(capsule.id, event.id)])
             self.assertEqual(reopened.store.source_event_ids_for_statuses(["stable"], scope="alpha"), {event.id})
+
+    def test_schema_migration_rebuilds_capsules_fts_for_active_memory_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            memory.init()
+            active = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Active migration memory",
+                body="active migration memory",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[],
+                tags=["migration"],
+                status=MemoryStatus.STABLE,
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Cold migration memory",
+                body="cold migration memory",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.5,
+                source_event_ids=[],
+                tags=["migration"],
+                status=MemoryStatus.REJECTED,
+            )
+            memory.store.upsert_capsule(active)
+            memory.store.upsert_capsule(cold)
+            with memory.store.session() as conn:
+                conn.execute(
+                    "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                    (cold.id, cold.title, cold.body, cold.kind.value, cold.scope, " ".join(cold.tags)),
+                )
+                conn.execute(
+                    "UPDATE memory_meta SET value = ? WHERE key = 'schema_version'",
+                    ("4",),
+                )
+
+            reopened = AraMemory(root)
+            reopened.init()
+
+            self.assertEqual(reopened.store.schema_version(), storage_module.SCHEMA_VERSION)
+            with reopened.store.session() as conn:
+                fts_ids = {row["id"] for row in conn.execute("SELECT id FROM capsules_fts")}
+            self.assertEqual(fts_ids, {active.id})
 
     def test_storage_has_no_dead_mojibake_audit_block(self) -> None:
         text = Path(storage_module.__file__).read_text(encoding="utf-8")

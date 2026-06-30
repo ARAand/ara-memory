@@ -88,7 +88,7 @@ sleep()
 ## Storage
 
 - `.ara-memory/ledger/events.jsonl`: append-only source of truth.
-- `.ara-memory/memory.db`: SQLite tables, FTS indexes, temporal edges.
+- `.ara-memory/memory.db`: SQLite tables, active-capsule FTS indexes, temporal edges.
 - `.ara-memory/archive/`: reserved for cold files, images, and future Memvid-style archives.
 - `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
@@ -174,9 +174,10 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 10. Keep the background worker conservative: score and verify by default, mutate only with explicit review.
 11. Serialize background workers with a lock; concurrency belongs at the queue boundary, not inside maintenance.
 12. Recover stale processing records before draining pending work.
-13. Triage review queues by groups before asking a human or model to inspect individual items.
-14. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
-15. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
+13. Keep full cold evidence in SQLite/ledger/archive, but keep FTS recall indexes limited to candidate and stable capsules.
+14. Triage review queues by groups before asking a human or model to inspect individual items.
+15. Treat cold-memory stewardship as current only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation in shadow-prune.
+16. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 
 ## Future Extension Points
 

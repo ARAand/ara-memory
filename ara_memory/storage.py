@@ -12,7 +12,8 @@ from typing import Any, Iterable, Iterator
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 STORAGE_CATEGORY_KEYS = (
     "db_bytes",
@@ -234,6 +235,8 @@ class MemoryStore:
             conn.executescript(SCHEMA)
             if old_version < 4:
                 _rebuild_capsule_source_events(conn)
+            if old_version < 5:
+                _sync_capsules_fts(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -341,17 +344,15 @@ class MemoryStore:
                     json.dumps(capsule.tags, ensure_ascii=False),
                 ),
             )
-            conn.execute("DELETE FROM capsules_fts WHERE id = ?", (capsule.id,))
-            conn.execute(
-                "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    capsule.id,
-                    capsule.title,
-                    capsule.body,
-                    capsule.kind.value,
-                    capsule.scope,
-                    " ".join(capsule.tags),
-                ),
+            _sync_capsule_fts_payload(
+                conn,
+                capsule_id=capsule.id,
+                title=capsule.title,
+                body=capsule.body,
+                kind=capsule.kind.value,
+                scope=capsule.scope,
+                tags=capsule.tags,
+                status=capsule.status.value,
             )
             conn.execute("DELETE FROM capsule_source_events WHERE capsule_id = ?", (capsule.id,))
             conn.executemany(
@@ -569,10 +570,14 @@ class MemoryStore:
             row = conn.execute("SELECT scope FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
             if row is None:
                 return False
+            now = utc_now()
             cur = conn.execute(
                 "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ?",
-                (status.value, utc_now(), capsule_id),
+                (status.value, now, capsule_id),
             )
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if updated is not None:
+                _sync_capsule_fts_row(conn, updated)
             conn.execute(
                 """
                 INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
@@ -810,6 +815,50 @@ def _rebuild_capsule_source_events(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "INSERT OR IGNORE INTO capsule_source_events(capsule_id, event_id) VALUES (?, ?)",
         links,
+    )
+
+
+def _sync_capsules_fts(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM capsules_fts")
+    rows = conn.execute("SELECT * FROM capsules").fetchall()
+    for row in rows:
+        _sync_capsule_fts_row(conn, row)
+
+
+def _sync_capsule_fts_row(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
+    try:
+        tags = json.loads(row["tags_json"])
+    except (TypeError, json.JSONDecodeError):
+        tags = []
+    _sync_capsule_fts_payload(
+        conn,
+        capsule_id=row["id"],
+        title=row["title"],
+        body=row["body"],
+        kind=row["kind"],
+        scope=row["scope"],
+        tags=tags,
+        status=row["status"],
+    )
+
+
+def _sync_capsule_fts_payload(
+    conn: sqlite3.Connection,
+    *,
+    capsule_id: str,
+    title: str,
+    body: str,
+    kind: str,
+    scope: str,
+    tags: list[str],
+    status: str,
+) -> None:
+    conn.execute("DELETE FROM capsules_fts WHERE id = ?", (capsule_id,))
+    if status not in ACTIVE_FTS_STATUSES:
+        return
+    conn.execute(
+        "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
+        (capsule_id, title, body, kind, scope, " ".join(tags)),
     )
 
 

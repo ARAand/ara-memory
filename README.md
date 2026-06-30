@@ -436,7 +436,9 @@ Restore refuses to overwrite a non-empty target unless `--force` is passed.
 
 ## Design Choices
 
-- SQLite + FTS5 first. No mandatory vector DB.
+- SQLite + FTS5 first. No mandatory vector DB. FTS indexes candidate/stable
+  capsules only; superseded, rejected, and quarantined memories stay preserved
+  as cold evidence without paying active recall-index cost.
 - Raw ledger is append-only JSONL.
 - Exact duplicate events are deduplicated by content fingerprint before they hit
   the ledger.
