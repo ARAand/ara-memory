@@ -322,9 +322,12 @@ quarantine work.
 statuses, kinds, and representative examples so queue review stays cheap.
 `review-compact` defaults to dry-run. With `--apply`, it resolves only
 non-destructive review markers such as acknowledged low-quality notices or
-stale/missing-capsule queue rows. It does not promote, quarantine, decay, delete,
-or otherwise change memory capsules, and resolved low-quality markers are not
-reopened by later quality persistence unless their reason changes.
+stale/missing-capsule queue rows. It also acknowledges stable artifact markers
+that deterministic risk policy already excludes from hot/recall surfaces, such
+as instruction-like text inside code/test/document artifacts or keyword-stuffed
+artifact summaries. It does not promote, quarantine, decay, delete, or otherwise
+change memory capsules, and resolved review markers are not reopened by later
+quality persistence unless their reason changes.
 `review-worker` defaults to dry-run. With `--apply`, it may promote strong
 candidates, quarantine risky candidates, or resolve review markers, but it never
 deletes memories and leaves decay items for explicit policy review.

@@ -534,7 +534,9 @@ class QualityScorer:
         quality = _clamp(quality)
 
         decay = _clamp((age_days / 180.0) * 0.40 + (1.0 - float(cap["salience"])) * 0.30 + (1.0 - quality) * 0.30)
-        if risk.should_quarantine:
+        if risk.should_quarantine and cap["status"] == MemoryStatus.QUARANTINED.value:
+            action, reasons = "keep", ["high memory safety risk already quarantined"]
+        elif risk.should_quarantine:
             action, reasons = "quarantine", ["high memory safety risk"]
         elif risk.should_exclude_from_hot:
             action, reasons = "review", ["excluded from hot memory by deterministic risk policy"]
@@ -707,7 +709,15 @@ def _totals(items: list[QualityItem]) -> dict[str, int]:
 
 
 def _is_acknowledgeable_review(reason: str) -> bool:
-    return "low quality score" in reason.lower()
+    lowered = reason.lower()
+    if "low quality score" in lowered:
+        return True
+    if "excluded from hot memory by deterministic risk policy" not in lowered:
+        return False
+    return (
+        "instruction-like text appears inside code/test/document artifact" in lowered
+        or "keyword stuffing" in lowered
+    )
 
 
 def _has_resolved_review_marker(conn: Any, *, capsule_id: str, action: str, reason: str) -> bool:

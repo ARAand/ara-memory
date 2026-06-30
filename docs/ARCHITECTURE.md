@@ -75,6 +75,12 @@ worker(scope)
   -> optional recall_regression()
   -> maintenance()
 
+review_compact(scope)
+  -> resolve missing-capsule and stale queue rows
+  -> acknowledge low-quality review markers
+  -> acknowledge deterministic artifact-exclusion markers
+  -> never promote, quarantine, decay, delete, or otherwise mutate capsules
+
 worker_loop(iterations, interval)
   -> repeat worker(scope)
   -> compact per-iteration report
