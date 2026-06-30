@@ -97,7 +97,9 @@ foreground session does not block on memory maintenance.
 For unattended capture, prefer `spool-turn` first and `drain-spool` later. The
 spool is a durable local file queue under `.ara-memory/spool/`: a capture can
 survive Codex restarts, DB locks, missing files, or a later worker crash without
-losing the original turn envelope.
+losing the original turn envelope. Existing file/image artifacts and worktree
+evidence are snapshotted at enqueue time, so later edits or deletes do not
+change what the spooled turn remembers.
 
 ```powershell
 @'
@@ -129,7 +131,9 @@ python -m ara_memory drain-spool --limit 25
 
 Successful spooled turns move to `.ara-memory/spool/done/`. Failed turns move to
 `.ara-memory/spool/failed/` with the original envelope and error details intact
-for inspection or manual replay.
+for inspection or manual replay. Malformed queue files keep a raw copy next to
+the failed record, and artifact preflight prevents a failed drain from retaining
+only part of a turn.
 If a worker crashes after moving a file to `.ara-memory/spool/processing/`, the
 next `drain-spool` or `worker` recovers stale processing files back into pending
 before processing them. Tune that threshold with `--processing-stale-seconds`.

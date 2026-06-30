@@ -88,7 +88,7 @@ sleep()
 - `.ara-memory/archive/`: reserved for cold files, images, and future Memvid-style archives.
 - `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
-- `.ara-memory/spool/`: durable pending/done/failed turn envelopes for crash-safe ingress.
+- `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
 
 ## Ingress Boundary
 
@@ -99,14 +99,16 @@ explicit decisions. Ara Memory OS then preserves raw evidence first and performs
 compression later.
 
 `spool-turn` is the unattended boundary. It writes the same envelope to an
-atomic local file queue before touching the memory database. `drain-spool`
-processes pending envelopes through `remember-turn`; successful records move to
-`done`, and failed records move to `failed` with the original envelope and error
-details intact. This is the preferred bridge for always-on capture because a
-Codex crash, DB lock, missing artifact, or later worker failure does not erase
-the user's prompt or files. If a worker dies after moving a file into
-`processing`, the next drain/worker recovers stale processing records back to
-`pending` before continuing.
+atomic local file queue before touching the memory database, copies existing
+file/image artifacts into `spool/snapshots`, and stores a bounded worktree
+snapshot inside the envelope. `drain-spool` processes pending envelopes through
+`remember-turn`; successful records move to `done`, and failed records move to
+`failed` with the original envelope and error details intact. This is the
+preferred bridge for always-on capture because a Codex crash, DB lock, missing
+artifact, later file edit/delete, or later worker failure does not erase or
+rewrite the user's prompt, files, or worktree evidence. If a worker dies after
+moving a file into `processing`, the next drain/worker recovers stale processing
+records back to `pending` before continuing.
 
 `worker` is the separate memory processor. Codex can keep acting as the live
 reasoning agent while the worker drains queued turns and runs quality, review,

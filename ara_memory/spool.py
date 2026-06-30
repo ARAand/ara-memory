@@ -5,11 +5,13 @@ import os
 import shutil
 import time
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from ara_memory.models import new_id, utc_now
 from ara_memory.turn import remember_turn
+from ara_memory.worktree import snapshot_worktree
 
 
 @dataclass(slots=True)
@@ -88,12 +90,34 @@ def enqueue_turn(
     metadata.setdefault("spool_id", spool_id)
     metadata.setdefault("spooled_at", created_at)
     turn_payload["metadata"] = metadata
+    snapshots: dict[str, Any] = {}
+    artifact_snapshots = _snapshot_turn_artifacts(
+        turn_payload,
+        root=memory.store.root,
+        spool_id=spool_id,
+    )
+    if artifact_snapshots:
+        snapshots["artifacts"] = artifact_snapshots
+    if capture_cwd:
+        worktree_snapshot = snapshot_worktree(
+            cwd=capture_cwd.resolve(),
+            include_untracked_content=include_untracked_content,
+            max_file_chars=max_file_chars,
+        )
+        if worktree_snapshot:
+            turn_payload["worktree_snapshot"] = worktree_snapshot
+        snapshots["worktree"] = {
+            "cwd": str(capture_cwd.resolve()),
+            "events": len(worktree_snapshot),
+            "captured_at": created_at,
+        }
     payload = {
         "format": "ara-memory-spooled-turn-v1",
         "spool_id": spool_id,
         "logical_turn_id": turn_id,
         "created_at": created_at,
         "turn": turn_payload,
+        "snapshots": snapshots,
         "options": {
             "scope": scope,
             "source": source,
@@ -142,15 +166,23 @@ def drain_spool(
             if payload.get("format") != "ara-memory-spooled-turn-v1":
                 raise ValueError("Unsupported spool record format.")
             options = _options(payload.get("options"))
+            turn_payload = _turn(payload.get("turn"))
+            capture_cwd = (
+                None
+                if turn_payload.get("worktree_snapshot")
+                else Path(options["capture_cwd"])
+                if options["capture_cwd"]
+                else None
+            )
             result = remember_turn(
                 memory,
-                _turn(payload.get("turn")),
+                turn_payload,
                 scope=options["scope"],
                 source=options["source"],
                 consolidate=options["consolidate"],
                 sleep=options["sleep"],
                 hot_budget=options["hot_budget"],
-                capture_cwd=Path(options["capture_cwd"]) if options["capture_cwd"] else None,
+                capture_cwd=capture_cwd,
                 include_untracked_content=options["include_untracked_content"],
                 max_file_chars=options["max_file_chars"],
                 max_text_chars=options["max_text_chars"],
@@ -158,7 +190,12 @@ def drain_spool(
             done_path = _archive_spool_record(paths["done"], processing_path, payload, result=result)
             items.append(DrainItem(spool_id=spool_id, state="done", path=str(done_path), result=result))
         except Exception as exc:  # Keep the original envelope for inspection and retry decisions.
-            failed_path = _archive_spool_record(paths["failed"], processing_path, _safe_payload(processing_path), error=exc)
+            failed_path = _archive_spool_record(
+                paths["failed"],
+                processing_path,
+                _safe_payload(processing_path, failed_dir=paths["failed"]),
+                error=exc,
+            )
             items.append(DrainItem(spool_id=spool_id, state="failed", path=str(failed_path), error=str(exc)))
             if stop_on_error:
                 break
@@ -238,16 +275,118 @@ def _archive_spool_record(
     return target_path
 
 
-def _safe_payload(path: Path) -> dict[str, Any]:
+def _safe_payload(path: Path, *, failed_dir: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {"raw": payload}
     except Exception:
         failed_payload = {"format": "ara-memory-spooled-turn-v1", "spool_id": path.stem}
-        raw_copy = path.with_suffix(".raw")
+        raw_copy = failed_dir / f"{path.stem}.raw"
+        failed_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, raw_copy)
         failed_payload["raw_copy"] = str(raw_copy)
         return failed_payload
+
+
+def _snapshot_turn_artifacts(
+    turn: dict[str, Any],
+    *,
+    root: Path,
+    spool_id: str,
+) -> list[dict[str, Any]]:
+    snapshots: list[dict[str, Any]] = []
+    for key in ("files", "images"):
+        if key not in turn:
+            continue
+        original_items = _as_list(turn.get(key))
+        updated_items = []
+        for index, item in enumerate(original_items):
+            updated, snapshot = _snapshot_artifact_item(
+                item,
+                root=root,
+                spool_id=spool_id,
+                role=key[:-1],
+                index=index,
+            )
+            updated_items.append(updated)
+            if snapshot:
+                snapshots.append(snapshot)
+        turn[key] = updated_items
+    return snapshots
+
+
+def _snapshot_artifact_item(
+    item: Any,
+    *,
+    root: Path,
+    spool_id: str,
+    role: str,
+    index: int,
+) -> tuple[Any, dict[str, Any] | None]:
+    path, caption, metadata = _artifact_item(item)
+    resolved = path.resolve()
+    if not resolved.is_file():
+        return item, None
+    digest = _sha256_file(resolved)
+    snapshot_dir = root / "spool" / "snapshots" / _safe_name(spool_id) / "artifacts"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    safe_stem = _safe_name(resolved.stem) or "artifact"
+    safe_suffix = resolved.suffix if resolved.suffix and all(ch.isalnum() or ch == "." for ch in resolved.suffix) else ""
+    snapshot_name = f"{role}-{index:03d}-{digest[:12]}-{safe_stem}{safe_suffix}"
+    snapshot_path = snapshot_dir / snapshot_name
+    if not snapshot_path.exists():
+        shutil.copy2(resolved, snapshot_path)
+    updated_metadata = dict(metadata)
+    updated_metadata.update(
+        {
+            "spool_original_path": str(resolved),
+            "spool_snapshot_path": str(snapshot_path),
+            "spool_snapshot_sha256": digest,
+            "spool_snapshot_bytes": resolved.stat().st_size,
+        }
+    )
+    updated = {
+        "path": str(snapshot_path),
+        "caption": caption,
+        "metadata": updated_metadata,
+    }
+    return updated, {
+        "role": role,
+        "index": index,
+        "original_path": str(resolved),
+        "snapshot_path": str(snapshot_path),
+        "sha256": digest,
+        "bytes": resolved.stat().st_size,
+    }
+
+
+def _artifact_item(item: Any) -> tuple[Path, str, dict[str, Any]]:
+    if isinstance(item, str):
+        return Path(item), "", {}
+    if isinstance(item, dict):
+        path = item.get("path")
+        if not path:
+            raise ValueError("Artifact item must include a path.")
+        metadata = dict(item.get("metadata")) if isinstance(item.get("metadata"), dict) else {}
+        caption = str(item.get("caption") or "").strip()
+        return Path(str(path)), caption, metadata
+    raise ValueError(f"Unsupported artifact item: {item!r}")
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _sha256_file(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _options(value: Any) -> dict[str, Any]:

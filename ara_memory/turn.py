@@ -9,7 +9,7 @@ from ara_memory.compressors import estimate_tokens
 from ara_memory.core import AraMemory
 from ara_memory.ingest import ingest_file
 from ara_memory.models import new_id, utc_now
-from ara_memory.worktree import capture_worktree
+from ara_memory.worktree import capture_worktree, retain_worktree_snapshot
 
 
 def remember_turn(
@@ -38,6 +38,13 @@ def remember_turn(
     event_ids: list[str] = []
     file_event_ids: list[str] = []
     worktree_event_ids: list[str] = []
+    artifact_items = [*_items(turn.get("files")), *_items(turn.get("images"))]
+    artifact_entries = []
+    for index, item in enumerate(artifact_items):
+        path, caption, item_metadata = _artifact_item(item)
+        if not path.resolve().is_file():
+            raise FileNotFoundError(str(path))
+        artifact_entries.append((index, path, caption, item_metadata))
 
     prompt = _text(turn.get("prompt") or turn.get("user"))
     if prompt:
@@ -96,8 +103,7 @@ def remember_turn(
             ).id
         )
 
-    for index, item in enumerate([*_items(turn.get("files")), *_items(turn.get("images"))]):
-        path, caption, item_metadata = _artifact_item(item)
+    for index, path, caption, item_metadata in artifact_entries:
         file_event_ids.append(
             ingest_file(
                 memory,
@@ -116,7 +122,15 @@ def remember_turn(
             )
         )
 
-    if capture_cwd is not None:
+    worktree_snapshot = [item for item in _items(turn.get("worktree_snapshot")) if isinstance(item, Mapping)]
+    if worktree_snapshot:
+        worktree_event_ids = retain_worktree_snapshot(
+            memory,
+            worktree_snapshot,
+            scope=scope,
+            metadata_extra={**base_metadata, "turn_role": "worktree_snapshot"},
+        )
+    elif capture_cwd is not None:
         worktree_event_ids = capture_worktree(
             memory,
             cwd=capture_cwd.resolve(),

@@ -1351,6 +1351,27 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(first.id, second.id)
             self.assertEqual(memory.stats()["events"], 1)
 
+    def test_direct_turn_retry_with_same_turn_id_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            turn = {
+                "turn_id": "direct-retry",
+                "prompt": "Direct remember-turn retries should not duplicate prompt events.",
+                "assistant": "The same logical turn should keep one assistant event.",
+            }
+
+            first = remember_turn(memory, turn, scope="direct-idempotent", consolidate=False, hot_budget=0)
+            time.sleep(1.1)
+            second = remember_turn(memory, turn, scope="direct-idempotent", consolidate=False, hot_budget=0)
+
+            self.assertEqual(first["events_retained"], second["events_retained"])
+            with memory.store.session() as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM events WHERE scope = ?",
+                    ("direct-idempotent",),
+                ).fetchone()[0]
+            self.assertEqual(count, 2)
+
     def test_maintenance_preserves_counts_and_recall(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -2794,6 +2815,70 @@ class MemoryFlowTests(unittest.TestCase):
             pack = memory.recall("auto spool artifact evidence", scope="ingress-spool", include_global=False, budget=1200)
             self.assertIn("auto spool", pack.lower())
 
+    def test_spool_turn_snapshots_artifact_at_enqueue_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Version one evidence should be retained.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            record = memory.spool_turn(
+                {
+                    "turn_id": "turn_snapshot_artifact",
+                    "prompt": "This turn has artifact evidence that may change before drain.",
+                    "files": [{"path": str(artifact), "caption": "snapshot artifact"}],
+                },
+                scope="spool-snapshot",
+                consolidate=False,
+                hot_budget=0,
+            )
+            payload = json.loads(Path(record.path).read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["snapshots"]["artifacts"]), 1)
+            snapshot_path = Path(payload["snapshots"]["artifacts"][0]["snapshot_path"])
+            self.assertTrue(snapshot_path.exists())
+
+            artifact.write_text("Version two should not be retained by this spooled turn.\n", encoding="utf-8")
+            report = memory.drain_spool(limit=10)
+
+            self.assertTrue(report.passed, report.as_dict())
+            event_id = report.items[0].result["artifact_events_retained"][0]
+            event = memory.store.get_events([event_id])[0]
+            self.assertIn("Version one evidence", event["text"])
+            self.assertNotIn("Version two", event["text"])
+            metadata = json.loads(event["metadata_json"])
+            self.assertEqual(metadata["spool_original_path"], str(artifact.resolve()))
+            self.assertEqual(metadata["spool_snapshot_path"], str(snapshot_path))
+
+    def test_spool_turn_snapshots_worktree_at_enqueue_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            note = repo / "note.txt"
+            note.write_text("Worktree content captured before drain.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_snapshot_worktree",
+                    "prompt": "This turn should preserve the enqueue-time worktree.",
+                },
+                scope="spool-worktree-snapshot",
+                capture_cwd=repo,
+                include_untracked_content=True,
+                consolidate=False,
+                hot_budget=0,
+            )
+            note.unlink()
+
+            report = memory.drain_spool(limit=10)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertGreater(len(report.items[0].result["worktree_events_retained"]), 0)
+            events = memory.store.get_events(report.items[0].result["worktree_events_retained"])
+            texts = "\n".join(row["text"] for row in events)
+            self.assertIn("note.txt", texts)
+            self.assertIn("Worktree content captured before drain", texts)
+
     def test_spool_turn_survives_restart_and_drains_into_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2970,7 +3055,7 @@ class MemoryFlowTests(unittest.TestCase):
                     """,
                     ("spool-retry",),
                 ).fetchone()[0]
-            self.assertEqual(prompt_count, 1)
+            self.assertEqual(prompt_count, 0)
 
             time.sleep(1.1)
             artifact.write_text("Recovered artifact content.\n", encoding="utf-8")
@@ -2999,6 +3084,25 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(len(prompts), 1)
             self.assertEqual(len(files), 1)
             self.assertEqual(prompt_metadata["turn_captured_at"], done_payload["turn"]["metadata"]["turn_captured_at"])
+
+    def test_malformed_spool_json_keeps_raw_copy_with_failed_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            pending = memory.store.root / "spool" / "pending" / "bad.json"
+            pending.parent.mkdir(parents=True, exist_ok=True)
+            pending.write_text("{not valid json", encoding="utf-8")
+
+            report = memory.drain_spool(limit=10)
+
+            self.assertFalse(report.passed, report.as_dict())
+            failed_path = Path(report.items[0].path)
+            payload = json.loads(failed_path.read_text(encoding="utf-8"))
+            raw_copy = Path(payload["raw_copy"])
+            self.assertEqual(raw_copy.parent, failed_path.parent)
+            self.assertTrue(raw_copy.exists())
+            self.assertEqual(raw_copy.read_text(encoding="utf-8"), "{not valid json")
 
     def test_drain_recovers_stale_processing_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

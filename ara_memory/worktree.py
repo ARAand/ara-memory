@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from ara_memory.compressors import compact_text
 from ara_memory.core import AraMemory
@@ -15,52 +16,66 @@ def capture_worktree(
     include_untracked_content: bool = False,
     max_file_chars: int = 8000,
 ) -> list[str]:
-    event_ids: list[str] = []
+    snapshot = snapshot_worktree(
+        cwd=cwd,
+        include_untracked_content=include_untracked_content,
+        max_file_chars=max_file_chars,
+    )
+    return retain_worktree_snapshot(memory, snapshot, scope=scope)
+
+
+def snapshot_worktree(
+    *,
+    cwd: Path,
+    include_untracked_content: bool = False,
+    max_file_chars: int = 8000,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
     status = _git(cwd, ["status", "--short", "--branch"])
     if status.strip():
-        event = memory.retain(
-            kind="note",
-            text=f"Git status for {cwd}:\n{status}",
-            source="git-status",
-            scope=scope,
-            metadata={"cwd": str(cwd)},
+        events.append(
+            {
+                "kind": "note",
+                "text": f"Git status for {cwd}:\n{status}",
+                "source": "git-status",
+                "metadata": {"cwd": str(cwd)},
+            }
         )
-        event_ids.append(event.id)
 
     diff_stat = _git(cwd, ["diff", "--stat"])
     if diff_stat.strip():
-        event = memory.retain(
-            kind="diff",
-            text=f"Git diff stat for {cwd}:\n{diff_stat}",
-            source="git-diff-stat",
-            scope=scope,
-            metadata={"cwd": str(cwd)},
+        events.append(
+            {
+                "kind": "diff",
+                "text": f"Git diff stat for {cwd}:\n{diff_stat}",
+                "source": "git-diff-stat",
+                "metadata": {"cwd": str(cwd)},
+            }
         )
-        event_ids.append(event.id)
 
     diff_names = _git(cwd, ["diff", "--name-only"])
     if diff_names.strip():
         diff = _git(cwd, ["diff", "--", *diff_names.splitlines()])
-        event = memory.retain(
-            kind="diff",
-            text=compact_text(f"Git diff for {cwd}:\n{diff}", limit=6000),
-            source="git-diff",
-            scope=scope,
-            metadata={"cwd": str(cwd), "files": diff_names.splitlines()},
+        events.append(
+            {
+                "kind": "diff",
+                "text": compact_text(f"Git diff for {cwd}:\n{diff}", limit=6000),
+                "source": "git-diff",
+                "metadata": {"cwd": str(cwd), "files": diff_names.splitlines()},
+            }
         )
-        event_ids.append(event.id)
 
     untracked = _git(cwd, ["ls-files", "--others", "--exclude-standard"])
     if untracked.strip():
         names = untracked.splitlines()
-        event = memory.retain(
-            kind="file",
-            text="Untracked file manifest:\n" + "\n".join(names),
-            source="git-untracked-manifest",
-            scope=scope,
-            metadata={"cwd": str(cwd), "files": names, "file": "manifest"},
+        events.append(
+            {
+                "kind": "file",
+                "text": "Untracked file manifest:\n" + "\n".join(names),
+                "source": "git-untracked-manifest",
+                "metadata": {"cwd": str(cwd), "files": names, "file": "manifest"},
+            }
         )
-        event_ids.append(event.id)
         if include_untracked_content:
             for name in names:
                 path = (cwd / name).resolve()
@@ -72,14 +87,37 @@ def capture_worktree(
                     text = path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
                     continue
-                event = memory.retain(
-                    kind="file",
-                    text=compact_text(f"Untracked file {name}:\n{text}", limit=max_file_chars),
-                    source="git-untracked-file",
-                    scope=scope,
-                    metadata={"cwd": str(cwd), "file": name},
+                events.append(
+                    {
+                        "kind": "file",
+                        "text": compact_text(f"Untracked file {name}:\n{text}", limit=max_file_chars),
+                        "source": "git-untracked-file",
+                        "metadata": {"cwd": str(cwd), "file": name},
+                    }
                 )
-                event_ids.append(event.id)
+    return events
+
+
+def retain_worktree_snapshot(
+    memory: AraMemory,
+    snapshot: list[dict[str, Any]],
+    *,
+    scope: str,
+    metadata_extra: dict[str, Any] | None = None,
+) -> list[str]:
+    event_ids: list[str] = []
+    for index, item in enumerate(snapshot):
+        metadata = dict(item.get("metadata") or {})
+        metadata.update(metadata_extra or {})
+        metadata["worktree_snapshot_index"] = index
+        event = memory.retain(
+            kind=str(item["kind"]),
+            text=str(item["text"]),
+            source=str(item.get("source") or "git-snapshot"),
+            scope=scope,
+            metadata=metadata,
+        )
+        event_ids.append(event.id)
     return event_ids
 
 

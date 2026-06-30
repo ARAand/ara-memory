@@ -795,10 +795,16 @@ def _event_fingerprint(event: Event) -> str:
         "text": event.text,
         "source": event.source,
         "scope": event.scope,
-        "metadata": event.metadata,
+        "metadata": _fingerprint_metadata(event.metadata),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _fingerprint_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(metadata)
+    payload.pop("turn_captured_at", None)
+    return payload
 
 
 def _fts_query(query: str) -> str:
