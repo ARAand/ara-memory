@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ara_memory.compressors import estimate_tokens
+from ara_memory.compressors import compact_text, estimate_tokens
 from ara_memory.core import AraMemory
 from ara_memory.ingest import ingest_file
 from ara_memory.models import new_id, utc_now
@@ -137,6 +137,30 @@ def remember_turn(
             scope=scope,
             include_untracked_content=include_untracked_content,
             max_file_chars=max_file_chars,
+        )
+
+    if event_ids or file_event_ids or worktree_event_ids:
+        turn_episode = _turn_episode_text(
+            turn,
+            event_ids=event_ids,
+            file_event_ids=file_event_ids,
+            worktree_event_ids=worktree_event_ids,
+            artifacts=artifact_entries,
+        )
+        event_ids.append(
+            memory.retain(
+                kind="note",
+                text=turn_episode,
+                source=source,
+                scope=scope,
+                metadata={
+                    **base_metadata,
+                    "turn_role": "turn_episode",
+                    "turn_event_ids": [*event_ids],
+                    "artifact_event_ids": [*file_event_ids],
+                    "worktree_event_ids": [*worktree_event_ids],
+                },
+            ).id
         )
 
     capsules_created = memory.consolidate() if consolidate else 0
@@ -317,6 +341,66 @@ def _command_text(command: Any) -> str:
     if command.get("output"):
         parts.append(f"Output:\n{command['output']}")
     return "\n".join(parts).strip()
+
+
+def _turn_episode_text(
+    turn: Mapping[str, Any],
+    *,
+    event_ids: list[str],
+    file_event_ids: list[str],
+    worktree_event_ids: list[str],
+    artifacts: list[tuple[int, Path, str, dict[str, Any]]],
+) -> str:
+    parts = ["Turn episode:"]
+    prompt = _text(turn.get("prompt") or turn.get("user"))
+    if prompt:
+        parts.append(f"Prompt cue: {compact_text(prompt, limit=260)}")
+    assistant = _text(turn.get("assistant") or turn.get("response"))
+    if assistant:
+        parts.append(f"Assistant outcome: {compact_text(assistant, limit=260)}")
+    decisions = [compact_text(_text(item), limit=220) for item in _items(turn.get("decisions")) if _text(item)]
+    if decisions:
+        parts.append("Decisions: " + " | ".join(decisions[:4]))
+    commands = [_command_summary(item) for item in _items(turn.get("commands"))]
+    commands = [item for item in commands if item]
+    if commands:
+        parts.append("Command outcomes: " + " | ".join(commands[:5]))
+    artifact_notes = [_artifact_episode_summary(path, caption, item_metadata) for _, path, caption, item_metadata in artifacts]
+    if artifact_notes:
+        parts.append("Artifacts: " + " | ".join(artifact_notes[:5]))
+    if worktree_event_ids:
+        parts.append(f"Worktree evidence: {len(worktree_event_ids)} bounded event(s) retained.")
+    parts.append(
+        "Evidence ids: "
+        f"text={len(event_ids)}, artifacts={len(file_event_ids)}, worktree={len(worktree_event_ids)}."
+    )
+    return compact_text("\n".join(parts), limit=1600)
+
+
+def _command_summary(command: Any) -> str:
+    if isinstance(command, Mapping):
+        bits = []
+        if command.get("cmd"):
+            bits.append(str(command["cmd"]))
+        if command.get("cwd"):
+            bits.append(f"cwd={command['cwd']}")
+        if "exit_code" in command:
+            bits.append(f"exit={command['exit_code']}")
+        return compact_text(" ".join(bits), limit=180)
+    return compact_text(_text(command), limit=180)
+
+
+def _artifact_episode_summary(path: Path, caption: str, metadata: dict[str, Any]) -> str:
+    bits = [path.name]
+    if caption:
+        bits.append(f"caption={caption}")
+    digest = metadata.get("sha256")
+    if not isinstance(digest, str) or not digest:
+        resolved = path.resolve()
+        digest = _sha256_file(resolved) if resolved.is_file() else ""
+    if isinstance(digest, str) and digest:
+        bits.append(f"sha256={digest[:12]}")
+    return compact_text(" ".join(bits), limit=180)
 
 
 def _turn_text_items(turn: Mapping[str, Any]) -> list[dict[str, str]]:

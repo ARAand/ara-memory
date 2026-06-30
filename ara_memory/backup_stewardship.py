@@ -534,5 +534,10 @@ def _recommend(
     if failed:
         return ["No verified redundant backups found; inspect failed-verification backups manually."]
     if target_backup_bytes is not None:
+        if bytes_after_candidates > target_backup_bytes:
+            return [
+                "No redundant verified backups remain under the current keep policy, "
+                f"but protected backups require {bytes_after_candidates} bytes against target {target_backup_bytes}."
+            ]
         return [f"Backup pressure is low under the current target budget ({target_backup_bytes} bytes)."]
     return ["Backup pressure is low under the current keep policy."]

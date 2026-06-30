@@ -60,7 +60,10 @@ By default the store lives at `.ara-memory/`. Set `ARA_MEMORY_HOME` to move it.
 `remember-turn` is the narrow API intended for a Codex skill, shell hook, or
 session-end automation. It stores the original prompt and assistant summary as
 raw events, archives referenced files or images by sha256, optionally captures
-the current worktree, consolidates candidates, and refreshes hot memory.
+the current worktree, creates a bounded synthetic turn episode with evidence
+IDs, consolidates candidates, and refreshes hot memory. The synthetic episode
+helps recall recover the shape of the interaction without rereading every raw
+event.
 
 Use `plan-turn` before unattended capture when the envelope may be large. It is
 model-free: it hashes artifact paths, estimates raw-text tokens, estimates a
@@ -161,9 +164,12 @@ before trimming, `visible` is the capsule count actually rendered in the pack,
 and `quality` is a 0-100 score based on visible query-term coverage, visible
 sections, relevance, and fallback penalties. Use `recall-plan --json` when
 debugging retrieval quality; inspect `visible_capsules`,
-`query_terms_visible_count`, `sections_truncated`, `fallback_used`, and
-`quality_score` before increasing the budget. `recall-context` applies that
-plan and emits the selected pack, so normal work can use one command while still
+`query_terms_visible_count`, `sections_truncated`, `fallback_used`,
+`low_evidence_fallback_suppressed`, and `quality_score` before increasing the
+budget. If no direct evidence matches a query, Ara suppresses unrelated
+high-salience fallback bodies and emits a small "No direct memory evidence"
+notice instead of pretending to remember. `recall-context` applies that plan and
+emits the selected pack, so normal work can use one command while still
 preserving the budget decision.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
@@ -236,11 +242,14 @@ python -m ara_memory live-prune --approval-token <token> --confirm "DELETE COLD 
 memory budget/format, and recall-pack budget/format.
 `health` is the one-page operations report. It combines doctor, spool state,
 review pressure, candidate/stable ratio, cold-memory pressure, latest verified
-backup age, retention-cycle freshness/current-match checks, and optional recall
-regression into a pass/watch/fail status with concrete next actions. When cold
-pressure is high, health treats a stale or drifted retention-cycle as watch
-evidence and points back to `cold-stewardship`/`retention-cycle` before any live
-cleanup.
+backup age, backup byte pressure, retention-cycle freshness/current-match
+checks, and optional recall regression into a pass/watch/fail status with
+concrete next actions. When cold pressure is high, health treats a stale or
+drifted retention-cycle as watch evidence and points back to
+`cold-stewardship`/`retention-cycle` before any live cleanup. When verified
+backup bytes exceed the stewardship target, health reports a `backup_pressure`
+watch signal using a dry-run `backup-stewardship` candidate set; deletion still
+requires a separate reviewed `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"`.
 `purpose-check` is the goal-alignment report. It verifies that stable goal
 memory exists, hot memory exposes Active Goals, and a purpose query can actually
 retrieve goal context. Use `--repair-hot` before declaring major memory
@@ -250,8 +259,10 @@ memory exists, hot memory exposes identity and judgment principles, and an
 identity query can retrieve that self memory.
 `milestone-check` combines health, purpose-check, identity-check, candidate
 pressure, failure-kind audit, self-kind audit, and recall-context budget
-selection into one readiness report. Use it before declaring a memory milestone
-clean, then create a verified backup.
+selection into one readiness report. The recall-context gate requires a
+budgeted pack with visible direct evidence and sufficient quality, not just a
+plausible salience fallback. Use it before declaring a memory milestone clean,
+then create a verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory

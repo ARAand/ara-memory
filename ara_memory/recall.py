@@ -51,6 +51,8 @@ class RecallCompiler:
             )
         filtered_candidates = _filter_recall_candidates(self.store, candidates)
         capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:18]
+        low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
+        render_source = [] if low_evidence_fallback_suppressed else capsules
 
         summaries = []
         stable = []
@@ -64,7 +66,7 @@ class RecallCompiler:
 
         seen = set()
         rendered_capsules = []
-        for cap in capsules:
+        for cap in render_source:
             if cap["id"] in seen:
                 continue
             if intent_query and _is_low_value_for_intent(cap):
@@ -107,6 +109,11 @@ class RecallCompiler:
         if hot_state:
             hot_text = _sanitize_hot_memory(_focus_hot_memory(hot_state, intent_query=intent_query))
             parts.append("## Hot Memory\n" + hot_text.strip())
+        if low_evidence_fallback_suppressed:
+            parts.append(
+                "## Direct Memory Evidence\n"
+                "- No direct memory evidence matched this query. High-salience fallback memories were suppressed."
+            )
         parts.extend(
             [
                 "## Consolidated Memory\n" + ("\n".join(summaries) if summaries else "- None found."),
@@ -146,15 +153,16 @@ class RecallCompiler:
             "query_terms_visible": visible_query_terms,
             "query_term_count": len(terms),
             "query_terms_visible_count": len(visible_query_terms),
+            "low_evidence_fallback_suppressed": low_evidence_fallback_suppressed,
             "visible_section_count": len(visible_sections),
             "visible_sections": visible_sections,
             "sections_truncated": pack.count("[compressed]"),
-            "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in visible_capsules),
+            "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in capsules),
             "salience_supplement_used": any(
-                cap.get("recall_match_source") == "salience_supplement" for cap in visible_capsules
+                cap.get("recall_match_source") == "salience_supplement" for cap in capsules
             ),
             "recent_supplement_used": any(
-                cap.get("recall_match_source") == "recent_supplement" for cap in visible_capsules
+                cap.get("recall_match_source") == "recent_supplement" for cap in capsules
             ),
             "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
@@ -586,6 +594,18 @@ def _recall_score(cap: dict, terms: list[str], *, recency_boost: float = 0.0) ->
     score += recency_boost
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score
+
+
+def _should_suppress_low_evidence_fallback(capsules: list[dict], terms: list[str]) -> bool:
+    if not capsules or not terms:
+        return False
+    if any(cap.get("recall_match_source") != "salience_fallback" for cap in capsules):
+        return False
+    evidence = " ".join(
+        f"{cap.get('title', '')} {cap.get('body', '')} {' '.join(cap.get('tags', []))}"
+        for cap in capsules
+    )
+    return not _matched_query_terms(evidence, terms)
 
 
 def _recency_boosts(capsules: list[dict]) -> dict[str, float]:

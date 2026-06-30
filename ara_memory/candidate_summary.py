@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ara_memory.compressors import compact_text
+from ara_memory.compressors import semantic_consolidation_text
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus
 from ara_memory.storage import MemoryStore, row_to_capsule
 
@@ -317,15 +317,13 @@ class CandidateSummaryConsolidator:
     ) -> Capsule:
         source_ids: list[str] = []
         tags = set(PATTERNS[group.pattern]["tags"])
-        bodies = []
         for cap in candidates:
             source_ids.extend(cap["source_event_ids"])
             tags.update(cap["tags"][:8])
-            bodies.append(f"- {cap['title']}: {cap['body']}")
         summary = Capsule.create(
             kind=CapsuleKind.SUMMARY,
             title=group.summary_title,
-            body=compact_text("\n".join(bodies), limit=1400),
+            body=semantic_consolidation_text(candidates, limit=1400),
             scope=scope or candidates[0]["scope"],
             confidence=max(0.7, max(float(cap["confidence"]) for cap in candidates)),
             salience=max(float(cap["salience"]) for cap in candidates),

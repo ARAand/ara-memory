@@ -6,12 +6,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ara_memory.advisor import MemoryAdvisor, MemoryReviewEngine
-from ara_memory.compressors import compact_text
+from ara_memory.compressors import compact_text, semantic_consolidation_text
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, new_id
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
 MERGE_KINDS = {"project", "procedure", "failure", "fact", "goal"}
+CORE_KIND_PRESERVE = {"goal", "self", "preference"}
 CONFLICT_KINDS = {"decision", "preference", "procedure", "self", "fact", "goal"}
 NEGATION_MARKERS = (" not ", " never ", "avoid ", "do not ", "don't ", "instead of ", "rather than ")
 TOKEN_RE = re.compile(r"[a-zA-Z0-9_./:-]{3,}")
@@ -155,7 +156,6 @@ class SleepConsolidator:
 
     def _merge_group(self, group: list[dict], *, scope: str) -> None:
         source_ids: list[str] = []
-        bodies: list[str] = []
         seen_bodies: set[str] = set()
         tags: set[str] = set()
         for cap in group:
@@ -163,7 +163,6 @@ class SleepConsolidator:
             normalized = " ".join(cap["body"].split())
             if normalized not in seen_bodies:
                 seen_bodies.add(normalized)
-                bodies.append(cap["body"])
             tags.update(cap["tags"])
             self.store.update_capsule_status(
                 cap["id"],
@@ -171,15 +170,16 @@ class SleepConsolidator:
                 actor="sleep-consolidator",
                 reason="merged into summary capsule",
             )
+        merged_kind = _merged_kind(group)
         summary = Capsule.create(
-            kind=CapsuleKind.SUMMARY,
-            title=f"Consolidated {group[0]['kind']} memory: {group[0]['title'][:72]}",
-            body=compact_text("\n".join(bodies), limit=1200),
+            kind=merged_kind,
+            title=_merged_title(group, merged_kind),
+            body=semantic_consolidation_text(group, limit=1200),
             scope=scope,
             confidence=max(cap["confidence"] for cap in group),
             salience=max(cap["salience"] for cap in group),
             source_event_ids=sorted(set(source_ids)),
-            tags=sorted(tags | {"consolidated", group[0]["kind"]}),
+            tags=sorted(tags | {"consolidated", "semantic-consolidation", group[0]["kind"]}),
             status=MemoryStatus.STABLE,
         )
         self.store.upsert_capsule(summary)
@@ -281,6 +281,22 @@ class SleepConsolidator:
 def _signature(cap: dict) -> str:
     tags = [tag for tag in cap["tags"] if len(tag) >= 4][:5]
     return "|".join(sorted(tags)) or cap["title"][:48].lower()
+
+
+def _merged_kind(group: list[dict]) -> CapsuleKind:
+    kinds = {str(cap["kind"]) for cap in group}
+    if len(kinds) == 1:
+        kind = next(iter(kinds))
+        if kind in CORE_KIND_PRESERVE:
+            return CapsuleKind(kind)
+    return CapsuleKind.SUMMARY
+
+
+def _merged_title(group: list[dict], kind: CapsuleKind) -> str:
+    base = str(group[0]["title"])[:72]
+    if kind == CapsuleKind.SUMMARY:
+        return f"Consolidated {group[0]['kind']} memory: {base}"
+    return f"{kind.value.title()} memory: consolidated {base}"
 
 
 def _detect_conflicts(candidates: list[dict]) -> list[tuple[dict, dict]]:

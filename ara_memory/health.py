@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.backup import verify_backup
+from ara_memory.backup_stewardship import DEFAULT_TARGET_BACKUP_BYTES
 from ara_memory.models import MemoryStatus
 
 
@@ -71,6 +72,7 @@ def run_health_check(
     hot_budget: int = 1200,
     review_limit: int = 500,
     backup_max_age_hours: float = 72.0,
+    backup_target_bytes: int | None = DEFAULT_TARGET_BACKUP_BYTES,
     retention_cycle_max_age_hours: float = 72.0,
     regression_cases: list[Any] | None = None,
     regression_baseline: dict[str, Any] | None = None,
@@ -81,6 +83,7 @@ def run_health_check(
     retention = memory.retention(scope=scope, cold_limit=5)
     triage = memory.review_triage(scope=scope, limit=review_limit, examples_per_group=1)
     latest_backup = _latest_backup(memory.store.root)
+    backup_stewardship = _backup_stewardship_report(memory, stats, target_backup_bytes=backup_target_bytes)
     latest_retention_cycle = _latest_retention_cycle(memory.store.root, scope=scope)
     cold_signal = _cold_ratio_signal(retention.as_dict())
     cold_stewardship = (
@@ -112,6 +115,7 @@ def run_health_check(
             max_age_hours=retention_cycle_max_age_hours,
         ),
         _backup_signal(latest_backup, max_age_hours=backup_max_age_hours),
+        _backup_pressure_signal(stats, backup_stewardship, target_backup_bytes=backup_target_bytes),
     ]
     if regression_cases is not None:
         regression = memory.recall_regression(regression_cases, baseline=regression_baseline)
@@ -139,6 +143,7 @@ def run_health_check(
             "retention": retention.totals,
             "review_open": triage.total_open,
             "latest_backup": latest_backup,
+            "backup_stewardship": backup_stewardship,
             "latest_retention_cycle": latest_retention_cycle,
             "cold_stewardship": cold_stewardship.as_dict() if cold_stewardship else None,
         },
@@ -198,6 +203,72 @@ def _backup_signal(latest: dict[str, Any] | None, *, max_age_hours: float) -> He
     if age > max_age_hours:
         return HealthSignal("backup", False, f"latest verified backup is {age:.1f}h old", severity="warning", value=latest)
     return HealthSignal("backup", True, f"latest verified backup is {age:.1f}h old", value=latest)
+
+
+def _backup_stewardship_report(
+    memory: Any,
+    stats: dict[str, Any],
+    *,
+    target_backup_bytes: int | None,
+) -> dict[str, Any] | None:
+    if target_backup_bytes is None:
+        return None
+    backup_bytes = int(stats.get("backup_bytes", 0) or 0)
+    if backup_bytes <= target_backup_bytes:
+        return None
+    return memory.backup_stewardship(target_backup_bytes=target_backup_bytes).as_dict()
+
+
+def _backup_pressure_signal(
+    stats: dict[str, Any],
+    stewardship: dict[str, Any] | None,
+    *,
+    target_backup_bytes: int | None,
+) -> HealthSignal:
+    backup_bytes = int(stats.get("backup_bytes", 0) or 0)
+    if target_backup_bytes is None:
+        return HealthSignal("backup_pressure", True, "backup byte target disabled", value=backup_bytes)
+    if backup_bytes <= target_backup_bytes:
+        return HealthSignal(
+            "backup_pressure",
+            True,
+            f"backup bytes {backup_bytes} are within target {target_backup_bytes}",
+            value={"backup_bytes": backup_bytes, "target_backup_bytes": target_backup_bytes},
+        )
+    if stewardship is None:
+        return HealthSignal(
+            "backup_pressure",
+            False,
+            f"backup bytes {backup_bytes} exceed target {target_backup_bytes}",
+            severity="warning",
+            value={"backup_bytes": backup_bytes, "target_backup_bytes": target_backup_bytes},
+        )
+    totals = stewardship.get("totals", {})
+    if not stewardship.get("passed"):
+        return HealthSignal(
+            "backup_pressure",
+            False,
+            "backup stewardship is blocked; inspect backup directory safety before cleanup",
+            severity="warning",
+            value=stewardship,
+        )
+    candidates = int(totals.get("delete_candidates", 0) or 0)
+    if candidates:
+        return HealthSignal(
+            "backup_pressure",
+            False,
+            f"backup bytes {backup_bytes} exceed target {target_backup_bytes}; "
+            f"{candidates} redundant verified backups can leave {totals.get('bytes_after_candidates')} bytes",
+            severity="warning",
+            value=stewardship,
+        )
+    return HealthSignal(
+        "backup_pressure",
+        False,
+        f"backup bytes {backup_bytes} exceed target {target_backup_bytes}, but no redundant verified backups are eligible under the keep policy",
+        severity="warning",
+        value=stewardship,
+    )
 
 
 def _retention_cycle_signal(
@@ -409,6 +480,16 @@ def _recommend(signals: list[HealthSignal]) -> list[str]:
             recommendations.append("Run retention-cycle with representative recall queries to prove backup, cold export, prune-plan, and shadow-prune.")
         elif signal.name == "backup":
             recommendations.append("Create and verify a fresh backup, then run restore-drill.")
+        elif signal.name == "backup_pressure":
+            totals = (signal.value or {}).get("totals", {}) if isinstance(signal.value, dict) else {}
+            if int(totals.get("delete_candidates", 0) or 0) > 0:
+                recommendations.append(
+                    "Run backup-stewardship dry-run, then apply only reviewed redundant verified backup deletions with exact confirmation."
+                )
+            else:
+                recommendations.append(
+                    "Backup bytes exceed target but no redundant verified backups are eligible; review the target or protected backup policy."
+                )
         elif signal.name == "recall_regression":
             recommendations.append("Inspect recall-regression drift before changing ranking, compression, or pruning.")
     if not recommendations:

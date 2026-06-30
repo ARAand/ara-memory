@@ -119,6 +119,9 @@ def build_recall_plan(
                 "visible_section_count": int(diagnostics.get("visible_section_count", 0)),
                 "sections_truncated": int(diagnostics.get("sections_truncated", 0)),
                 "fallback_used": bool(diagnostics.get("fallback_used", False)),
+                "low_evidence_fallback_suppressed": bool(
+                    diagnostics.get("low_evidence_fallback_suppressed", False)
+                ),
                 "salience_supplement_used": bool(diagnostics.get("salience_supplement_used", False)),
                 "relevance_score_avg": float(diagnostics.get("relevance_score_avg", 0.0)),
                 "selected_capsule_ids": list(diagnostics["selected_capsule_ids"]),
@@ -229,7 +232,9 @@ def _rationale(
         f"visible_capsules={selected['visible_capsules']}, "
         f"visible_query_terms={selected['query_terms_visible_count']}/{selected['query_term_count']}."
     )
-    if selected.get("fallback_used"):
+    if selected.get("low_evidence_fallback_suppressed"):
+        items.append("Selected pack had no direct evidence; salience fallback bodies were suppressed.")
+    elif selected.get("fallback_used"):
         items.append("Selected pack used salience fallback; treat it as lower-confidence context.")
     elif selected.get("salience_supplement_used"):
         items.append("Selected pack mixed FTS hits with salience supplements to preserve useful context.")
@@ -250,6 +255,8 @@ def _alternative_quality(item: dict[str, Any]) -> int:
     visible_capsules = int(item.get("visible_capsules", 0))
     section_count = int(item.get("visible_section_count", 0))
     avg_relevance = float(item.get("relevance_score_avg", 0.0))
+    if bool(item.get("low_evidence_fallback_suppressed", False)):
+        return 0
     score = 0.0
     score += min(30.0, visible_capsules * 7.5)
     score += min(40.0, term_coverage * 40.0)
@@ -275,6 +282,7 @@ def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
         "visible_section_count": int(selected.get("visible_section_count", 0)),
         "sections_truncated": int(selected.get("sections_truncated", 0)),
         "fallback_used": bool(selected.get("fallback_used", False)),
+        "low_evidence_fallback_suppressed": bool(selected.get("low_evidence_fallback_suppressed", False)),
         "salience_supplement_used": bool(selected.get("salience_supplement_used", False)),
         "visible_capsule_ids": list(selected.get("visible_capsule_ids", [])),
     }

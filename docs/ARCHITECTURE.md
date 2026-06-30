@@ -18,6 +18,7 @@ remember_turn(envelope)
   -> prompt / assistant / command / decision events
   -> sha256-addressed file and image archive
   -> optional worktree capture
+  -> bounded synthetic turn episode with evidence ids
   -> consolidation + optional sleep + hot refresh
 
 spool_turn(envelope)
@@ -44,6 +45,7 @@ recall(query, scope, budget)
   -> token budget trimming
   -> count rendered capsules, visible sections, and visible query-term coverage
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
+  -> suppress no-evidence salience fallback bodies
   -> compute recall-pack quality for budget selection
 
 audit()
@@ -67,9 +69,10 @@ recall_regression(manifest, baseline)
 health(scope)
   -> doctor + spool + review pressure
   -> candidate/cold retention ratios
+  -> latest backup age + backup stewardship dry-run pressure
   -> cold_stewardship when cold pressure is high
   -> retention-cycle freshness and live cold-total drift checks
-  -> backup age + optional recall_regression
+  -> optional recall_regression
 
 worker(scope)
   -> acquire .ara-memory/locks/worker.lock
@@ -95,7 +98,8 @@ worker_loop(iterations, interval)
 sleep()
   -> review candidate memories through advisor interface
   -> promote high-confidence operational memories
-  -> merge repeated candidates into summaries
+  -> merge repeated candidates into semantic Remember/Use when/Evidence memories
+  -> preserve core goal/self/preference kinds during homogeneous merges
   -> consolidate repeated artifact memories by file/hash identity
   -> supersede stale summary generations
   -> flag possible contradictions

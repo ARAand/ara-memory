@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import hashlib
 import os
 import sys
 import json
@@ -762,10 +763,13 @@ class MemoryFlowTests(unittest.TestCase):
             )
 
             self.assertTrue(fallback.diagnostics["fallback_used"])
+            self.assertTrue(fallback.diagnostics["low_evidence_fallback_suppressed"])
             self.assertEqual(fallback.diagnostics["query_terms_visible"], [])
             self.assertEqual(fallback.diagnostics["query_terms_visible_count"], 0)
-            self.assertEqual(fallback.diagnostics["capsules_rendered_after_budget"], 1)
-            self.assertEqual(fallback.diagnostics["visible_capsule_ids"], [decision.id])
+            self.assertEqual(fallback.diagnostics["capsules_rendered_after_budget"], 0)
+            self.assertEqual(fallback.diagnostics["visible_capsule_ids"], [])
+            self.assertIn("No direct memory evidence matched this query", fallback.pack)
+            self.assertNotIn("Visible evidence diagnostics should be counted", fallback.pack)
 
     def test_recall_plan_scores_visible_evidence_above_salience_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -812,14 +816,14 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(matched_alt["fallback_used"])
             self.assertGreaterEqual(matched_alt["quality_score"], 0)
             self.assertLessEqual(matched_alt["quality_score"], 100)
-            self.assertGreater(fallback_alt["visible_capsules"], 0)
+            self.assertEqual(fallback_alt["visible_capsules"], 0)
             self.assertEqual(fallback_alt["query_term_count"], 3)
             self.assertEqual(fallback_alt["query_terms_visible_count"], 0)
             self.assertTrue(fallback_alt["fallback_used"])
-            self.assertGreaterEqual(fallback_alt["quality_score"], 0)
-            self.assertLessEqual(fallback_alt["quality_score"], 100)
+            self.assertTrue(fallback_alt["low_evidence_fallback_suppressed"])
+            self.assertEqual(fallback_alt["quality_score"], 0)
             self.assertGreater(matched_alt["quality_score"], fallback_alt["quality_score"])
-            self.assertIn("salience fallback", " ".join(fallback_plan.as_dict()["rationale"]))
+            self.assertIn("no direct evidence", " ".join(fallback_plan.as_dict()["rationale"]))
             self.assertEqual(matched_plan.as_dict()["diagnostics"]["quality_score"], matched_alt["quality_score"])
             self.assertIn("visible=", matched_plan.to_text())
             self.assertIn("quality=", matched_plan.to_text())
@@ -1274,6 +1278,62 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(names, {"health", "purpose", "identity", "candidate_pressure", "failure_kind_audit", "self_kind_audit", "recall_context"})
             self.assertEqual(report.status, "pass")
 
+    def test_milestone_check_fails_when_recall_context_is_only_salience_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: milestone memory should keep purpose visible.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: milestone purpose",
+                body="Milestone memory should keep purpose visible.",
+                scope="alpha",
+                confidence=0.78,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "milestone"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: milestone identity",
+                body="Ara is Jongseo's coding partner with independent judgment principles.",
+                scope="global",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.build_hot(scope="alpha", budget=700)
+            memory.backup(output=Path(tmp) / "backup.zip")
+
+            report = memory.milestone_check(
+                scope="alpha",
+                query="orphan nebula talisman",
+                health_query="milestone memory purpose",
+                purpose_query="purpose of milestone memory",
+                recall_budgets=[700],
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            recall_context = next(check for check in report.checks if check["name"] == "recall_context")
+            self.assertFalse(recall_context["passed"])
+            diagnostics = recall_context["value"]["diagnostics"]
+            plan = recall_context["value"]["plan"]
+            self.assertTrue(diagnostics["fallback_used"])
+            self.assertTrue(diagnostics["low_evidence_fallback_suppressed"])
+            self.assertEqual(diagnostics["query_terms_visible_count"], 0)
+            self.assertEqual(plan["diagnostics"]["quality_score"], 0)
+
     def test_milestone_check_fails_on_false_failure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1726,7 +1786,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM events WHERE scope = ?",
                     ("direct-idempotent",),
                 ).fetchone()[0]
-            self.assertEqual(count, 2)
+            self.assertEqual(count, 3)
 
     def test_maintenance_preserves_counts_and_recall(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2333,6 +2393,28 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.totals["bytes_after_candidates"], target)
             candidates = [Path(item.path).resolve() for item in report.items if item.delete_candidate]
             self.assertEqual(candidates, [paths[0].resolve()])
+
+    def test_backup_stewardship_reports_protected_backups_above_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: protected backups can exceed an aggressive target.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            for index in range(2):
+                path = backup_dir / f"protected-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (6500 + index, 6500 + index))
+
+            report = memory.backup_stewardship(
+                keep_latest=2,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.totals["delete_candidates"], 0)
+            self.assertFalse(report.totals["target_reached"])
+            self.assertIn("protected backups require", report.recommendations[0])
 
     def test_backup_stewardship_preserves_active_prune_approval_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3820,6 +3902,7 @@ class MemoryFlowTests(unittest.TestCase):
             root = Path(tmp)
             artifact = root / "turn-note.md"
             artifact.write_text("# Turn Note\nAra should preserve turn envelopes as episodes.\n", encoding="utf-8")
+            artifact_digest = hashlib.sha256(artifact.read_bytes()).hexdigest()[:12]
 
             memory = AraMemory(root / "memory")
             result = remember_turn(
@@ -3837,7 +3920,7 @@ class MemoryFlowTests(unittest.TestCase):
             )
 
             self.assertEqual(result["turn_id"], "turn_test_1")
-            self.assertEqual(len(result["events_retained"]), 4)
+            self.assertEqual(len(result["events_retained"]), 5)
             self.assertEqual(len(result["artifact_events_retained"]), 1)
             self.assertGreaterEqual(result["capsules_created"], 1)
             self.assertIsNotNone(result["hot"])
@@ -3854,9 +3937,18 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("## Hot Memory", pack)
 
             with memory.store.session() as conn:
-                rows = conn.execute("SELECT metadata_json FROM events").fetchall()
+                rows = conn.execute("SELECT text, metadata_json FROM events").fetchall()
             metadata = [json.loads(row["metadata_json"]) for row in rows]
             self.assertTrue(all(item.get("turn_id") == "turn_test_1" for item in metadata))
+            turn_episode = [
+                (row["text"], json.loads(row["metadata_json"]))
+                for row in rows
+                if json.loads(row["metadata_json"]).get("turn_role") == "turn_episode"
+            ]
+            self.assertEqual(len(turn_episode), 1)
+            self.assertIn("Turn episode:", turn_episode[0][0])
+            self.assertIn("Evidence ids:", turn_episode[0][0])
+            self.assertIn(f"sha256={artifact_digest}", turn_episode[0][0])
 
     def test_plan_turn_ingress_separates_raw_preservation_from_recall_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4094,7 +4186,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["succeeded"], 1)
             self.assertIn("stabilization", payload)
             self.assertEqual(payload["stabilization"]["summaries_created"], 2)
-            self.assertEqual(payload["stabilization"]["superseded"], 8)
+            self.assertEqual(payload["stabilization"]["superseded"], 9)
             self.assertIsNotNone(payload["stabilization"]["scopes"][0]["hot"])
 
             remaining_episode_candidates = memory.list_capsules(
@@ -4950,6 +5042,48 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertEqual(memory.store.get_capsule(capsule_id)["status"], MemoryStatus.SUPERSEDED.value)
             summaries = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
             self.assertTrue(any(set(summary["source_event_ids"]) == set(event_ids) for summary in summaries))
+            merged = next(summary for summary in summaries if set(summary["source_event_ids"]) == set(event_ids))
+            self.assertIn("Remember:", merged["body"])
+            self.assertIn("Use when:", merged["body"])
+            self.assertIn("Evidence:", merged["body"])
+
+    def test_sleep_preserves_core_goal_kind_when_merging_goal_memories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            candidate_ids = []
+            for index in range(2):
+                event = memory.retain(
+                    kind="prompt",
+                    text=f"Goal: natural memory should preserve purpose layer evidence {index}.",
+                    source=f"test-{index}",
+                    scope="alpha",
+                )
+                event_ids.append(event.id)
+                candidate = Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: preserve natural memory purpose",
+                    body=f"Natural memory should preserve purpose layer evidence {index}.",
+                    scope="alpha",
+                    confidence=0.82,
+                    salience=0.88,
+                    source_event_ids=[event.id],
+                    tags=["goal", "purpose", "natural-memory"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+                candidate_ids.append(candidate.id)
+                memory.store.upsert_capsule(candidate)
+
+            report = memory.sleep(scope="alpha")
+
+            self.assertGreaterEqual(report.merged, 1, report.as_dict())
+            for capsule_id in candidate_ids:
+                self.assertEqual(memory.store.get_capsule(capsule_id)["status"], MemoryStatus.SUPERSEDED.value)
+            goals = memory.list_capsules(scope="alpha", status="stable", kind="goal", limit=10)
+            merged = next(goal for goal in goals if set(goal["source_event_ids"]) == set(event_ids))
+            self.assertIn("Remember:", merged["body"])
+            self.assertIn("semantic-consolidation", merged["tags"])
 
     def test_sleep_flags_possible_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6120,6 +6254,82 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(spool_signal.passed)
             self.assertEqual(spool_signal.severity, "error")
 
+    def test_health_reports_backup_pressure_with_stewardship_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: health should report redundant backup pressure.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+            backup_dir = memory.store.root / "backups"
+            for index in range(5):
+                path = backup_dir / f"health-pressure-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (8000 + index, 8000 + index))
+
+            report = memory.health(
+                scope="alpha",
+                query="backup pressure health",
+                recall_budget=900,
+                hot_budget=500,
+                backup_target_bytes=0,
+            )
+            pressure = next(signal for signal in report.signals if signal.name == "backup_pressure")
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertFalse(pressure.passed, report.as_dict())
+            self.assertEqual(pressure.severity, "warning")
+            self.assertIn("redundant verified backups", pressure.detail)
+            self.assertGreater(report.stats["backup_stewardship"]["totals"]["delete_candidates"], 0)
+
+            disabled = memory.health(
+                scope="alpha",
+                query="backup pressure health",
+                recall_budget=900,
+                hot_budget=500,
+                backup_target_bytes=None,
+            )
+            disabled_pressure = next(signal for signal in disabled.signals if signal.name == "backup_pressure")
+            self.assertTrue(disabled_pressure.passed, disabled.as_dict())
+            self.assertIsNone(disabled.stats["backup_stewardship"])
+
+    def test_health_warns_when_protected_backups_remain_above_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: protected backups above target should remain visible pressure.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+            for index in range(2):
+                memory.backup(output=memory.store.root / "backups" / f"protected-health-{index}.zip")
+
+            report = memory.health(
+                scope="alpha",
+                query="protected backups above target",
+                recall_budget=900,
+                hot_budget=500,
+                backup_target_bytes=0,
+            )
+            pressure = next(signal for signal in report.signals if signal.name == "backup_pressure")
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertFalse(pressure.passed, report.as_dict())
+            self.assertEqual(pressure.severity, "warning")
+            self.assertIn("no redundant verified backups", pressure.detail)
+            self.assertEqual(report.stats["backup_stewardship"]["totals"]["delete_candidates"], 0)
+            self.assertFalse(report.stats["backup_stewardship"]["totals"]["target_reached"])
+            self.assertTrue(any("no redundant verified backups" in item for item in report.recommendations))
+
     def test_review_compact_acknowledges_low_quality_markers_without_reopening(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -6284,6 +6494,9 @@ class MemoryFlowTests(unittest.TestCase):
             stable_summaries = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
             self.assertEqual(len(stable_summaries), 1)
             self.assertIn("Consolidated command episode outcomes", stable_summaries[0]["title"])
+            self.assertIn("Remember:", stable_summaries[0]["body"])
+            self.assertIn("Use when:", stable_summaries[0]["body"])
+            self.assertIn("Evidence:", stable_summaries[0]["body"])
             self.assertEqual(set(stable_summaries[0]["source_event_ids"]), set(event_ids))
             superseded = memory.list_capsules(scope="alpha", status="superseded", kind="episode", limit=10)
             self.assertEqual(len(superseded), 5)
@@ -6371,6 +6584,9 @@ class MemoryFlowTests(unittest.TestCase):
             stable = memory.list_capsules(scope="alpha", status="stable", kind="summary", limit=10)
             self.assertEqual(len(stable), 1)
             self.assertIn("successful command evidence", stable[0]["title"])
+            self.assertIn("Remember:", stable[0]["body"])
+            self.assertIn("Use when:", stable[0]["body"])
+            self.assertIn("Evidence:", stable[0]["body"])
             self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
             superseded = memory.list_capsules(scope="alpha", status="superseded", kind="failure", limit=10)
             self.assertEqual(len(superseded), 3)

@@ -88,6 +88,7 @@ def run_milestone_check(
         budgets=recall_budgets or [800, 1600, 2500],
         include_hot=True,
     )
+    recall_context_passed, recall_context_detail = _recall_context_gate(context)
     candidate_ratio = float(pressure.totals["candidate_stable_ratio"])
     checks = [
         _check(
@@ -134,8 +135,8 @@ def run_milestone_check(
         ),
         _check(
             "recall_context",
-            int(context.diagnostics["estimated_tokens_after"]) <= context.plan.recommended_budget,
-            f"budget={context.plan.recommended_budget}, tokens={context.diagnostics['estimated_tokens_after']}, capsules={context.diagnostics['capsules_selected']}",
+            recall_context_passed,
+            recall_context_detail,
             "error",
             {
                 "plan": context.plan.as_dict(),
@@ -167,6 +168,31 @@ def _check(name: str, passed: bool, detail: str, severity: str, value: Any) -> d
     }
 
 
+def _recall_context_gate(context: Any) -> tuple[bool, str]:
+    diagnostics = context.diagnostics
+    plan_diagnostics = context.plan.diagnostics
+    tokens = int(diagnostics["estimated_tokens_after"])
+    budget = int(context.plan.recommended_budget)
+    visible = int(diagnostics.get("capsules_rendered_after_budget", 0))
+    query_terms = int(diagnostics.get("query_term_count", 0))
+    visible_terms = int(diagnostics.get("query_terms_visible_count", 0))
+    quality = int(plan_diagnostics.get("quality_score", 0))
+    suppressed = bool(diagnostics.get("low_evidence_fallback_suppressed", False))
+    passed = (
+        tokens <= budget
+        and visible > 0
+        and quality >= 40
+        and not suppressed
+        and (query_terms == 0 or visible_terms > 0)
+    )
+    detail = (
+        f"budget={budget}, tokens={tokens}, capsules={diagnostics['capsules_selected']}, "
+        f"visible={visible}, visible_terms={visible_terms}/{query_terms}, quality={quality}, "
+        f"low_evidence_suppressed={suppressed}"
+    )
+    return passed, detail
+
+
 def _recommend(checks: list[dict[str, Any]]) -> list[str]:
     failed = [check for check in checks if not check["passed"]]
     if not failed:
@@ -186,5 +212,5 @@ def _recommend(checks: list[dict[str, Any]]) -> list[str]:
         elif check["name"] == "self_kind_audit":
             out.append("Run self-kind-audit, review false self-memory reclassifications, and apply them before declaring the milestone clean.")
         elif check["name"] == "recall_context":
-            out.append("Inspect recall-context budget selection; selected pack exceeded the chosen budget.")
+            out.append("Inspect recall-context evidence quality; selected pack must have direct visible evidence, not only salience fallback.")
     return out
