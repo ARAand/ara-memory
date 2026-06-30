@@ -389,6 +389,63 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertLess(selected.index(stable.id), selected.index(candidate.id))
             self.assertLess(selected.index(stable.id), selected.index(conflict.id))
 
+    def test_search_capsules_labels_fts_supplement_and_fallback_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            direct = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Needle recall evidence",
+                body="Needle evidence should be returned by direct FTS search.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.2,
+                source_event_ids=[],
+                tags=["needle", "evidence"],
+                status=MemoryStatus.STABLE,
+            )
+            supplement = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="High salience supplement",
+                body="Useful neighboring context without the direct query term.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.99,
+                source_event_ids=[],
+                tags=["supplement"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(direct)
+            memory.store.upsert_capsule(supplement)
+
+            rows = memory.store.search_capsules("needle", scope="alpha", limit=2, include_global=False)
+
+            self.assertEqual([row["id"] for row in rows], [direct.id, supplement.id])
+            self.assertEqual(rows[0]["recall_match_source"], "fts")
+            self.assertIsNotNone(rows[0]["bm25_score"])
+            self.assertEqual(rows[1]["recall_match_source"], "salience_supplement")
+            self.assertIsNone(rows[1]["bm25_score"])
+
+            result = memory.recall_result(
+                "needle",
+                scope="alpha",
+                budget=1000,
+                include_hot=False,
+                include_global=False,
+            )
+            selected = result.diagnostics["selected_capsule_ids"]
+            self.assertLess(selected.index(direct.id), selected.index(supplement.id))
+
+            fallback = memory.store.search_capsules(
+                "orphan nebula talisman",
+                scope="alpha",
+                limit=2,
+                include_global=False,
+            )
+
+            self.assertEqual([row["recall_match_source"] for row in fallback], ["salience_fallback", "salience_fallback"])
+            self.assertEqual(fallback[0]["id"], supplement.id)
+
     def test_recall_demotes_operational_summary_for_conceptual_query(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -469,6 +526,122 @@ class MemoryFlowTests(unittest.TestCase):
             selected = result.diagnostics["selected_capsule_ids"]
             self.assertLess(selected.index(goal.id), selected.index(operational.id))
             self.assertIn("## Active Goals / Intent", result.pack)
+
+    def test_recall_diagnostics_report_visible_evidence_terms_and_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: visible evidence diagnostics should survive budget trimming.",
+                source="test",
+                scope="alpha",
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: visible evidence diagnostics",
+                body="Visible evidence diagnostics should be counted from rendered memory body.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.7,
+                source_event_ids=[event.id],
+                tags=["visible", "evidence", "diagnostics"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+
+            result = memory.recall_result(
+                "visible evidence phantom",
+                scope="alpha",
+                budget=700,
+                include_hot=False,
+                include_global=False,
+            )
+            diagnostics = result.diagnostics
+
+            self.assertFalse(diagnostics["fallback_used"])
+            self.assertEqual(diagnostics["query_terms"], ["visible", "evidence", "phantom"])
+            self.assertIn("visible", diagnostics["query_terms_visible"])
+            self.assertIn("evidence", diagnostics["query_terms_visible"])
+            self.assertNotIn("phantom", diagnostics["query_terms_visible"])
+            self.assertEqual(
+                diagnostics["query_terms_visible_count"],
+                len(diagnostics["query_terms_visible"]),
+            )
+            self.assertEqual(diagnostics["capsules_rendered_after_budget"], 1)
+            self.assertEqual(diagnostics["visible_capsule_ids"], [decision.id])
+            self.assertIn("Relevant Decisions", diagnostics["visible_sections"])
+            self.assertIn("Visible evidence diagnostics", result.pack)
+
+            fallback = memory.recall_result(
+                "orphan nebula talisman",
+                scope="alpha",
+                budget=700,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertTrue(fallback.diagnostics["fallback_used"])
+            self.assertEqual(fallback.diagnostics["query_terms_visible"], [])
+            self.assertEqual(fallback.diagnostics["query_terms_visible_count"], 0)
+            self.assertEqual(fallback.diagnostics["capsules_rendered_after_budget"], 1)
+            self.assertEqual(fallback.diagnostics["visible_capsule_ids"], [decision.id])
+
+    def test_recall_plan_scores_visible_evidence_above_salience_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: visible evidence diagnostics should guide recall planning.",
+                source="test",
+                scope="alpha",
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: visible evidence diagnostics",
+                body="Visible evidence diagnostics should raise recall plan quality.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.7,
+                source_event_ids=[event.id],
+                tags=["visible", "evidence", "diagnostics"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+
+            matched_plan = memory.recall_plan(
+                "visible evidence phantom",
+                scope="alpha",
+                budgets=[700],
+                include_hot=False,
+                include_global=False,
+            )
+            fallback_plan = memory.recall_plan(
+                "orphan nebula talisman",
+                scope="alpha",
+                budgets=[700],
+                include_hot=False,
+                include_global=False,
+            )
+            matched_alt = matched_plan.as_dict()["alternatives"][0]
+            fallback_alt = fallback_plan.as_dict()["alternatives"][0]
+
+            self.assertGreater(matched_alt["visible_capsules"], 0)
+            self.assertEqual(matched_alt["query_term_count"], 3)
+            self.assertEqual(matched_alt["query_terms_visible_count"], 2)
+            self.assertFalse(matched_alt["fallback_used"])
+            self.assertGreaterEqual(matched_alt["quality_score"], 0)
+            self.assertLessEqual(matched_alt["quality_score"], 100)
+            self.assertGreater(fallback_alt["visible_capsules"], 0)
+            self.assertEqual(fallback_alt["query_term_count"], 3)
+            self.assertEqual(fallback_alt["query_terms_visible_count"], 0)
+            self.assertTrue(fallback_alt["fallback_used"])
+            self.assertGreaterEqual(fallback_alt["quality_score"], 0)
+            self.assertLessEqual(fallback_alt["quality_score"], 100)
+            self.assertGreater(matched_alt["quality_score"], fallback_alt["quality_score"])
+            self.assertIn("salience fallback", " ".join(fallback_plan.as_dict()["rationale"]))
+            self.assertEqual(matched_plan.as_dict()["diagnostics"]["quality_score"], matched_alt["quality_score"])
+            self.assertIn("visible=", matched_plan.to_text())
+            self.assertIn("quality=", matched_plan.to_text())
 
     def test_recall_plan_recommends_small_useful_budget_and_cost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

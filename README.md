@@ -46,6 +46,7 @@ python -m ara_memory consolidate
 python -m ara_memory hot --scope global --budget 1200
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000
 python -m ara_memory recall "What should Ara remember about Jongseo?" --budget 2000 --hot --diagnostics
+python -m ara_memory recall-plan "What should Ara remember about Jongseo?" --budgets 800,1600,2500 --json
 python -m ara_memory doctor --scope global
 python -m ara_memory audit
 python -m ara_memory eval
@@ -148,10 +149,17 @@ python -m ara_memory recall "current project memory" --scope project --hot --bud
 ```
 
 `recall-plan` is the retrieval-side companion to `ingress-turn`: it compares
-candidate budgets, reports selected capsule counts, estimates model input cost,
-and recommends the smallest useful pack before Codex spends context on recall.
-`recall-context` applies that plan and emits the selected pack, so normal work
-can use one command while still preserving the budget decision.
+candidate budgets after budget trimming, estimates model input cost, and
+recommends the smallest pack with enough rendered evidence before Codex spends
+context on recall. In alternatives, `capsules` is the selected candidate count
+before trimming, `visible` is the capsule count actually rendered in the pack,
+and `quality` is a 0-100 score based on visible query-term coverage, visible
+sections, relevance, and fallback penalties. Use `recall-plan --json` when
+debugging retrieval quality; inspect `visible_capsules`,
+`query_terms_visible_count`, `sections_truncated`, `fallback_used`, and
+`quality_score` before increasing the budget. `recall-context` applies that
+plan and emits the selected pack, so normal work can use one command while still
+preserving the budget decision.
 
 ## Codex Skill
 
@@ -404,7 +412,10 @@ python -m ara_memory recall-regression --manifest examples/recall_regression_man
 
 Each case checks expected terms, forbidden terms, budget, and selected capsules.
 With a baseline, the gate also fails when a previously passing case breaks,
-token use jumps, or the selected capsule set drifts too far.
+token use jumps, or the selected capsule set drifts too far. It does not assert
+recall-plan `quality_score` or rendered-evidence fields; for budget-selection QA,
+run `recall-plan --json` and review `visible_capsules`,
+`query_terms_visible_count`, `fallback_used`, and `quality_score`.
 
 Create a portable snapshot after important milestones:
 

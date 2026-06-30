@@ -109,30 +109,58 @@ def main(argv: list[str] | None = None) -> int:
     recall.add_argument("--scope", default="global")
     recall.add_argument("--budget", type=int, default=4000)
     recall.add_argument("--no-global", action="store_true", help="Do not include global memories when recalling a scoped pack.")
-    recall.add_argument("--diagnostics", action="store_true", help="Print recall cost/selection diagnostics after the pack.")
+    recall.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help=(
+            "Print recall diagnostics after the pack, including rendered capsules, "
+            "visible query terms, visible sections, truncation, and fallback status."
+        ),
+    )
     recall.add_argument("--hot", action="store_true", help="Prepend the scope hot memory file if it exists.")
 
-    recall_plan = sub.add_parser("recall-plan")
+    recall_plan = sub.add_parser(
+        "recall-plan",
+        help="Compare recall budgets and choose the smallest pack with visible evidence quality.",
+    )
     recall_plan.add_argument("query")
     recall_plan.add_argument("--scope", default="global")
-    recall_plan.add_argument("--budgets", default="800,1600,2500")
+    recall_plan.add_argument(
+        "--budgets",
+        default="800,1600,2500",
+        help="Comma-separated recall token budgets to test before selecting a pack.",
+    )
     recall_plan.add_argument("--no-global", action="store_true")
     recall_plan.add_argument("--no-hot", action="store_true")
     recall_plan.add_argument("--output-tokens", type=int, default=0)
     recall_plan.add_argument("--input-usd-per-million", type=float, default=0.0)
     recall_plan.add_argument("--output-usd-per-million", type=float, default=0.0)
-    recall_plan.add_argument("--json", action="store_true")
+    recall_plan.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print full plan diagnostics, including quality_score, visible_capsules, "
+            "query_terms_visible_count, and fallback_used."
+        ),
+    )
 
-    recall_context = sub.add_parser("recall-context")
+    recall_context = sub.add_parser(
+        "recall-context",
+        help="Build the selected recall pack using recall-plan.",
+    )
     recall_context.add_argument("query")
     recall_context.add_argument("--scope", default="global")
-    recall_context.add_argument("--budgets", default="800,1600,2500")
+    recall_context.add_argument(
+        "--budgets",
+        default="800,1600,2500",
+        help="Comma-separated recall token budgets to test before selecting a pack.",
+    )
     recall_context.add_argument("--no-global", action="store_true")
     recall_context.add_argument("--no-hot", action="store_true")
     recall_context.add_argument("--output-tokens", type=int, default=0)
     recall_context.add_argument("--input-usd-per-million", type=float, default=0.0)
     recall_context.add_argument("--output-usd-per-million", type=float, default=0.0)
-    recall_context.add_argument("--pack-only", action="store_true")
+    recall_context.add_argument("--pack-only", action="store_true", help="Print only the selected pack, hiding the plan.")
     recall_context.add_argument("--json", action="store_true")
 
     purpose_check = sub.add_parser("purpose-check")

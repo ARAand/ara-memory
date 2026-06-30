@@ -389,11 +389,42 @@ class MemoryStore:
         fts_query = _fts_query(query)
         scope_filter = "(c.scope = ? OR c.scope = 'global')" if include_global else "c.scope = ?"
         with self.session() as conn:
+            def salience_rows(
+                *,
+                limit: int,
+                recall_match_source: str,
+                excluded_ids: list[str],
+            ) -> list[sqlite3.Row]:
+                if limit <= 0:
+                    return []
+                salience_scope_filter = "(scope = ? OR scope = 'global')" if include_global else "scope = ?"
+                excluded_clause = ""
+                params: list[Any] = [recall_match_source, scope]
+                if excluded_ids:
+                    placeholders = ", ".join("?" for _ in excluded_ids)
+                    excluded_clause = f"AND id NOT IN ({placeholders})"
+                    params.extend(excluded_ids)
+                params.append(limit)
+                return list(
+                    conn.execute(
+                        f"""
+                        SELECT *, NULL AS bm25_score, ? AS recall_match_source
+                        FROM capsules
+                        WHERE status IN ('candidate', 'stable')
+                          AND {salience_scope_filter}
+                          {excluded_clause}
+                        ORDER BY salience DESC, updated_at DESC
+                        LIMIT ?
+                        """,
+                        tuple(params),
+                    )
+                )
+
             if fts_query:
                 rows = list(
                     conn.execute(
                         f"""
-                        SELECT c.*, bm25(capsules_fts) AS bm25_score
+                        SELECT c.*, bm25(capsules_fts) AS bm25_score, 'fts' AS recall_match_source
                         FROM capsules_fts
                         JOIN capsules c ON c.id = capsules_fts.id
                         WHERE capsules_fts MATCH ?
@@ -405,21 +436,14 @@ class MemoryStore:
                         (fts_query, scope, limit),
                     )
                 )
-                if rows:
+                if len(rows) >= limit:
                     return rows
-            return list(
-                conn.execute(
-                    f"""
-                    SELECT *, 0.0 AS bm25_score
-                    FROM capsules
-                    WHERE status IN ('candidate', 'stable')
-                      AND {"(scope = ? OR scope = 'global')" if include_global else "scope = ?"}
-                    ORDER BY salience DESC, updated_at DESC
-                    LIMIT ?
-                    """,
-                    (scope, limit),
+                return rows + salience_rows(
+                    limit=limit - len(rows),
+                    recall_match_source="salience_supplement" if rows else "salience_fallback",
+                    excluded_ids=[str(row["id"]) for row in rows],
                 )
-            )
+            return salience_rows(limit=limit, recall_match_source="salience_fallback", excluded_ids=[])
 
     def add_edge(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords
 from ara_memory.models import MemoryStatus
@@ -11,7 +12,7 @@ from ara_memory.storage import MemoryStore, row_to_capsule
 @dataclass(slots=True)
 class RecallResult:
     pack: str
-    diagnostics: dict[str, int | bool | str | list[str]]
+    diagnostics: dict[str, Any]
 
 
 class RecallCompiler:
@@ -53,12 +54,14 @@ class RecallCompiler:
         other = []
 
         seen = set()
+        rendered_capsules = []
         for cap in capsules:
             if cap["id"] in seen:
                 continue
             if intent_query and _is_low_value_for_intent(cap):
                 continue
             seen.add(cap["id"])
+            rendered_capsules.append(cap)
             kind = cap["kind"]
             item = _format_capsule(cap)
             if kind == "summary":
@@ -115,6 +118,11 @@ class RecallCompiler:
         )
         untrimmed = "\n\n".join(parts).strip()
         pack = _enforce_budget(parts, budget)
+        evidence_text = _evidence_text(pack)
+        visible_query_terms = _matched_query_terms(evidence_text, terms)
+        visible_sections = _visible_sections(pack)
+        visible_capsules = _visible_capsules(pack, rendered_capsules)
+        relevance_scores = [_recall_score(cap, terms) for cap in visible_capsules]
         diagnostics = {
             "budget_tokens": budget,
             "estimated_tokens_before": estimate_tokens(untrimmed),
@@ -122,11 +130,30 @@ class RecallCompiler:
             "capsules_considered": len(candidates),
             "capsules_filtered_by_risk": len(candidates) - len(filtered_candidates),
             "capsules_selected": len(capsules),
+            "capsules_rendered_before_budget": len(rendered_capsules),
+            "capsules_rendered_after_budget": len(visible_capsules),
             "graph_edges_considered": len(graph_rows),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
+            "query_terms": terms,
+            "query_terms_visible": visible_query_terms,
+            "query_term_count": len(terms),
+            "query_terms_visible_count": len(visible_query_terms),
+            "visible_section_count": len(visible_sections),
+            "visible_sections": visible_sections,
+            "sections_truncated": pack.count("[compressed]"),
+            "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in visible_capsules),
+            "salience_supplement_used": any(
+                cap.get("recall_match_source") == "salience_supplement" for cap in visible_capsules
+            ),
+            "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
+            "relevance_score_avg": (
+                sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            ),
             "selected_capsule_ids": [cap["id"] for cap in capsules],
+            "rendered_capsule_ids": [cap["id"] for cap in rendered_capsules],
+            "visible_capsule_ids": [cap["id"] for cap in visible_capsules],
         }
         return RecallResult(pack=pack, diagnostics=diagnostics)
 
@@ -405,15 +432,148 @@ def _rerank_capsules(capsules: list[dict], terms: list[str]) -> list[dict]:
 def _recall_score(cap: dict, terms: list[str]) -> float:
     tags = set(cap["tags"])
     lowered_terms = [term.lower() for term in terms]
-    term_hits = len(tags.intersection(lowered_terms))
+    tag_hits = len(tags.intersection(lowered_terms))
+    title_hits = _text_hit_count(str(cap["title"]), lowered_terms)
+    body_hits = _text_hit_count(str(cap["body"]), lowered_terms)
     score = 0.0
     score += _kind_priority(cap)
     score += _status_priority(cap)
     score += float(cap["salience"]) * 1.4
     score += float(cap["confidence"]) * 0.8
-    score += term_hits * 0.35
+    score += tag_hits * 0.35
+    score += min(2.4, title_hits * 0.45 + body_hits * 0.18)
+    score += _bm25_bonus(cap)
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score
+
+
+def _bm25_bonus(cap: dict) -> float:
+    value = cap.get("bm25_score")
+    if value is None:
+        source = cap.get("recall_match_source")
+        if source == "salience_fallback":
+            return -0.35
+        if source == "salience_supplement":
+            return -1.2
+        return 0.0
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    # SQLite FTS5 bm25 is lower-is-better and often negative for stronger hits.
+    return max(-0.25, min(1.4, -score * 0.08))
+
+
+def _text_hit_count(text: str, terms: list[str]) -> int:
+    lowered = text.lower()
+    stems = {_stem(term) for term in terms if len(term) >= 3}
+    return sum(1 for stem in stems if stem and stem in lowered)
+
+
+def _matched_query_terms(text: str, terms: list[str]) -> list[str]:
+    lowered = text.lower()
+    out: list[str] = []
+    seen = set()
+    for term in terms:
+        stem = _stem(term)
+        if not stem or stem in seen:
+            continue
+        if stem in lowered:
+            out.append(term)
+            seen.add(stem)
+    return out
+
+
+def _evidence_text(pack: str) -> str:
+    lines = []
+    skip_prefixes = ("#", "Query:", "Scope:")
+    for line in pack.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(skip_prefixes):
+            continue
+        if stripped.startswith("- Memory body text is retained evidence"):
+            continue
+        lines.append(stripped)
+    return "\n".join(lines)
+
+
+def _visible_sections(pack: str) -> list[str]:
+    sections: list[str] = []
+    current: str | None = None
+    has_content = False
+    for line in pack.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if current and has_content:
+                sections.append(current)
+            current = stripped[3:]
+            has_content = False
+            continue
+        if current and stripped and stripped != "- None found.":
+            has_content = True
+    if current and has_content:
+        sections.append(current)
+    return sections
+
+
+def _visible_capsules(pack: str, rendered_capsules: list[dict]) -> list[dict]:
+    visible_header_counts: dict[str, int] = {}
+    for line in pack.splitlines():
+        if _is_recall_capsule_line(line):
+            header = line.strip()
+            visible_header_counts[header] = visible_header_counts.get(header, 0) + 1
+    if not visible_header_counts:
+        return []
+    visible = []
+    for cap in rendered_capsules:
+        matched_header = _matching_visible_header(cap, visible_header_counts)
+        if matched_header is None:
+            continue
+        visible.append(cap)
+        visible_header_counts[matched_header] -= 1
+    return visible
+
+
+def _matching_visible_header(cap: dict, visible_header_counts: dict[str, int]) -> str | None:
+    header = _format_capsule(cap).splitlines()[0]
+    stable_prefix = _capsule_header_match_prefix(cap)
+    for visible_header, count in visible_header_counts.items():
+        if count <= 0:
+            continue
+        if visible_header.startswith(header) or visible_header.startswith(stable_prefix):
+            return visible_header
+        if header.startswith(visible_header) and len(visible_header) >= len(stable_prefix):
+            return visible_header
+    return None
+
+
+def _capsule_header_match_prefix(cap: dict) -> str:
+    prefix = f"- [{cap['kind']}/{cap['status']}] "
+    title = str(cap["title"])
+    return prefix + title[: min(len(title), 48)]
+
+
+def _is_recall_capsule_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped.startswith("- [") or "] " not in stripped:
+        return False
+    label = stripped[3:].split("]", 1)[0]
+    if "/" not in label:
+        return False
+    kind, status = label.split("/", 1)
+    return kind in {
+        "episode",
+        "goal",
+        "decision",
+        "preference",
+        "procedure",
+        "failure",
+        "project",
+        "self",
+        "fact",
+        "conflict",
+        "summary",
+    } and status in {"candidate", "stable"}
 
 
 def _operational_summary_penalty(cap: dict, terms: list[str]) -> float:

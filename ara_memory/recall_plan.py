@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ara_memory.costs import estimate_api_cost
@@ -19,6 +19,7 @@ class RecallPlan:
     api_cost: dict[str, float | int]
     alternatives: list[dict[str, Any]]
     rationale: list[str]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class RecallPlan:
             "api_cost": self.api_cost,
             "alternatives": self.alternatives,
             "rationale": self.rationale,
+            "diagnostics": self.diagnostics,
         }
 
     def to_text(self) -> str:
@@ -52,7 +54,8 @@ class RecallPlan:
             lines.append(
                 "- "
                 f"budget={item['budget']}, hot={item['include_hot']}, global={item['include_global']}, "
-                f"tokens={item['estimated_tokens']}, capsules={item['selected_capsules']}"
+                f"tokens={item['estimated_tokens']}, capsules={item['selected_capsules']}, "
+                f"visible={item['visible_capsules']}, quality={item['quality_score']}"
             )
         return "\n".join(lines)
 
@@ -108,10 +111,21 @@ def build_recall_plan(
                 "include_global": include_global,
                 "estimated_tokens": int(diagnostics["estimated_tokens_after"]),
                 "selected_capsules": int(diagnostics["capsules_selected"]),
+                "rendered_capsules": int(diagnostics.get("capsules_rendered_before_budget", 0)),
+                "visible_capsules": int(diagnostics.get("capsules_rendered_after_budget", 0)),
                 "graph_edges": int(diagnostics["graph_edges_considered"]),
+                "query_term_count": int(diagnostics.get("query_term_count", 0)),
+                "query_terms_visible_count": int(diagnostics.get("query_terms_visible_count", 0)),
+                "visible_section_count": int(diagnostics.get("visible_section_count", 0)),
+                "sections_truncated": int(diagnostics.get("sections_truncated", 0)),
+                "fallback_used": bool(diagnostics.get("fallback_used", False)),
+                "salience_supplement_used": bool(diagnostics.get("salience_supplement_used", False)),
+                "relevance_score_avg": float(diagnostics.get("relevance_score_avg", 0.0)),
                 "selected_capsule_ids": list(diagnostics["selected_capsule_ids"]),
+                "visible_capsule_ids": list(diagnostics.get("visible_capsule_ids", [])),
             }
         )
+        alternatives[-1]["quality_score"] = _alternative_quality(alternatives[-1])
     selected = _select_alternative(alternatives)
     without_hot = memory.recall_result(
         query,
@@ -151,6 +165,7 @@ def build_recall_plan(
         },
         alternatives=alternatives,
         rationale=rationale,
+        diagnostics=_selected_diagnostics(selected),
     )
 
 
@@ -188,13 +203,13 @@ def build_recall_context(
 
 
 def _select_alternative(alternatives: list[dict[str, Any]]) -> dict[str, Any]:
-    non_empty = [item for item in alternatives if int(item["selected_capsules"]) > 0]
+    non_empty = [item for item in alternatives if int(item["visible_capsules"]) > 0]
     if not non_empty:
         return alternatives[0]
     for item in non_empty:
-        if int(item["selected_capsules"]) >= 3:
+        if float(item["quality_score"]) >= 60.0:
             return item
-    return non_empty[-1]
+    return max(non_empty, key=lambda item: (float(item["quality_score"]), -int(item["budget"])))
 
 
 def _rationale(
@@ -206,9 +221,18 @@ def _rationale(
     include_global: bool,
 ) -> list[str]:
     items = [
-        "Choose the smallest tested budget that retrieves a useful capsule set.",
+        "Choose the smallest tested budget with enough visible evidence, not just selected capsules.",
         "Use the selected recall pack instead of reading the raw event ledger.",
     ]
+    items.append(
+        f"Selected pack quality={selected['quality_score']}, "
+        f"visible_capsules={selected['visible_capsules']}, "
+        f"visible_query_terms={selected['query_terms_visible_count']}/{selected['query_term_count']}."
+    )
+    if selected.get("fallback_used"):
+        items.append("Selected pack used salience fallback; treat it as lower-confidence context.")
+    elif selected.get("salience_supplement_used"):
+        items.append("Selected pack mixed FTS hits with salience supplements to preserve useful context.")
     if include_hot:
         delta = int(selected["estimated_tokens"]) - without_hot_tokens
         items.append(f"Hot memory adds about {max(0, delta)} tokens at this budget.")
@@ -217,3 +241,40 @@ def _rationale(
     if alternatives and int(selected["budget"]) < int(alternatives[-1]["budget"]):
         items.append("A larger fallback budget is available if the first answer lacks evidence.")
     return items
+
+
+def _alternative_quality(item: dict[str, Any]) -> int:
+    query_terms = max(1, int(item.get("query_term_count", 0)))
+    visible_terms = int(item.get("query_terms_visible_count", 0))
+    term_coverage = visible_terms / query_terms
+    visible_capsules = int(item.get("visible_capsules", 0))
+    section_count = int(item.get("visible_section_count", 0))
+    avg_relevance = float(item.get("relevance_score_avg", 0.0))
+    score = 0.0
+    score += min(30.0, visible_capsules * 7.5)
+    score += min(40.0, term_coverage * 40.0)
+    score += min(15.0, section_count * 3.0)
+    score += min(15.0, max(0.0, avg_relevance) * 1.8)
+    if bool(item.get("fallback_used", False)):
+        score -= 18.0
+    elif bool(item.get("salience_supplement_used", False)):
+        score -= 4.0
+    if int(item.get("sections_truncated", 0)) > 6 and term_coverage < 0.5:
+        score -= 8.0
+    return max(0, min(100, int(round(score))))
+
+
+def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "quality_score": int(selected.get("quality_score", 0)),
+        "visible_capsules": int(selected.get("visible_capsules", 0)),
+        "rendered_capsules": int(selected.get("rendered_capsules", 0)),
+        "selected_capsules": int(selected.get("selected_capsules", 0)),
+        "query_term_count": int(selected.get("query_term_count", 0)),
+        "query_terms_visible_count": int(selected.get("query_terms_visible_count", 0)),
+        "visible_section_count": int(selected.get("visible_section_count", 0)),
+        "sections_truncated": int(selected.get("sections_truncated", 0)),
+        "fallback_used": bool(selected.get("fallback_used", False)),
+        "salience_supplement_used": bool(selected.get("salience_supplement_used", False)),
+        "visible_capsule_ids": list(selected.get("visible_capsule_ids", [])),
+    }

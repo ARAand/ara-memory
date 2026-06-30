@@ -39,6 +39,9 @@ recall(query, scope, budget)
   -> FTS/BM25 capsule search
   -> typed context pack
   -> token budget trimming
+  -> count rendered capsules, visible sections, and visible query-term coverage
+  -> mark direct FTS/BM25 matches versus salience fallback/supplements
+  -> compute recall-pack quality for budget selection
 
 audit()
   -> poisoning heuristics
