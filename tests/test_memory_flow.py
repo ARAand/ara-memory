@@ -3291,6 +3291,39 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(any("Consolidated command episode outcomes" in title for title in titles))
             self.assertTrue(any("Consolidated memory policy decisions" in title for title in titles))
 
+    def test_drain_spool_stabilize_folds_session_episode_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            notes = [f"Session narrative detail {index} should fold into a stable session summary." for index in range(20)]
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_stabilize_session",
+                    "prompt": "Preserve this bounded session narrative.",
+                    "assistant": "Ara will fold repeated session details after drain.",
+                    "notes": notes,
+                },
+                scope="stabilize-session",
+                hot_budget=700,
+            )
+
+            report = memory.drain_spool(limit=10, stabilize=True)
+
+            self.assertTrue(report.passed, report.as_dict())
+            payload = report.as_dict()
+            session_report = payload["stabilization"]["scopes"][0]["episode_summary"]["patterns"][3]
+            self.assertEqual(session_report["scope"], "stabilize-session")
+            self.assertEqual(session_report["summaries_created"], 1)
+            self.assertGreaterEqual(session_report["superseded"], 20)
+            remaining_episode_candidates = memory.list_capsules(
+                scope="stabilize-session",
+                status="candidate",
+                kind="episode",
+                limit=30,
+            )
+            self.assertEqual(remaining_episode_candidates, [])
+            stable_summaries = memory.list_capsules(scope="stabilize-session", status="stable", kind="summary", limit=10)
+            self.assertTrue(any("Consolidated session episode narrative" in item["title"] for item in stable_summaries))
+
     def test_spool_turn_duplicate_turn_ids_do_not_overwrite_pending(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

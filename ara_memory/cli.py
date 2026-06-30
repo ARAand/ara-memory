@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     drain_spool.add_argument("--stabilize", action="store_true", help="After draining, fold repeated episode/candidate noise and rebuild hot memory.")
     drain_spool.add_argument("--stabilization-scope", default=None, help="Scope to stabilize even when no item was drained.")
     drain_spool.add_argument("--stabilization-episode-min-group-size", type=int, default=5)
+    drain_spool.add_argument("--stabilization-session-min-group-size", type=int, default=20)
     drain_spool.add_argument("--stabilization-candidate-min-group-size", type=int, default=3)
     drain_spool.add_argument("--stabilization-limit", type=int, default=80)
 
@@ -669,6 +670,7 @@ def main(argv: list[str] | None = None) -> int:
             stabilize=args.stabilize,
             stabilization_scope=args.stabilization_scope,
             stabilization_episode_min_group_size=args.stabilization_episode_min_group_size,
+            stabilization_session_min_group_size=args.stabilization_session_min_group_size,
             stabilization_candidate_min_group_size=args.stabilization_candidate_min_group_size,
             stabilization_limit=args.stabilization_limit,
         )

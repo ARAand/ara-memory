@@ -118,10 +118,10 @@ records back to `pending` before continuing.
 
 When the foreground session needs to recall immediately after draining, use
 `drain-spool --stabilize`. It performs the same conservative episode/candidate
-summary folds that the worker uses for repeated command, file, git-status, and
-memory-policy decision noise, then refreshes hot memory for the drained scopes.
-This keeps raw turn preservation crash-safe while preventing fresh operational
-evidence from destabilizing the next recall pack.
+summary folds that the worker uses for repeated command, file, git-status,
+bounded session narrative, and memory-policy decision noise, then refreshes hot
+memory for the drained scopes. This keeps raw turn preservation crash-safe while
+preventing fresh operational evidence from destabilizing the next recall pack.
 
 `worker` is the separate memory processor. Codex can keep acting as the live
 reasoning agent while the worker drains queued turns and runs quality, review,

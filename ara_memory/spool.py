@@ -156,6 +156,7 @@ def drain_spool(
     stabilize: bool = False,
     stabilization_scope: str | None = None,
     stabilization_episode_min_group_size: int = 5,
+    stabilization_session_min_group_size: int = 20,
     stabilization_candidate_min_group_size: int = 3,
     stabilization_limit: int = 80,
 ) -> DrainReport:
@@ -224,6 +225,7 @@ def drain_spool(
             scopes=sorted(succeeded_scopes),
             hot_budgets=scope_hot_budgets,
             episode_min_group_size=stabilization_episode_min_group_size,
+            session_min_group_size=stabilization_session_min_group_size,
             candidate_min_group_size=stabilization_candidate_min_group_size,
             limit=stabilization_limit,
         )
@@ -252,6 +254,7 @@ def _stabilize_after_drain(
     scopes: list[str],
     hot_budgets: dict[str, int],
     episode_min_group_size: int,
+    session_min_group_size: int,
     candidate_min_group_size: int,
     limit: int,
 ) -> dict[str, Any]:
@@ -262,8 +265,13 @@ def _stabilize_after_drain(
         scope_summaries = 0
         scope_superseded = 0
         episode_patterns = []
-        for pattern in ("command", "file_artifact", "git_status"):
-            min_group_size = min(episode_min_group_size, 3) if pattern == "git_status" else episode_min_group_size
+        for pattern in ("command", "file_artifact", "git_status", "session"):
+            if pattern == "session":
+                min_group_size = session_min_group_size
+            elif pattern == "git_status":
+                min_group_size = min(episode_min_group_size, 3)
+            else:
+                min_group_size = episode_min_group_size
             report = memory.episode_summary(
                 scope=scope,
                 pattern=pattern,
