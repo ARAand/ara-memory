@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ara_memory.core import AraMemory
+from ara_memory.storage import row_to_capsule
+
+
+SOURCE_EVENT_ID_DETAIL_LIMIT = 64
 
 
 @dataclass(slots=True)
@@ -99,6 +104,7 @@ def run_recall_regression(
 ) -> RecallRegressionReport:
     results = [_run_case(memory, case) for case in cases]
     comparisons = _compare_to_baseline(
+        memory=memory,
         current=results,
         baseline=baseline,
         max_token_growth=max_token_growth,
@@ -128,6 +134,8 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
     tokens = int(result.diagnostics["estimated_tokens_after"])
     selected_ids = [str(item) for item in result.diagnostics.get("selected_capsule_ids", [])]
     visible_ids = [str(item) for item in result.diagnostics.get("visible_capsule_ids", [])]
+    selected_source_detail = _source_event_detail_for_capsules(memory, selected_ids)
+    visible_source_detail = _source_event_detail_for_capsules(memory, visible_ids)
     passed = (
         all(expected_hits.values())
         and (not expected_any_hits or any(expected_any_hits.values()))
@@ -150,6 +158,14 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
             "capsules_visible": len(visible_ids),
             "selected_capsule_ids": selected_ids,
             "visible_capsule_ids": visible_ids,
+            "selected_source_event_ids": selected_source_detail["ids"],
+            "selected_source_event_count": selected_source_detail["count"],
+            "selected_source_event_digest": selected_source_detail["digest"],
+            "selected_source_event_ids_truncated": selected_source_detail["truncated"],
+            "visible_source_event_ids": visible_source_detail["ids"],
+            "visible_source_event_count": visible_source_detail["count"],
+            "visible_source_event_digest": visible_source_detail["digest"],
+            "visible_source_event_ids_truncated": visible_source_detail["truncated"],
             "include_global": case.include_global,
             "include_hot": case.include_hot,
         },
@@ -158,6 +174,7 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
 
 def _compare_to_baseline(
     *,
+    memory: AraMemory,
     current: list[RecallRegressionCaseResult],
     baseline: dict[str, Any] | None,
     max_token_growth: float,
@@ -187,18 +204,39 @@ def _compare_to_baseline(
         prior_tokens = int(prior_details.get("estimated_tokens", 0) or 0)
         current_tokens = int(result.details.get("estimated_tokens", 0) or 0)
         token_limit = max(prior_tokens + 100, int(prior_tokens * (1.0 + max_token_growth)))
-        prior_ids, current_ids, overlap_basis = _baseline_overlap_ids(prior_details, result.details)
-        overlap = _overlap_ratio(prior_ids, current_ids)
+        overlap_info = _baseline_overlap_info(memory, prior_details, result.details)
+        overlap = float(overlap_info["overlap"])
+        overlap_basis = str(overlap_info["basis"])
+        capsule_overlap = float(overlap_info["capsule_id_overlap"])
+        source_overlap = overlap_info["source_event_overlap"]
+        source_guard = bool(overlap_info["source_event_guard"])
+        source_validated = bool(overlap_info["source_event_validated"])
+        source_can_substitute = (
+            source_guard
+            and source_validated
+            and source_overlap is not None
+            and float(source_overlap) >= min_overlap
+        )
         failures = []
         if prior_passed and not result.passed:
             failures.append("previously_passed_now_failed")
         if prior_tokens > 0 and current_tokens > token_limit:
             failures.append("token_growth_exceeded")
-        if prior_ids and current_ids and overlap < min_overlap:
-            if overlap_basis == "visible_capsule_ids":
-                failures.append("visible_capsule_overlap_below_threshold")
-            else:
-                failures.append("selected_capsule_overlap_below_threshold")
+        if overlap_info["capsule_prior_count"] and overlap_info["capsule_current_count"]:
+            if capsule_overlap < min_overlap and not source_can_substitute:
+                if overlap_info["capsule_basis"] == "visible_capsule_ids":
+                    failures.append("visible_capsule_overlap_below_threshold")
+                else:
+                    failures.append("selected_capsule_overlap_below_threshold")
+        if source_guard:
+            if not source_validated:
+                failures.append(_source_event_failure_name(str(overlap_info["source_event_basis"]), "incomplete"))
+            elif source_overlap is not None and float(source_overlap) < min_overlap:
+                failures.append(
+                    _source_event_failure_name(str(overlap_info["source_event_basis"]), "below_threshold")
+                )
+            elif source_overlap is None:
+                failures.append(_source_event_failure_name(str(overlap_info["source_event_basis"]), "missing"))
         comparisons.append(
             RecallRegressionCaseResult(
                 name=result.name,
@@ -211,6 +249,11 @@ def _compare_to_baseline(
                     "selected_overlap": overlap,
                     "evidence_overlap": overlap,
                     "overlap_basis": overlap_basis,
+                    "capsule_id_overlap": capsule_overlap,
+                    "source_event_overlap": source_overlap,
+                    "source_event_guard": source_guard,
+                    "source_event_validated": source_validated,
+                    "source_event_digest_match": overlap_info["source_event_digest_match"],
                     "min_overlap": min_overlap,
                     "max_token_growth": max_token_growth,
                 },
@@ -245,19 +288,169 @@ def _regression_evidence_text(pack: str) -> str:
     return "\n".join(lines)
 
 
-def _baseline_overlap_ids(
+def _baseline_overlap_info(
+    memory: AraMemory,
     prior_details: dict[str, Any],
     current_details: dict[str, Any],
-) -> tuple[set[str], set[str], str]:
+) -> dict[str, Any]:
     prior_visible = [str(item) for item in prior_details.get("visible_capsule_ids", [])]
     current_visible = [str(item) for item in current_details.get("visible_capsule_ids", [])]
     if prior_visible and current_visible:
-        return set(prior_visible), set(current_visible), "visible_capsule_ids"
-    return (
-        {str(item) for item in prior_details.get("selected_capsule_ids", [])},
-        {str(item) for item in current_details.get("selected_capsule_ids", [])},
-        "selected_capsule_ids",
+        return _overlap_info_for_kind(
+            memory,
+            prior_details,
+            current_details,
+            id_field="visible_capsule_ids",
+            source_field="visible_source_event_ids",
+        )
+    return _overlap_info_for_kind(
+        memory,
+        prior_details,
+        current_details,
+        id_field="selected_capsule_ids",
+        source_field="selected_source_event_ids",
     )
+
+
+def _overlap_info_for_kind(
+    memory: AraMemory,
+    prior_details: dict[str, Any],
+    current_details: dict[str, Any],
+    *,
+    id_field: str,
+    source_field: str,
+) -> dict[str, Any]:
+    prior_ids = {str(item) for item in prior_details.get(id_field, [])}
+    current_ids = {str(item) for item in current_details.get(id_field, [])}
+    id_overlap = _overlap_ratio(prior_ids, current_ids)
+    prior_source = _source_event_info_from_details_or_store(
+        memory,
+        details=prior_details,
+        source_field=source_field,
+        capsule_ids=prior_ids,
+    )
+    current_source = _source_event_info_from_details_or_store(
+        memory,
+        details=current_details,
+        source_field=source_field,
+        capsule_ids=current_ids,
+    )
+    prior_source_ids = prior_source["ids"]
+    current_source_ids = current_source["ids"]
+    source_overlap = (
+        _overlap_ratio(prior_source_ids, current_source_ids)
+        if prior_source_ids and current_source_ids
+        else None
+    )
+    source_digest_match = None
+    if prior_source["digest"] and current_source["digest"]:
+        source_digest_match = prior_source["digest"] == current_source["digest"]
+        if source_digest_match and not (prior_source["complete"] and current_source["complete"]):
+            source_overlap = 1.0
+    source_guard = bool(
+        prior_source["ids"]
+        or prior_source["count"]
+        or prior_source["digest"]
+        or source_field in prior_details
+    )
+    source_validated = bool(
+        not source_guard
+        or (prior_source["complete"] and current_source["complete"])
+        or source_digest_match is True
+    )
+    source_is_more_specific = source_overlap is not None and source_overlap != id_overlap
+    if source_is_more_specific:
+        return {
+            "prior_ids": prior_source_ids,
+            "current_ids": current_source_ids,
+            "basis": source_field,
+            "overlap": source_overlap,
+            "capsule_id_overlap": id_overlap,
+            "source_event_overlap": source_overlap,
+            "capsule_basis": id_field,
+            "source_event_basis": source_field,
+            "capsule_prior_count": len(prior_ids),
+            "capsule_current_count": len(current_ids),
+            "source_event_guard": source_guard,
+            "source_event_validated": source_validated,
+            "source_event_digest_match": source_digest_match,
+        }
+    return {
+        "prior_ids": prior_ids,
+        "current_ids": current_ids,
+        "basis": id_field,
+        "overlap": id_overlap,
+        "capsule_id_overlap": id_overlap,
+        "source_event_overlap": source_overlap,
+        "capsule_basis": id_field,
+        "source_event_basis": source_field,
+        "capsule_prior_count": len(prior_ids),
+        "capsule_current_count": len(current_ids),
+        "source_event_guard": source_guard,
+        "source_event_validated": source_validated,
+        "source_event_digest_match": source_digest_match,
+    }
+
+
+def _source_event_info_from_details_or_store(
+    memory: AraMemory,
+    *,
+    details: dict[str, Any],
+    source_field: str,
+    capsule_ids: set[str],
+) -> dict[str, Any]:
+    prefix = source_field.removesuffix("_ids")
+    source_ids = {str(item) for item in details.get(source_field, []) if str(item)}
+    truncated = bool(details.get(f"{source_field}_truncated", False))
+    source_count = _safe_int(details.get(f"{prefix}_count"), default=len(source_ids))
+    source_digest = details.get(f"{prefix}_digest")
+    if not isinstance(source_digest, str) or not source_digest:
+        source_digest = _source_event_ids_digest(source_ids)
+    if source_ids and not truncated:
+        return {
+            "ids": source_ids,
+            "count": source_count,
+            "digest": source_digest,
+            "complete": True,
+        }
+    store_source_ids = set(_source_event_ids_for_capsules(memory, sorted(capsule_ids)))
+    if store_source_ids:
+        return {
+            "ids": store_source_ids,
+            "count": len(store_source_ids),
+            "digest": _source_event_ids_digest(store_source_ids),
+            "complete": True,
+        }
+    return {
+        "ids": source_ids,
+        "count": source_count,
+        "digest": source_digest,
+        "complete": not truncated,
+    }
+
+
+def _source_event_detail_for_capsules(memory: AraMemory, capsule_ids: list[str]) -> dict[str, Any]:
+    source_ids = _source_event_ids_for_capsules(memory, capsule_ids)
+    return {
+        "ids": source_ids[:SOURCE_EVENT_ID_DETAIL_LIMIT],
+        "count": len(source_ids),
+        "digest": _source_event_ids_digest(source_ids),
+        "truncated": len(source_ids) > SOURCE_EVENT_ID_DETAIL_LIMIT,
+    }
+
+
+def _source_event_ids_for_capsules(memory: AraMemory, capsule_ids: list[str]) -> list[str]:
+    source_ids: set[str] = set()
+    for capsule_id in capsule_ids:
+        row = memory.store.get_capsule(capsule_id)
+        if row is None:
+            continue
+        try:
+            capsule = row_to_capsule(row)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        source_ids.update(str(item) for item in capsule.get("source_event_ids", []) if str(item))
+    return sorted(source_ids)
 
 
 def _overlap_ratio(left: set[str], right: set[str]) -> float:
@@ -266,3 +459,25 @@ def _overlap_ratio(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _source_event_ids_digest(source_ids: set[str] | list[str]) -> str | None:
+    normalized = sorted(str(item) for item in source_ids if str(item))
+    if not normalized:
+        return None
+    payload = "\n".join(normalized).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _source_event_failure_name(source_field: str, reason: str) -> str:
+    prefix = "visible" if source_field.startswith("visible_") else "selected"
+    if reason == "below_threshold":
+        return f"{prefix}_source_event_overlap_below_threshold"
+    return f"{prefix}_source_event_overlap_{reason}"
+
+
+def _safe_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

@@ -14,6 +14,12 @@ Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
 always-on instruction.
 
+The contract is stricter than storage: raw evidence may be retained, but only
+reviewed purpose, identity, and preference anchors can become always-on. Working
+memory must be selected by query, scope, provenance, recency, risk gates, and
+budget. Ara Memory OS is not a secret vault, not source control, not obedience
+storage, and not a substitute for reading the current workspace.
+
 ## Memory Flow
 
 ```text
@@ -92,7 +98,8 @@ recall_regression(manifest, baseline)
   -> rendered-evidence expected term checks
   -> full-pack forbidden term checks
   -> token growth checks
-  -> visible capsule overlap checks when available
+  -> visible capsule and bounded source-event lineage overlap checks
+     (full-set digests plus local provenance recompute when truncated)
 
 health(scope)
   -> doctor + spool + review pressure

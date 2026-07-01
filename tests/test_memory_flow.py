@@ -7872,6 +7872,14 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["cases"][0]["name"], "stable_recall_regression")
             self.assertIn("selected_capsule_ids", payload["cases"][0]["details"])
             self.assertIn("visible_capsule_ids", payload["cases"][0]["details"])
+            self.assertIn("selected_source_event_ids", payload["cases"][0]["details"])
+            self.assertIn("selected_source_event_count", payload["cases"][0]["details"])
+            self.assertIn("selected_source_event_digest", payload["cases"][0]["details"])
+            self.assertIn("selected_source_event_ids_truncated", payload["cases"][0]["details"])
+            self.assertIn("visible_source_event_ids", payload["cases"][0]["details"])
+            self.assertIn("visible_source_event_count", payload["cases"][0]["details"])
+            self.assertIn("visible_source_event_digest", payload["cases"][0]["details"])
+            self.assertIn("visible_source_event_ids_truncated", payload["cases"][0]["details"])
             self.assertGreater(payload["cases"][0]["details"]["capsules_visible"], 0)
 
     def test_recall_regression_checks_evidence_not_query_echo(self) -> None:
@@ -7977,6 +7985,341 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(report.passed, report.as_dict())
             comparison = report.as_dict()["baseline_comparison"][0]
             self.assertIn("selected_capsule_overlap_below_threshold", comparison["details"]["failures"])
+
+    def test_recall_regression_detects_baseline_token_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text=(
+                    "Decision: Baseline token growth should fail when the same evidence becomes too large. "
+                    "The regression gate protects compact recall packs from slow token creep across releases. "
+                    "This intentionally verbose evidence gives the test enough rendered content to exceed the "
+                    "minimum absolute growth allowance."
+                ),
+                source="test",
+                scope="regression-token-growth",
+            )
+            memory.consolidate()
+            case = RecallRegressionCase(
+                name="token_growth_case",
+                query="baseline token growth evidence",
+                scope="regression-token-growth",
+                expected_terms=["token", "growth"],
+                budget=1200,
+                include_global=False,
+            )
+            initial = memory.recall_regression([case])
+            self.assertTrue(initial.passed, initial.as_dict())
+            details = initial.as_dict()["cases"][0]["details"]
+            self.assertGreater(details["estimated_tokens"], 101)
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "token_growth_case",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 1,
+                            "selected_capsule_ids": details["selected_capsule_ids"],
+                            "visible_capsule_ids": details["visible_capsule_ids"],
+                            "selected_source_event_ids": details["selected_source_event_ids"],
+                            "visible_source_event_ids": details["visible_source_event_ids"],
+                        },
+                    }
+                ],
+            }
+
+            report = memory.recall_regression([case], baseline=baseline)
+
+            self.assertFalse(report.passed, report.as_dict())
+            comparison = report.as_dict()["baseline_comparison"][0]
+            self.assertIn("token_growth_exceeded", comparison["details"]["failures"])
+            self.assertNotIn("visible_capsule_overlap_below_threshold", comparison["details"]["failures"])
+
+    def test_recall_regression_counts_source_overlap_after_consolidation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: Baseline lineage should survive summary replacement.",
+                source="test",
+                scope="regression-lineage",
+            )
+            old = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: old lineage capsule",
+                body="Baseline lineage evidence before compaction.",
+                scope="regression-lineage",
+                confidence=0.86,
+                salience=0.92,
+                source_event_ids=[event.id],
+                tags=["baseline", "lineage"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            replacement = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated lineage summary",
+                body="Baseline lineage evidence after summary replacement.",
+                scope="regression-lineage",
+                confidence=0.86,
+                salience=0.92,
+                source_event_ids=[event.id],
+                tags=["baseline", "lineage", "summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(old)
+            memory.store.upsert_capsule(replacement)
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "lineage_case",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 800,
+                            "visible_capsule_ids": [old.id],
+                        },
+                    }
+                ],
+            }
+
+            report = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="lineage_case",
+                        query="baseline lineage evidence",
+                        scope="regression-lineage",
+                        expected_terms=["baseline", "lineage"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+                baseline=baseline,
+                min_overlap=1.0,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            comparison = report.as_dict()["baseline_comparison"][0]
+            self.assertEqual(comparison["details"]["overlap_basis"], "visible_source_event_ids")
+            self.assertEqual(comparison["details"]["source_event_overlap"], 1.0)
+            self.assertEqual(comparison["details"]["capsule_id_overlap"], 0.0)
+
+    def test_recall_regression_detects_source_drift_for_same_capsule_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            old_event = memory.retain(
+                kind="decision",
+                text="Decision: old source lineage should not silently disappear.",
+                source="test",
+                scope="regression-lineage-drift",
+            )
+            new_event = memory.retain(
+                kind="decision",
+                text="Decision: new source lineage changed underneath the same capsule id.",
+                source="test",
+                scope="regression-lineage-drift",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: same capsule id lineage drift",
+                body="Lineage drift evidence should be visible for regression.",
+                scope="regression-lineage-drift",
+                confidence=0.86,
+                salience=0.92,
+                source_event_ids=[new_event.id],
+                tags=["lineage", "drift"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "same_capsule_source_drift",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 800,
+                            "visible_capsule_ids": [capsule.id],
+                            "visible_source_event_ids": [old_event.id],
+                            "visible_source_event_count": 1,
+                            "visible_source_event_digest": hashlib.sha256(
+                                old_event.id.encode("utf-8")
+                            ).hexdigest(),
+                            "visible_source_event_ids_truncated": False,
+                        },
+                    }
+                ],
+            }
+
+            report = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="same_capsule_source_drift",
+                        query="lineage drift evidence",
+                        scope="regression-lineage-drift",
+                        expected_terms=["lineage", "drift"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+                baseline=baseline,
+                min_overlap=1.0,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            comparison = report.as_dict()["baseline_comparison"][0]
+            self.assertEqual(comparison["details"]["capsule_id_overlap"], 1.0)
+            self.assertEqual(comparison["details"]["source_event_overlap"], 0.0)
+            self.assertIn("visible_source_event_overlap_below_threshold", comparison["details"]["failures"])
+
+    def test_recall_regression_recomputes_truncated_source_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for index in range(70):
+                event = memory.retain(
+                    kind="note",
+                    text=f"Fact: bounded lineage shard {index} supports provenance recomputation.",
+                    source="test",
+                    scope="regression-lineage-bounded",
+                )
+                event_ids.append(event.id)
+            old = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Old bounded lineage summary",
+                body="Bounded lineage evidence before compaction.",
+                scope="regression-lineage-bounded",
+                confidence=0.88,
+                salience=0.95,
+                source_event_ids=event_ids,
+                tags=["bounded", "lineage"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            replacement = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Replacement bounded lineage summary",
+                body="Bounded lineage evidence after compaction.",
+                scope="regression-lineage-bounded",
+                confidence=0.88,
+                salience=0.95,
+                source_event_ids=event_ids,
+                tags=["bounded", "lineage"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(old)
+            memory.store.upsert_capsule(replacement)
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "bounded_lineage_case",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 800,
+                            "visible_capsule_ids": [old.id],
+                            "visible_source_event_ids": event_ids[:64],
+                            "visible_source_event_count": len(event_ids),
+                            "visible_source_event_ids_truncated": True,
+                        },
+                    }
+                ],
+            }
+
+            report = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="bounded_lineage_case",
+                        query="bounded lineage evidence",
+                        scope="regression-lineage-bounded",
+                        expected_terms=["bounded", "lineage"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+                baseline=baseline,
+                min_overlap=1.0,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            case_details = report.as_dict()["cases"][0]["details"]
+            self.assertEqual(len(case_details["visible_source_event_ids"]), 64)
+            self.assertEqual(case_details["visible_source_event_count"], 70)
+            self.assertTrue(case_details["visible_source_event_ids_truncated"])
+            comparison = report.as_dict()["baseline_comparison"][0]
+            self.assertEqual(comparison["details"]["overlap_basis"], "visible_source_event_ids")
+            self.assertEqual(comparison["details"]["source_event_overlap"], 1.0)
+            self.assertLess(comparison["details"]["capsule_id_overlap"], 1.0)
+
+    def test_recall_regression_rejects_truncated_source_overlap_without_full_lineage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event_ids = []
+            for index in range(70):
+                event = memory.retain(
+                    kind="note",
+                    text=f"Fact: incomplete bounded lineage shard {index} should need a full digest.",
+                    source="test",
+                    scope="regression-lineage-incomplete",
+                )
+                event_ids.append(event.id)
+            partial = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Partial bounded lineage summary",
+                body="Incomplete bounded lineage evidence after pruning.",
+                scope="regression-lineage-incomplete",
+                confidence=0.88,
+                salience=0.95,
+                source_event_ids=event_ids[:64],
+                tags=["incomplete", "lineage"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(partial)
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "incomplete_lineage_case",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 800,
+                            "visible_capsule_ids": ["cap_missing_after_prune"],
+                            "visible_source_event_ids": event_ids[:64],
+                            "visible_source_event_count": len(event_ids),
+                            "visible_source_event_digest": hashlib.sha256(
+                                "\n".join(sorted(event_ids)).encode("utf-8")
+                            ).hexdigest(),
+                            "visible_source_event_ids_truncated": True,
+                        },
+                    }
+                ],
+            }
+
+            report = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="incomplete_lineage_case",
+                        query="incomplete bounded lineage evidence",
+                        scope="regression-lineage-incomplete",
+                        expected_terms=["incomplete", "lineage"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+                baseline=baseline,
+                min_overlap=1.0,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            comparison = report.as_dict()["baseline_comparison"][0]
+            self.assertFalse(comparison["details"]["source_event_validated"])
+            self.assertFalse(comparison["details"]["source_event_digest_match"])
+            self.assertIn("visible_source_event_overlap_incomplete", comparison["details"]["failures"])
 
     def test_doctor_reports_usable_store_and_detects_hot_corruption(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

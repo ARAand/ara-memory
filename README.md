@@ -17,6 +17,30 @@ Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
 always-on instruction.
 
+## Natural Memory Contract
+
+Ara Memory OS is not permanent instruction storage. Raw events are preserved for
+audit and reconstruction, but only reviewed purpose, identity, and preference
+anchors may become hot. Everything else must be selected by query, scope,
+provenance, recency, risk gates, and budget.
+
+Non-goals are equally important: Ara Memory OS is not a secret vault, not source
+control, not obedience storage, not a vector database wrapper, and not a
+replacement for reading the current files before coding.
+
+Token reduction comes from writing raw evidence once, consolidating it into typed
+capsules, keeping hot memory core-only, probing candidates before rendering,
+suppressing no-evidence fallbacks, and treating recall budgets as ceilings. Local
+planning, recall ranking, regression checks, and health checks do not spend AI
+API tokens; estimated cost is only for text later sent to a model, except for
+explicit opt-in advisor/model wrappers.
+
+Primary risks are memory poisoning, preference overfitting, compression drift,
+scope leakage, plaintext memory spill, background overreach, and provenance
+collapse. The default defenses are candidate-first promotion, scoped recall,
+deterministic risk gates, visible-evidence regression, sealed spooling, dry-run
+review workers, and verified backup/cold-export gates.
+
 ## Purpose
 
 - Continuity: Ara should not restart from zero every session.
@@ -531,9 +555,17 @@ scan the full pack. Cases must include visible capsule evidence, so a selected
 capsule that is later trimmed away cannot pass the gate. With a baseline, the
 gate also fails when a previously passing case breaks, token use jumps, or the
 visible capsule set drifts too far; old baselines fall back to selected capsule
-overlap. JSON details include `capsules_visible`, `visible_capsule_ids`,
-`overlap_basis`, and `evidence_overlap`. For budget-selection QA, run
-`recall-plan --json` and review `visible_capsules`,
+overlap. Regression details also record bounded selected and visible
+`source_event_ids`, their full counts, truncation flags, and a digest of the full
+source-event set, so consolidation can replace capsule IDs without failing the
+gate when the same underlying evidence remains visible. When lineage details are
+truncated, local comparisons recompute the full source-event set from capsule
+provenance; if old capsule rows are unavailable, the digest must still match or
+the lineage comparison is treated as incomplete rather than silently passing.
+JSON details include `capsules_visible`, `visible_capsule_ids`,
+`visible_source_event_count`, `visible_source_event_digest`, `overlap_basis`,
+`evidence_overlap`, `capsule_id_overlap`, and `source_event_overlap`. For
+budget-selection QA, run `recall-plan --json` and review `visible_capsules`,
 `query_terms_visible_count`, `fallback_used`, and `quality_score`.
 
 Create a routine portable snapshot after important milestones:
