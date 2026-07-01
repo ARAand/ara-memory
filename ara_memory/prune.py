@@ -10,7 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from ara_memory.backup import restore_backup
+from ara_memory.backup import restore_backup, verify_backup
 from ara_memory.cold_export import verify_cold_export
 from ara_memory.doctor import MemoryDoctor
 from ara_memory.models import MemoryStatus, new_id, utc_now
@@ -482,6 +482,15 @@ class LivePruneController:
             return _blocked_live_report(
                 approval,
                 "Approved cold capsule set changed or no longer matches live memory; rerun retention-cycle and prepare-live-prune.",
+            )
+        try:
+            backup_verification = verify_backup(Path(approval["backup_path"]), trust_root=self.store.root)
+        except Exception as exc:
+            backup_verification = {"passed": False, "error": f"{type(exc).__name__}: {exc}"}
+        if not backup_verification.get("passed"):
+            return _blocked_live_report(
+                approval,
+                "Approved backup no longer verifies; rerun retention-cycle and prepare-live-prune.",
             )
         verification = verify_cold_export(Path(approval["cold_export_path"]))
         if not verification.get("passed"):

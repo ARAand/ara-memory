@@ -285,12 +285,16 @@ memory budget/format, and recall-pack budget/format.
 review pressure, candidate/stable ratio, cold-memory pressure, latest verified
 backup age, backup byte pressure, retention-cycle freshness/current-match
 checks, and optional recall regression into a pass/watch/fail status with
-concrete next actions. When cold pressure is high, health treats a stale or
+concrete next actions. `watch` is intentionally non-fatal and exits 0 from the
+CLI; schedulers and CI that should alert on watch conditions must parse
+`health --json` and inspect `status`, not only the process exit code. When cold pressure is high, health treats a stale or
 drifted retention-cycle as watch evidence and points back to
 `cold-stewardship`/`retention-cycle` before any live cleanup. When verified
 backup bytes exceed the stewardship target, health reports a `backup_pressure`
 watch signal using a dry-run `backup-stewardship` candidate set; deletion still
-requires a separate reviewed `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"`.
+requires a separate reviewed `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"`,
+and failed-backup quarantine requires
+`--quarantine-confirm "QUARANTINE FAILED BACKUPS"`.
 `purpose-check` is the goal-alignment report. It verifies that stable goal
 memory exists, hot memory exposes Active Goals, and a purpose query can actually
 retrieve goal context. Use `--repair-hot` before declaring major memory
@@ -478,7 +482,10 @@ run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 from reviewed pruning readiness evidence, while `cold-stewardship` additionally
 checks freshness and drift against the current live cold set.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
-events into a portable zip so pruning can later be audited or reversed. Manual
+events into a portable zip so pruning can later be audited or reversed. Verification
+fails when exported capsules reference source events that are missing from
+`events.jsonl`; `--no-events` is therefore only for inspection exports, not pruning
+readiness evidence. Manual
 limited exports default to newest-first for inspection; use `--order oldest`
 when preparing a manual export for `prune-plan`, because the planner chooses
 the oldest eligible cold capsules first. `retention-cycle --limit` does this
@@ -492,8 +499,9 @@ cold capsules inside that copy, then reruns doctor and recall checks. The live
 store is not modified.
 `prepare-live-prune` reruns shadow-prune and writes a short-lived approval token
 to the store. `live-prune` consumes that token once, requires exact confirmation
-text, deletes cold capsules only, and records the irreversible operation. Source
-events are not deleted by live-prune.
+text, re-verifies the approved backup and cold export, deletes cold capsules
+only, and records the irreversible operation. Source events are not deleted by
+live-prune.
 
 Recall regression catches quiet retrieval drift before a memory change becomes
 part of the operating loop:
@@ -554,7 +562,9 @@ python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 
 
 The command is dry-run by default. The default CLI target is 64 MiB of backup
 bytes, and candidate selection deletes only enough old redundant backups to move
-toward that budget. Apply mode deletes only verified backups that are neither
+toward that budget. Apply mode takes the same worker lock used by scheduled
+worker-loop and retention-cycle before it moves or deletes any backup file; use
+`--no-lock` only when the store is otherwise quiescent. Apply mode deletes only verified backups that are neither
 among the latest kept backups, nor referenced by recent passing retention-cycle
 reports, nor referenced by active live-prune approvals. Failed-verification
 backups are preserved for manual inspection instead of being silently removed.
@@ -562,6 +572,11 @@ When at least one verified backup exists, `--quarantine-failed` can move
 failed-verification backup ZIPs to `.ara-memory/archive/failed-backups/` after
 exact confirmation, preserving them outside the live backup pool so health
 pressure reflects restorable backups instead of legacy or corrupted evidence.
+Quarantine and deletion confirmations are independent: a mixed run with only
+the quarantine confirmation moves failed backups but leaves redundant verified
+delete candidates untouched. Each quarantined ZIP gets a neighboring
+`.quarantine.json` manifest with its original path, quarantine path, byte size,
+timestamp, and final verification result.
 
 ## Design Choices
 

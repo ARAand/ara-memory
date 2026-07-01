@@ -87,15 +87,38 @@ def verify_cold_export(path: Path) -> dict[str, Any]:
         format_ok = manifest.get("format") == COLD_EXPORT_FORMAT
         capsule_count_ok = manifest.get("capsule_count") == len(capsules)
         event_count_ok = manifest.get("event_count") == len(events)
+        source_event_ids = sorted(
+            {
+                str(event_id)
+                for capsule in capsules
+                for event_id in capsule.get("source_event_ids", [])
+                if event_id
+            }
+        )
+        exported_event_ids = {str(event.get("id")) for event in events if event.get("id")}
+        source_event_id_count_ok = manifest.get("source_event_id_count") == len(source_event_ids)
+        missing_source_event_ids = sorted(set(source_event_ids) - exported_event_ids)
+        provenance_ok = not missing_source_event_ids
         statuses = set(manifest.get("statuses", []))
         status_ok = all(capsule.get("status") in statuses for capsule in capsules)
         return {
             "path": str(path),
-            "passed": not missing and format_ok and capsule_count_ok and event_count_ok and status_ok,
+            "passed": (
+                not missing
+                and format_ok
+                and capsule_count_ok
+                and event_count_ok
+                and source_event_id_count_ok
+                and provenance_ok
+                and status_ok
+            ),
             "missing": missing,
             "format_ok": format_ok,
             "capsule_count_ok": capsule_count_ok,
             "event_count_ok": event_count_ok,
+            "source_event_id_count_ok": source_event_id_count_ok,
+            "provenance_ok": provenance_ok,
+            "missing_source_event_ids": missing_source_event_ids[:20],
             "status_ok": status_ok,
             "manifest": manifest,
             "entries": len(names),

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.backup import verify_backup
+from ara_memory.lock import FileLock
 from ara_memory.models import utc_now
 from ara_memory.storage import MemoryStore
 
@@ -32,6 +33,7 @@ class BackupStewardshipItem:
     quarantine_candidate: bool = False
     quarantined: bool = False
     quarantine_path: str | None = None
+    quarantine_manifest_path: str | None = None
     verification_cached: bool = False
     error: str | None = None
 
@@ -48,6 +50,7 @@ class BackupStewardshipItem:
             "quarantine_candidate": self.quarantine_candidate,
             "quarantined": self.quarantined,
             "quarantine_path": self.quarantine_path,
+            "quarantine_manifest_path": self.quarantine_manifest_path,
             "verification_cached": self.verification_cached,
         }
         if self.error:
@@ -63,6 +66,7 @@ class BackupStewardshipReport:
     totals: dict[str, Any]
     items: list[BackupStewardshipItem]
     recommendations: list[str]
+    lock: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +76,7 @@ class BackupStewardshipReport:
             "totals": self.totals,
             "items": [item.as_dict() for item in self.items],
             "recommendations": self.recommendations,
+            "lock": self.lock,
         }
 
     def to_text(self) -> str:
@@ -97,6 +102,12 @@ class BackupStewardshipReport:
                 f"verification_cache_hits={self.totals['verification_cache_hits']}"
             ),
         ]
+        if self.lock:
+            lines.append(
+                "lock: "
+                f"acquired={self.lock.get('acquired')}, "
+                f"reason={self.lock.get('reason', '')}"
+            )
         lines.append("## Recommendations")
         for item in self.recommendations:
             lines.append(f"- {item}")
@@ -126,6 +137,75 @@ def run_backup_stewardship(
     apply: bool = False,
     confirm: str = "",
     quarantine_confirm: str = "",
+    use_lock: bool = True,
+    lock_stale_seconds: int = 3600,
+) -> BackupStewardshipReport:
+    _validate_stewardship_args(
+        keep_latest=keep_latest,
+        keep_retention_cycles=keep_retention_cycles,
+        target_backup_bytes=target_backup_bytes,
+    )
+    store.init()
+    root = store.root
+    if apply and use_lock:
+        lock = FileLock(root, "worker", stale_seconds=lock_stale_seconds)
+        lock_result = lock.acquire()
+        lock_payload = lock_result.as_dict()
+        if not lock_result.acquired:
+            return BackupStewardshipReport(
+                root=str(root),
+                dry_run=False,
+                passed=False,
+                totals=_empty_totals(
+                    keep_latest=keep_latest,
+                    keep_retention_cycles=keep_retention_cycles,
+                    target_backup_bytes=target_backup_bytes,
+                ),
+                items=[],
+                recommendations=[
+                    "Backup stewardship apply skipped because the memory worker lock is already held.",
+                    "Rerun after the active worker finishes, or use --no-lock only when the store is otherwise quiescent.",
+                ],
+                lock=lock_payload,
+            )
+        try:
+            return _run_backup_stewardship_unlocked(
+                store,
+                keep_latest=keep_latest,
+                keep_retention_cycles=keep_retention_cycles,
+                target_backup_bytes=target_backup_bytes,
+                quarantine_failed=quarantine_failed,
+                apply=apply,
+                confirm=confirm,
+                quarantine_confirm=quarantine_confirm,
+                lock=lock_payload,
+            )
+        finally:
+            lock.release()
+    return _run_backup_stewardship_unlocked(
+        store,
+        keep_latest=keep_latest,
+        keep_retention_cycles=keep_retention_cycles,
+        target_backup_bytes=target_backup_bytes,
+        quarantine_failed=quarantine_failed,
+        apply=apply,
+        confirm=confirm,
+        quarantine_confirm=quarantine_confirm,
+        lock=None,
+    )
+
+
+def _run_backup_stewardship_unlocked(
+    store: MemoryStore,
+    *,
+    keep_latest: int = 3,
+    keep_retention_cycles: int = 2,
+    target_backup_bytes: int | None = DEFAULT_TARGET_BACKUP_BYTES,
+    quarantine_failed: bool = False,
+    apply: bool = False,
+    confirm: str = "",
+    quarantine_confirm: str = "",
+    lock: dict[str, Any] | None = None,
 ) -> BackupStewardshipReport:
     if keep_latest < 1:
         raise ValueError("keep_latest must be at least 1")
@@ -153,6 +233,7 @@ def run_backup_stewardship(
                 f"Refusing backup stewardship because backup directory is a symlink, junction, or reparse point: {backup_dir}",
                 "Replace it with a real directory before running backup deletion review.",
             ],
+            lock=lock,
         )
 
     retention_refs = _referenced_backup_paths(root, keep_retention_cycles=keep_retention_cycles)
@@ -188,17 +269,36 @@ def run_backup_stewardship(
 
     passed = True
     delete_candidates = sum(1 for item in items if item.delete_candidate)
-    if apply and (delete_candidates or not quarantine_failed) and confirm != BACKUP_DELETE_CONFIRMATION:
+    quarantine_candidates = sum(1 for item in items if item.quarantine_candidate)
+    delete_confirmed = confirm == BACKUP_DELETE_CONFIRMATION
+    quarantine_confirmed = quarantine_confirm == FAILED_BACKUP_QUARANTINE_CONFIRMATION
+    delete_allowed = bool(apply and delete_candidates and delete_confirmed)
+    quarantine_allowed = bool(apply and quarantine_candidates and quarantine_failed and quarantine_confirmed)
+    delete_missing_confirm = bool(apply and delete_candidates and not delete_confirmed)
+    quarantine_missing_confirm = bool(
+        apply and quarantine_candidates and quarantine_failed and not quarantine_confirmed
+    )
+    if apply and delete_missing_confirm and not quarantine_allowed:
         passed = False
         recommendations = [
             f"Refusing deletion without confirm={BACKUP_DELETE_CONFIRMATION!r}.",
             "Rerun without --apply for review, or pass the exact confirmation string after reviewing candidates.",
         ]
-    elif apply and quarantine_failed and quarantine_confirm != FAILED_BACKUP_QUARANTINE_CONFIRMATION:
+    elif apply and quarantine_missing_confirm and not delete_allowed:
         passed = False
         recommendations = [
             f"Refusing failed-backup quarantine without quarantine_confirm={FAILED_BACKUP_QUARANTINE_CONFIRMATION!r}.",
             "Rerun without --apply for review, or pass the exact quarantine confirmation after reviewing failed backups.",
+        ]
+    elif apply and delete_missing_confirm and quarantine_allowed:
+        recommendations = [
+            "Applying failed-backup quarantine only; redundant verified backups still require delete confirmation.",
+            f"Pass confirm={BACKUP_DELETE_CONFIRMATION!r} in a separate reviewed run to delete redundant verified backups.",
+        ]
+    elif apply and quarantine_missing_confirm and delete_allowed:
+        recommendations = [
+            "Applying reviewed backup deletion only; failed-backup quarantine still requires quarantine confirmation.",
+            f"Pass quarantine_confirm={FAILED_BACKUP_QUARANTINE_CONFIRMATION!r} in a separate reviewed run to quarantine failed backups.",
         ]
     else:
         recommendations = _recommend(
@@ -215,17 +315,37 @@ def run_backup_stewardship(
     quarantined = 0
     quarantine_bytes = 0
     quarantine_errors = 0
-    if apply and passed and quarantine_failed:
+    partial_apply_notes: list[str] = []
+    if apply and delete_missing_confirm and quarantine_allowed:
+        partial_apply_notes = [
+            "Applied failed-backup quarantine only; redundant verified backups still require delete confirmation.",
+            f"Pass confirm={BACKUP_DELETE_CONFIRMATION!r} in a separate reviewed run to delete redundant verified backups.",
+        ]
+    elif apply and quarantine_missing_confirm and delete_allowed:
+        partial_apply_notes = [
+            "Applied reviewed backup deletion only; failed-backup quarantine still requires quarantine confirmation.",
+            f"Pass quarantine_confirm={FAILED_BACKUP_QUARANTINE_CONFIRMATION!r} in a separate reviewed run to quarantine failed backups.",
+        ]
+    if apply and passed and quarantine_allowed:
         quarantine_dir = root / "archive" / "failed-backups"
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         for item in items:
             if not item.quarantine_candidate:
                 continue
             path = Path(item.path)
+            target: Path | None = None
+            manifest_path: Path | None = None
             try:
                 _assert_safe_backup_path(backup_dir, path)
                 if not path.is_file():
                     raise FileNotFoundError(path)
+                final_verification = _verify_before_quarantine(path, trust_root=root)
+                if final_verification.get("passed"):
+                    item.verified = True
+                    item.quarantine_candidate = False
+                    item.error = None
+                    item.keep_reasons.append("verification-passed-before-quarantine")
+                    continue
                 target = _unique_quarantine_path(quarantine_dir, path.name)
                 path.replace(target)
             except Exception as exc:
@@ -235,12 +355,27 @@ def run_backup_stewardship(
                 quarantine_errors += 1
                 passed = False
                 continue
+            try:
+                manifest_path = _write_quarantine_manifest(
+                    target,
+                    original_path=path,
+                    item=item,
+                    final_verification=final_verification,
+                    quarantine_confirm=quarantine_confirm,
+                )
+            except Exception as exc:
+                item.error = f"{type(exc).__name__}: {exc}"
+                item.keep_reasons.append("quarantine-manifest-failed-inspect-manually")
+                quarantine_errors += 1
+                passed = False
             item.quarantined = True
+            item.quarantine_candidate = False
             item.quarantine_path = str(target)
+            item.quarantine_manifest_path = str(manifest_path) if manifest_path else None
             quarantined += 1
             quarantine_bytes += item.bytes
 
-    if apply and passed:
+    if apply and passed and delete_allowed:
         for item in items:
             if not item.delete_candidate:
                 continue
@@ -274,7 +409,7 @@ def run_backup_stewardship(
             f"{deletion_errors} backup deletions failed; inspect item errors before rerunning.",
             "Successfully deleted candidates remain deleted; failed candidates were preserved in the report.",
         ]
-    elif apply and passed and confirm == BACKUP_DELETE_CONFIRMATION:
+    elif apply and passed and delete_allowed:
         recommendations = _recommend(
             items,
             apply=True,
@@ -282,7 +417,7 @@ def run_backup_stewardship(
             bytes_after_candidates=bytes_after_candidates,
             bytes_after_quarantine=bytes_after_quarantine,
         )
-    elif apply and passed and quarantine_failed:
+    elif apply and passed and quarantine_allowed:
         recommendations = _recommend(
             items,
             apply=True,
@@ -295,6 +430,8 @@ def run_backup_stewardship(
             f"{quarantine_errors} failed-backup quarantines failed; inspect item errors before rerunning.",
             "Successfully quarantined backups remain under archive/failed-backups.",
         ]
+    if partial_apply_notes and passed:
+        recommendations = [*partial_apply_notes, *recommendations]
 
     candidate_bytes = sum(item.bytes for item in items if item.delete_candidate)
     quarantine_candidate_bytes = sum(item.bytes for item in items if item.quarantine_candidate)
@@ -322,7 +459,11 @@ def run_backup_stewardship(
         "keep_latest": keep_latest,
         "keep_retention_cycles": keep_retention_cycles,
     }
-    _save_verification_cache(root, current_cache, deleted_paths={_item_cache_key(item) for item in items if item.deleted})
+    _save_verification_cache(
+        root,
+        current_cache,
+        deleted_paths={_item_cache_key(item) for item in items if item.deleted or item.quarantined},
+    )
     return BackupStewardshipReport(
         root=str(root),
         dry_run=not apply,
@@ -330,7 +471,22 @@ def run_backup_stewardship(
         totals=totals,
         items=items,
         recommendations=recommendations,
+        lock=lock,
     )
+
+
+def _validate_stewardship_args(
+    *,
+    keep_latest: int,
+    keep_retention_cycles: int,
+    target_backup_bytes: int | None,
+) -> None:
+    if keep_latest < 1:
+        raise ValueError("keep_latest must be at least 1")
+    if keep_retention_cycles < 0:
+        raise ValueError("keep_retention_cycles must be non-negative")
+    if target_backup_bytes is not None and target_backup_bytes < 0:
+        raise ValueError("target_backup_bytes must be non-negative")
 
 
 def _item_cache_key(item: BackupStewardshipItem) -> str:
@@ -404,6 +560,16 @@ def _backup_item(
         verification_cached=verification_cached,
         error=error,
     )
+
+
+def _verify_before_quarantine(path: Path, *, trust_root: Path) -> dict[str, Any]:
+    try:
+        return verify_backup(path, trust_root=trust_root)
+    except Exception as exc:
+        return {
+            "passed": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _scan_backup_paths(backup_dir: Path) -> tuple[list[tuple[Path, stat_result]], list[BackupStewardshipItem]]:
@@ -523,6 +689,30 @@ def _unique_quarantine_path(quarantine_dir: Path, name: str) -> Path:
         if not candidate.exists():
             return candidate
     raise FileExistsError(f"Could not allocate quarantine path for {name}")
+
+
+def _write_quarantine_manifest(
+    target: Path,
+    *,
+    original_path: Path,
+    item: BackupStewardshipItem,
+    final_verification: dict[str, Any],
+    quarantine_confirm: str,
+) -> Path:
+    manifest_path = target.with_name(f"{target.name}.quarantine.json")
+    payload = {
+        "format": "ara-memory-failed-backup-quarantine-v1",
+        "quarantined_at": utc_now(),
+        "original_path": str(original_path),
+        "quarantine_path": str(target),
+        "bytes": item.bytes,
+        "created_at": item.created_at,
+        "initial_error": item.error,
+        "final_verification": final_verification,
+        "confirmation": quarantine_confirm,
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest_path
 
 
 def _is_reparse_point(path: Path) -> bool:

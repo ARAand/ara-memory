@@ -488,7 +488,13 @@ def main(argv: list[str] | None = None) -> int:
     backup = sub.add_parser("backup")
     backup.add_argument("--output", type=Path, default=None)
     backup.add_argument("--no-archive", action="store_true")
-    backup_stewardship = sub.add_parser("backup-stewardship")
+    backup_stewardship = sub.add_parser(
+        "backup-stewardship",
+        description=(
+            "Review backup storage pressure. Dry-run by default; apply mode takes the worker lock "
+            "before deleting verified backups or moving failed backups."
+        ),
+    )
     backup_stewardship.add_argument("--keep-latest", type=int, default=3)
     backup_stewardship.add_argument("--keep-retention-cycles", type=int, default=2)
     backup_stewardship.add_argument(
@@ -497,10 +503,32 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_TARGET_BACKUP_BYTES,
         help="Target backup bytes after deleting selected candidates. Defaults to 67108864 (64 MiB).",
     )
-    backup_stewardship.add_argument("--quarantine-failed", action="store_true")
-    backup_stewardship.add_argument("--apply", action="store_true")
-    backup_stewardship.add_argument("--confirm", default="")
-    backup_stewardship.add_argument("--quarantine-confirm", default="")
+    backup_stewardship.add_argument(
+        "--quarantine-failed",
+        action="store_true",
+        help="Mark failed-verification backup ZIPs for quarantine outside the live backup pool.",
+    )
+    backup_stewardship.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply reviewed actions. Requires exact confirmation strings and takes the worker lock.",
+    )
+    backup_stewardship.add_argument(
+        "--confirm",
+        default="",
+        help='Exact deletion confirmation for redundant verified backups: "DELETE OLD BACKUPS".',
+    )
+    backup_stewardship.add_argument(
+        "--quarantine-confirm",
+        default="",
+        help='Exact quarantine confirmation for failed backups: "QUARANTINE FAILED BACKUPS".',
+    )
+    backup_stewardship.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="Do not take the worker lock in apply mode. Use only when the store is otherwise quiescent.",
+    )
+    backup_stewardship.add_argument("--lock-stale-seconds", type=int, default=3600)
     backup_stewardship.add_argument("--json", action="store_true")
     verify_backup = sub.add_parser("verify-backup")
     verify_backup.add_argument("path", type=Path)
@@ -559,9 +587,12 @@ def main(argv: list[str] | None = None) -> int:
     prepare_live_prune.add_argument("--doctor-query", default="current memory state")
     prepare_live_prune.add_argument("--ttl-minutes", type=int, default=30)
     prepare_live_prune.add_argument("--no-global", action="store_true")
-    live_prune = sub.add_parser("live-prune")
+    live_prune = sub.add_parser(
+        "live-prune",
+        description='Irreversibly delete approved cold capsules only. Requires exact confirmation: "DELETE COLD CAPSULES".',
+    )
     live_prune.add_argument("--approval-token", required=True)
-    live_prune.add_argument("--confirm", required=True)
+    live_prune.add_argument("--confirm", required=True, help='Exact confirmation text: "DELETE COLD CAPSULES".')
     live_prune.add_argument("--json", action="store_true")
     ops = sub.add_parser("irreversible-operations")
     ops.add_argument("--limit", type=int, default=20)
@@ -586,7 +617,13 @@ def main(argv: list[str] | None = None) -> int:
     lifecycle.add_argument("--examples-per-tier", type=int, default=3)
     lifecycle.add_argument("--target-hot-tokens", type=int, default=1200)
     lifecycle.add_argument("--json", action="store_true")
-    retention_cycle = sub.add_parser("retention-cycle")
+    retention_cycle = sub.add_parser(
+        "retention-cycle",
+        description=(
+            "Build non-destructive pruning-readiness evidence. Takes the worker lock by default; "
+            "--no-shadow cannot pass pruning readiness."
+        ),
+    )
     retention_cycle.add_argument("--scope", default=None)
     retention_cycle.add_argument("--backup-output", type=Path, default=None)
     retention_cycle.add_argument("--cold-output", type=Path, default=None)
@@ -597,9 +634,22 @@ def main(argv: list[str] | None = None) -> int:
     retention_cycle.add_argument("--recall-budget", type=int, default=1200)
     retention_cycle.add_argument("--doctor-query", default="current memory state")
     retention_cycle.add_argument("--no-global", action="store_true")
-    retention_cycle.add_argument("--no-shadow", action="store_true")
-    retention_cycle.add_argument("--no-lock", action="store_true")
-    retention_cycle.add_argument("--lock-stale-seconds", type=int, default=3600)
+    retention_cycle.add_argument(
+        "--no-shadow",
+        action="store_true",
+        help="Collect partial evidence without shadow-prune; the cycle will not pass pruning readiness.",
+    )
+    retention_cycle.add_argument(
+        "--no-lock",
+        action="store_true",
+        help="Do not take the worker lock. Use only when the store is otherwise quiescent.",
+    )
+    retention_cycle.add_argument(
+        "--lock-stale-seconds",
+        type=int,
+        default=3600,
+        help="Treat the worker lock as stale after this many seconds.",
+    )
     retention_cycle.add_argument("--json", action="store_true")
     candidate_pressure = sub.add_parser("candidate-pressure")
     candidate_pressure.add_argument("--scope", default=None)
@@ -1284,6 +1334,8 @@ def main(argv: list[str] | None = None) -> int:
             apply=args.apply,
             confirm=args.confirm,
             quarantine_confirm=args.quarantine_confirm,
+            use_lock=not args.no_lock,
+            lock_stale_seconds=args.lock_stale_seconds,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

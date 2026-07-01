@@ -2454,11 +2454,115 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertTrue(applied.passed, applied.as_dict())
             self.assertEqual(applied.totals["quarantined"], 1)
+            self.assertEqual(applied.totals["quarantine_candidates"], 0)
+            self.assertEqual(applied.totals["quarantine_candidate_bytes"], 0)
             self.assertTrue(verified.exists())
             self.assertFalse(failed.exists())
             quarantined_item = next(item for item in applied.items if item.quarantined)
             self.assertTrue(Path(quarantined_item.quarantine_path).exists())
+            self.assertTrue(Path(quarantined_item.quarantine_manifest_path).exists())
             self.assertIn("archive", quarantined_item.quarantine_path)
+            manifest = json.loads(Path(quarantined_item.quarantine_manifest_path).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["original_path"], str(failed))
+            self.assertEqual(manifest["quarantine_path"], quarantined_item.quarantine_path)
+
+    def test_backup_stewardship_apply_respects_worker_lock_before_moving_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: backup stewardship apply must not race workers.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            verified = backup_dir / "verified.zip"
+            failed = backup_dir / "failed.zip"
+            memory.backup(output=verified)
+            failed.write_text("not a valid zip", encoding="utf-8")
+            lock = FileLock(memory.store.root, "worker", stale_seconds=3600)
+            lock_result = lock.acquire()
+            self.assertTrue(lock_result.acquired)
+            try:
+                report = memory.backup_stewardship(
+                    keep_latest=1,
+                    keep_retention_cycles=0,
+                    target_backup_bytes=1_000_000,
+                    quarantine_failed=True,
+                    apply=True,
+                    quarantine_confirm="QUARANTINE FAILED BACKUPS",
+                )
+            finally:
+                lock.release()
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertFalse(report.lock["acquired"])
+            self.assertEqual(report.totals["quarantined"], 0)
+            self.assertTrue(failed.exists())
+            self.assertFalse((memory.store.root / "archive" / "failed-backups" / "failed.zip").exists())
+
+    def test_backup_stewardship_reverifies_failed_backup_before_quarantine(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: quarantine should verify immediately before moving.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            verified = backup_dir / "verified.zip"
+            failed = backup_dir / "failed.zip"
+            memory.backup(output=verified)
+            failed.write_text("not a valid zip", encoding="utf-8")
+
+            with mock.patch.object(
+                backup_stewardship_module,
+                "_verify_before_quarantine",
+                return_value={"passed": True, "manifest": {"created_at": utc_now()}},
+            ):
+                report = memory.backup_stewardship(
+                    keep_latest=1,
+                    keep_retention_cycles=0,
+                    target_backup_bytes=1_000_000,
+                    quarantine_failed=True,
+                    apply=True,
+                    quarantine_confirm="QUARANTINE FAILED BACKUPS",
+                )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.totals["quarantined"], 0)
+            self.assertEqual(report.totals["quarantine_candidates"], 0)
+            self.assertTrue(failed.exists())
+            item = next(item for item in report.items if Path(item.path).resolve() == failed.resolve())
+            self.assertTrue(item.verified)
+            self.assertIn("verification-passed-before-quarantine", item.keep_reasons)
+
+    def test_backup_stewardship_can_quarantine_failed_without_delete_confirm_in_mixed_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: quarantine and delete confirmations are separate.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            backups = []
+            for index in range(3):
+                path = backup_dir / f"verified-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (3000 + index, 3000 + index))
+                backups.append(path)
+            failed = backup_dir / "failed.zip"
+            failed.write_text("not a valid zip", encoding="utf-8")
+            os.utime(failed, (2000, 2000))
+
+            report = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+                quarantine_failed=True,
+                apply=True,
+                quarantine_confirm="QUARANTINE FAILED BACKUPS",
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.totals["quarantined"], 1)
+            self.assertGreater(report.totals["delete_candidates"], 0)
+            self.assertTrue(all(path.exists() for path in backups))
+            self.assertFalse(failed.exists())
+            quarantined_item = next(item for item in report.items if item.quarantined)
+            self.assertTrue(Path(quarantined_item.quarantine_manifest_path).exists())
+            self.assertTrue(any("delete confirmation" in item for item in report.recommendations))
 
     def test_backup_stewardship_does_not_quarantine_when_no_verified_backup_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2509,7 +2613,14 @@ class MemoryFlowTests(unittest.TestCase):
                 memory.backup(output=path)
                 os.utime(path, (4000 + index, 4000 + index))
 
-            with mock.patch("pathlib.Path.unlink", side_effect=PermissionError("locked")):
+            original_unlink = Path.unlink
+
+            def fake_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+                if path.resolve() == old.resolve():
+                    raise PermissionError("locked")
+                return original_unlink(path, *args, **kwargs)
+
+            with mock.patch("pathlib.Path.unlink", new=fake_unlink):
                 report = memory.backup_stewardship(
                     keep_latest=1,
                     keep_retention_cycles=0,
@@ -2650,6 +2761,13 @@ class MemoryFlowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
             memory.init()
+            memory.retain(kind="decision", text="Decision: CLI apply must require reviewed deletion confirmation.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            for index in range(2):
+                path = backup_dir / f"cli-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (7000 + index, 7000 + index))
 
             completed = run(
                 [
@@ -2659,6 +2777,12 @@ class MemoryFlowTests(unittest.TestCase):
                     "--root",
                     str(memory.store.root),
                     "backup-stewardship",
+                    "--keep-latest",
+                    "1",
+                    "--keep-retention-cycles",
+                    "0",
+                    "--target-backup-bytes",
+                    "0",
                     "--apply",
                     "--json",
                 ],
@@ -2734,6 +2858,39 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual({item["status"] for item in capsules}, {"superseded", "quarantined"})
             self.assertNotIn(stable.id, {item["id"] for item in capsules})
             self.assertEqual([item["id"] for item in events], [event.id])
+
+    def test_cold_export_verification_requires_referenced_source_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: verified cold exports must carry source event provenance.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old provenance project",
+                body="cold export without source events is insufficient evidence",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.4,
+                source_event_ids=[event.id],
+                tags=["old"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(cold)
+            output = root / "cold-no-events.zip"
+
+            memory.cold_export(output=output, scope="alpha", include_events=False)
+            verified = memory.verify_cold_export(output)
+
+            self.assertFalse(verified["passed"], verified)
+            self.assertTrue(verified["capsule_count_ok"])
+            self.assertTrue(verified["event_count_ok"])
+            self.assertFalse(verified["provenance_ok"])
+            self.assertEqual(verified["missing_source_event_ids"], [event.id])
 
     def test_cold_stewardship_groups_cold_memory_and_event_protection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3744,6 +3901,64 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(operations[0]["manifest"]["approval_id"], approval.approval_id)
             reused = memory.live_prune(approval_token=approval.token, confirmation="DELETE COLD CAPSULES")
             self.assertFalse(reused.passed)
+
+    def test_live_prune_blocks_if_approved_backup_no_longer_verifies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: live prune must reverify backup evidence at deletion time.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="active backup reverify decision",
+                body="backup reverify remains queryable",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["live-prune"],
+                status=MemoryStatus.STABLE,
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old backup reverify project",
+                body="cold capsule must not be deleted if backup evidence breaks",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[event.id],
+                tags=["live-prune"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(stable)
+            memory.store.upsert_capsule(cold)
+            backup_path = root / "backup.zip"
+            export_path = root / "cold.zip"
+            memory.backup(output=backup_path)
+            memory.cold_export(output=export_path, scope="alpha")
+            approval = memory.prepare_live_prune(
+                backup_path=backup_path,
+                export_path=export_path,
+                scope="alpha",
+                recall_queries=["backup reverify"],
+                recall_budget=900,
+                doctor_query="backup reverify",
+            )
+            backup_path.write_text("corrupted after approval", encoding="utf-8")
+
+            result = memory.live_prune(
+                approval_token=approval.token,
+                confirmation="DELETE COLD CAPSULES",
+            )
+
+            self.assertFalse(result.passed, result.as_dict())
+            self.assertTrue(any("Approved backup no longer verifies" in item for item in result.recommendations))
+            self.assertTrue(memory.store.get_capsule(cold.id))
+            self.assertEqual(memory.irreversible_operations(limit=5), [])
 
     def test_live_prune_blocks_if_approved_capsule_set_drifts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
