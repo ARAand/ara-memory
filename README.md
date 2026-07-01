@@ -173,6 +173,17 @@ private plaintext until a future encrypted or metadata-only spool mode exists.
 The pre-retain privacy guard applies again when those envelopes are drained into
 text events, before ledger/SQLite/FTS storage.
 
+New file/image archive objects are encrypted under `archive/objects`. Existing
+plaintext objects from older stores should be migrated explicitly:
+
+```powershell
+python -m ara_memory archive-encrypt
+python -m ara_memory archive-encrypt --apply
+```
+
+The dry-run reports plaintext, already encrypted, corrupt, missing-key, and
+key-mismatch objects before `--apply` rewrites plaintext objects in place.
+
 ```powershell
 @'
 {
@@ -526,9 +537,9 @@ any destructive pruning is considered.
 creates a fresh backup, verifies it, exports cold capsules, verifies that export,
 runs prune-plan with representative recall queries, and runs shadow-prune in a
 restored sandbox. It does not modify the live store. The cycle backup defaults
-to `--backup-archive-mode objects`, which preserves raw artifact objects without
-recursively embedding older cold exports, retention-cycle reports, or quarantined
-failed backup ZIPs. Use `--backup-archive-mode full` only when a forensic
+to `--backup-archive-mode objects`, which preserves encrypted artifact objects
+without recursively embedding older cold exports, retention-cycle reports, or
+quarantined failed backup ZIPs. Use `--backup-archive-mode full` only when a forensic
 snapshot of the entire archive tree is explicitly required. By default it takes
 the same worker lock used by scheduled worker-loop runs, so backup/export/shadow
 evidence is not generated while the background worker is mutating memory; use
@@ -625,11 +636,12 @@ and orphan rows do not pass. Backup and cold-export verification also reject
 unsafe archive names, duplicate entries, oversized members, excessive total
 uncompressed size, suspicious compression ratios, and filesystem-normalized path
 collisions before hashing or parsing large members.
-Default backups use `--archive-mode objects`: they include sha256-addressed raw
-file/image artifacts under `archive/objects` and the full spool directory,
-including pending/done/failed envelopes, snapshots, and `.seal-key`, so sealed
-pending work remains drainable after restore without recursively embedding
-derived evidence bundles. They intentionally exclude older `archive/cold`
+Default backups use `--archive-mode objects`: they include sha256-addressed
+file/image artifacts encrypted at rest under `archive/objects` and the full
+spool directory, including pending/done/failed envelopes, snapshots, and
+`.seal-key`, so sealed pending work remains drainable after restore without
+recursively embedding derived evidence bundles. Spool snapshots, the ledger, and
+SQLite rows can still contain plaintext local evidence. They intentionally exclude older `archive/cold`
 exports, `archive/retention-cycles` reports, and `archive/failed-backups` ZIPs.
 Use `backup --archive-mode full` for an explicit forensic snapshot of the entire
 archive tree. `backup --no-archive` or `--archive-mode none` omits archived
@@ -637,6 +649,11 @@ artifacts; do not use it when restored file/image artifacts are required.
 The backup signing key lives at `.ara-memory/.backup-signing-key` and is not
 stored inside backup ZIPs. Preserve it as local trust material if old backups
 must remain cryptographically verifiable on another machine.
+The archive object encryption key lives at `.ara-memory/.archive-object-key`.
+Backups never store that key in plaintext; when encrypted archive objects are
+included, the manifest carries an encrypted key escrow wrapped by the local
+backup signing key. Preserve the source trust root or `.backup-signing-key` when
+copied backups must be verified and restored on another machine.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
 Restore copies the source ZIP to a temporary snapshot and verifies/extracts that
@@ -689,8 +706,9 @@ timestamp, and final verification result.
   pre-retain privacy guard and before they hit the ledger.
 - Recognized hidden-reasoning fields and line-prefixed text are redacted from
   retained text events by default. Decisions and reasons are stored as explicit
-  summaries with provenance, while raw artifact/spool evidence remains private
-  plaintext unless a later encrypted mode is used.
+  summaries with provenance. Archive object payloads are encrypted at rest;
+  spool snapshots, ledger entries, and SQLite rows remain private local evidence
+  and may still contain plaintext.
 - Long-term memories start as candidates and are promoted only after repeated
   evidence, high salience, or explicit user confirmation.
 - Goals are first-class capsules, separate from decisions and procedures, so

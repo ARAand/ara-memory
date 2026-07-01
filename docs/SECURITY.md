@@ -38,7 +38,7 @@
 - Sleep runs a separate Memory Auditor before promotion.
 - External advisor commands are opt-in and fall back to deterministic review on invalid output.
 - Stale and malformed summaries are superseded instead of deleted, preserving provenance.
-- Recognized hidden-reasoning fields and line-prefixed text are redacted from retained text events by default; only observable decisions and summaries should be retained. Raw artifact/spool evidence remains private plaintext unless an explicit encrypted mode is added.
+- Recognized hidden-reasoning fields and line-prefixed text are redacted from retained text events by default; only observable decisions and summaries should be retained. Archive object payloads are encrypted at rest; spool snapshots, ledger entries, and SQLite rows remain private local evidence and may still contain plaintext.
 - `spool-turn` writes privacy-guarded pending envelopes atomically before database ingestion, seals each envelope with a local HMAC, and snapshots existing file/image artifacts plus bounded worktree evidence at enqueue time.
 - `drain-spool` verifies the local seal, strict option types, bounded sizes, and artifact snapshot hashes before retaining any events; unsealed or edited pending JSON is moved to failed.
 - `drain-spool` moves failures to `.ara-memory/spool/failed/` with the sealed guarded envelope and error details intact; malformed queue files keep a raw sidecar there.
@@ -48,7 +48,7 @@
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
-- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` first bounds ZIP entry count, entry size, total expansion, compression ratio, and normalized path collisions, then checks entry hashes, manifest signature, SQLite integrity, and foreign keys. The default `objects` archive profile backs up raw artifact objects without recursively embedding older cold exports, retention-cycle reports, or quarantined failed-backup ZIPs; `full` is the explicit forensic profile for the whole archive tree.
+- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` first bounds ZIP entry count, entry size, total expansion, compression ratio, and normalized path collisions, then checks entry hashes, manifest signature, SQLite integrity, foreign keys, and encrypted archive-object key escrow when encrypted objects are present. The default `objects` archive profile backs up encrypted artifact objects without recursively embedding older cold exports, retention-cycle reports, or quarantined failed-backup ZIPs; `full` is the explicit forensic profile for the whole archive tree.
 - Signed v2 cold exports include per-entry SHA-256 hashes and a manifest HMAC using the same local trust key; `verify-cold-export` bounds archive expansion, streams JSONL with per-file/per-line limits, checks hashes/signature, and rejects exports whose capsules reference source events missing from `events.jsonl`.
 - `restore-backup` copies the source ZIP to a temporary snapshot and verifies/extracts that same byte stream; `--force` only clears recognized memory-root paths and preserves local signing keys.
 - `live-prune` binds approvals to exact capsule IDs plus backup/export SHA-256 identities, rechecks export coverage from the verified cold-export scan, rechecks current cold status at deletion time, and preserves source events.
@@ -69,6 +69,8 @@
 - Treat spooled envelopes as untrusted input until `sleep`, audit, risk, and recall-regression gates have run.
 - Treat `spool/snapshots` as part of live queued evidence; do not clean it independently from its pending/done/failed envelope.
 - Treat `.ara-memory/spool/.seal-key` as private local trust material; backups preserve it so pending sealed envelopes remain drainable after restore.
+- Treat `.ara-memory/.archive-object-key` as private local trust material. Backups do not include it in plaintext; encrypted archive-object backups carry a manifest escrow wrapped by `.backup-signing-key`, so copied/restored archive bytes still need the corresponding source trust root.
+- Run `archive-encrypt` as a dry-run before applying legacy archive migration; apply only when plaintext objects are expected and corrupt, missing-key, or key-mismatch reports have been reviewed.
 - Treat `.ara-memory/.backup-signing-key` as private local trust material; it is not stored in backup ZIPs, so copied backups need the corresponding key to remain cryptographically verifiable.
 - Treat `backup --archive-mode full` as an explicit forensic operation. Routine milestone and retention-cycle backups should use the default `objects` profile so signed evidence bundles are not recursively embedded in later backups.
 - Keep project scopes isolated unless the user asks for cross-project recall.
@@ -84,7 +86,7 @@
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
 - Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
 - Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
-- Treat `.ara-memory`, backups, cold exports, hot-memory files, raw artifact archives, spool path metadata, and SQLite databases as private plaintext evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
+- Treat `.ara-memory`, backups, cold exports, hot-memory files, archive object metadata, spool snapshots/path metadata, and SQLite databases as private evidence. Archive object payloads are encrypted at rest, but backups still include plaintext spool/ledger/database evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
 
 ## Recommended Future Defenses
 

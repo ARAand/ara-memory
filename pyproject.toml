@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Ara-Codex" }]
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["cryptography>=42"]
 
 [project.scripts]
 ara-memory = "ara_memory.cli:main"

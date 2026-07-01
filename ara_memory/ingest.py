@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import shutil
 from pathlib import Path
 from typing import Any
 
+from ara_memory.archive_crypto import ensure_encrypted_archive_object
 from ara_memory.compressors import compact_text
 from ara_memory.core import AraMemory
 
@@ -51,18 +51,18 @@ def ingest_file(
 
     digest = _sha256(resolved)
     mime_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
-    archive_path = memory.store.archive_dir / "objects" / digest[:2] / digest
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-    if not archive_path.exists():
-        shutil.copy2(resolved, archive_path)
+    archived = ensure_encrypted_archive_object(memory.store.root, resolved, digest)
+    archive_path = archived.path
+    archive_relative_path = archive_path.relative_to(memory.store.root).as_posix()
 
     metadata = {
         "original_path": str(resolved),
-        "archive_path": str(archive_path),
+        "archive_path": archive_relative_path,
         "sha256": digest,
         "bytes": resolved.stat().st_size,
         "mime_type": mime_type,
     }
+    metadata.update(archived.metadata())
     if metadata_extra:
         metadata.update(metadata_extra)
 
@@ -71,7 +71,7 @@ def ingest_file(
             f"Image artifact: {resolved.name}\n"
             f"Caption: {caption or 'No caption provided.'}\n"
             f"SHA256: {digest}\n"
-            f"Archived at: {archive_path}"
+            f"Archived at: {archive_relative_path}"
         )
         event = memory.retain(
             kind="image",
@@ -103,7 +103,7 @@ def ingest_file(
         f"Binary artifact: {resolved.name}\n"
         f"MIME: {mime_type}\n"
         f"SHA256: {digest}\n"
-        f"Archived at: {archive_path}"
+        f"Archived at: {archive_relative_path}"
     )
     event = memory.retain(
         kind="file",

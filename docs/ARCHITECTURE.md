@@ -147,7 +147,10 @@ sleep()
 - `.ara-memory/ledger/events.jsonl`: append-only source of truth.
 - `.ara-memory/memory.db`: SQLite tables, active-capsule FTS indexes, temporal edges.
 - `.ara-memory/archive/`: derived evidence area; subdirectories have distinct lifecycle policy.
-- `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts needed by routine restores. These are raw bytes, not redacted or encrypted; default backups include them.
+- `.ara-memory/archive/objects/`: sha256-addressed file and image artifacts
+  encrypted at rest with the local `.archive-object-key`; default backups include
+  encrypted objects plus a manifest key escrow wrapped by the backup signing key,
+  never the plaintext archive key.
 - `.ara-memory/archive/cold/`: signed cold capsule exports used as pruning evidence.
 - `.ara-memory/archive/retention-cycles/`: compact retention-cycle reports.
 - `.ara-memory/archive/failed-backups/`: quarantined failed backup ZIPs kept for manual inspection.
@@ -159,6 +162,10 @@ sleep()
 - `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
 - `.ara-memory/.backup-signing-key`: local HMAC trust key for backup manifests;
   it is intentionally excluded from backup ZIPs.
+- `.ara-memory/.archive-object-key`: local AES-GCM archive object key; it is
+  not written to backup ZIPs in plaintext. Backups that include encrypted
+  archive objects carry an encrypted escrow in `manifest.json` so verified
+  restores can recover artifact bytes with the source trust root.
 - Large provenance event lookups are de-duplicated and chunked so cold export,
   risk review, and restore/prune preparation do not hit SQLite variable limits.
 

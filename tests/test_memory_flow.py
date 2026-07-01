@@ -20,6 +20,12 @@ import ara_memory.retention as retention_module
 import ara_memory.prune as prune_module
 import ara_memory.storage as storage_module
 import ara_memory.spool as spool_module
+from ara_memory.archive_crypto import (
+    decrypt_archive_object,
+    ensure_encrypted_archive_object,
+    migrate_archive_objects,
+    read_archive_object_header,
+)
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
 from ara_memory.compressors import estimate_tokens, extract_keywords
@@ -2275,17 +2281,16 @@ class MemoryFlowTests(unittest.TestCase):
         self.assertNotIn("?곴뎄", text)
         self.assertEqual(text.count("def audit_rows"), 1)
 
-    def test_ingest_image_archives_raw_artifact(self) -> None:
+    def test_ingest_image_archives_encrypted_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             image = root / "pixel.png"
-            image.write_bytes(
-                bytes.fromhex(
-                    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
-                    "1f15c4890000000a49444154789c636000000200015d0b2a0b00000000"
-                    "49454e44ae426082"
-                )
+            raw_png = bytes.fromhex(
+                "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                "1f15c4890000000a49444154789c636000000200015d0b2a0b00000000"
+                "49454e44ae426082"
             )
+            image.write_bytes(raw_png)
             memory = AraMemory(root / "memory")
             event_id = ingest_file(
                 memory,
@@ -2294,10 +2299,118 @@ class MemoryFlowTests(unittest.TestCase):
                 caption="single pixel test image",
             )
             self.assertTrue(event_id.startswith("evt_"))
-            self.assertTrue(any((root / "memory" / "archive" / "objects").rglob("*")))
+            event = memory.store.get_events([event_id])[0]
+            metadata = json.loads(event["metadata_json"])
+            self.assertFalse(Path(metadata["archive_path"]).is_absolute())
+            archive_path = memory.store.root / metadata["archive_path"]
+            self.assertTrue(archive_path.exists())
+            self.assertTrue(read_archive_object_header(archive_path))
+            self.assertNotEqual(archive_path.read_bytes(), raw_png)
+            self.assertEqual(decrypt_archive_object(memory.store.root, archive_path), raw_png)
+            self.assertTrue(metadata["archive_encrypted"])
             memory.consolidate()
             pack = memory.recall("single pixel image", scope="images", budget=1200)
             self.assertIn("single pixel", pack.lower())
+
+    def test_archive_encrypt_migrates_legacy_plaintext_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            memory.init()
+            legacy = memory.store.archive_dir / "objects" / "aa" / "legacy-object"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy_bytes = b"legacy plaintext artifact should be wrapped"
+            legacy.write_bytes(legacy_bytes)
+
+            dry_run = migrate_archive_objects(memory.store.root)
+            self.assertTrue(dry_run["passed"], dry_run)
+            self.assertFalse((memory.store.root / ".archive-object-key").exists())
+            self.assertEqual(dry_run["raw"], 1)
+            self.assertEqual(dry_run["encrypted"], 0)
+
+            applied = migrate_archive_objects(memory.store.root, apply=True)
+            self.assertTrue(applied["passed"], applied)
+            self.assertEqual(applied["raw"], 1)
+            self.assertEqual(applied["encrypted"], 1)
+            self.assertTrue(read_archive_object_header(legacy))
+            self.assertNotEqual(legacy.read_bytes(), legacy_bytes)
+            self.assertEqual(decrypt_archive_object(memory.store.root, legacy), legacy_bytes)
+
+            repeat = migrate_archive_objects(memory.store.root, apply=True)
+            self.assertTrue(repeat["passed"], repeat)
+            self.assertEqual(repeat["raw"], 0)
+            self.assertEqual(repeat["encrypted"], 0)
+            self.assertEqual(repeat["already_encrypted"], 1)
+
+    def test_existing_archive_object_with_stale_key_is_rewrapped_from_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.txt"
+            artifact.write_text("same source can rewrap a restored encrypted object\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            first_id = ingest_file(memory, path=artifact, scope="alpha")
+            first_event = memory.store.get_events([first_id])[0]
+            first_metadata = json.loads(first_event["metadata_json"])
+            archive_path = memory.store.root / first_metadata["archive_path"]
+            first_header = read_archive_object_header(archive_path)
+            self.assertIsNotNone(first_header)
+
+            (memory.store.root / ".archive-object-key").write_text("01" * 32, encoding="ascii")
+            ingest_file(memory, path=artifact, scope="alpha")
+            second_header = read_archive_object_header(archive_path)
+
+            self.assertIsNotNone(second_header)
+            self.assertNotEqual(first_header["key_id"], second_header["key_id"])
+            self.assertEqual(
+                decrypt_archive_object(memory.store.root, archive_path),
+                artifact.read_bytes(),
+            )
+
+    def test_archive_key_creation_is_atomic_under_parallel_first_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            root.mkdir()
+            sources = []
+            for index in range(8):
+                path = Path(tmp) / f"artifact-{index}.bin"
+                path.write_bytes(f"parallel archive key creation {index}".encode("utf-8"))
+                sources.append(path)
+
+            def archive(path: Path) -> tuple[Path, str]:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                result = ensure_encrypted_archive_object(root, path, digest)
+                return result.path, result.key_id
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(archive, sources))
+
+            self.assertEqual(len({key_id for _, key_id in results}), 1)
+            for source_path, (archive_path, _) in zip(sources, results):
+                self.assertEqual(decrypt_archive_object(root, archive_path), source_path.read_bytes())
+
+    def test_corrupt_encrypted_archive_object_fails_migration_and_backup_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.bin"
+            artifact.write_bytes(b"corrupt archive object should fail gates")
+            memory = AraMemory(root / "memory")
+            event_id = ingest_file(memory, path=artifact, scope="alpha")
+            event = memory.store.get_events([event_id])[0]
+            metadata = json.loads(event["metadata_json"])
+            archive_path = memory.store.root / metadata["archive_path"]
+            payload = bytearray(archive_path.read_bytes())
+            payload[-1] ^= 0x01
+            archive_path.write_bytes(bytes(payload))
+
+            migration = migrate_archive_objects(memory.store.root)
+            self.assertFalse(migration["passed"], migration)
+            self.assertTrue(migration["errors"])
+
+            backup_path = root / "corrupt.zip"
+            memory.backup(output=backup_path)
+            verified = memory.verify_backup(backup_path)
+            self.assertFalse(verified["passed"], verified)
+            self.assertEqual(verified["archive_object_key_escrow"]["status"], "failed")
 
     def test_backup_exports_consistent_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2323,11 +2436,13 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(result.manifest["format"], "ara-memory-backup-v2")
             self.assertIn("entry_hashes_sha256", result.manifest)
             self.assertIn("manifest_hmac_sha256", result.manifest)
+            self.assertIn("archive_object_key_escrow", result.manifest)
             verified = memory.verify_backup(output)
             self.assertTrue(verified["passed"], verified)
             self.assertEqual(verified["sqlite_integrity"], "ok")
             self.assertEqual(verified["entry_hashes"]["status"], "ok")
             self.assertEqual(verified["manifest_signature"]["status"], "ok")
+            self.assertEqual(verified["archive_object_key_escrow"]["status"], "ok")
 
             with zipfile.ZipFile(output, "r") as zf:
                 names = set(zf.namelist())
@@ -2336,7 +2451,17 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertIn("ledger/events.jsonl", names)
                 self.assertIn("hot/alpha.md", names)
                 self.assertNotIn(".backup-signing-key", names)
-                self.assertTrue(any(name.startswith("archive/objects/") for name in names))
+                self.assertNotIn(".archive-object-key", names)
+                object_names = sorted(
+                    name
+                    for name in names
+                    if name.startswith("archive/objects/") and not name.endswith("/")
+                )
+                self.assertTrue(object_names)
+                object_payloads = [zf.read(name) for name in object_names]
+                self.assertTrue(any(payload.startswith(b"ARAARCHIVE1\n") for payload in object_payloads))
+                for payload in object_payloads:
+                    self.assertNotIn(b"Decision: backup should preserve", payload)
             self.assertEqual(result.manifest["archive_mode"], "objects")
 
     def test_backup_archive_modes_separate_source_objects_from_derived_archives(self) -> None:
@@ -2446,6 +2571,56 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
             self.assertFalse(json.loads(conflict.stdout)["passed"])
+
+    def test_archive_encrypt_cli_dry_run_and_apply_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            for name, payload in {"one": b"legacy one", "two": b"legacy two"}.items():
+                path = memory.store.archive_dir / "objects" / name[:2] / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+
+            dry_run = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "archive-encrypt",
+                    "--limit",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(dry_run.returncode, 0, dry_run.stdout + dry_run.stderr)
+            dry_payload = json.loads(dry_run.stdout)
+            self.assertEqual(dry_payload["raw"], 1)
+            self.assertEqual(dry_payload["encrypted"], 0)
+            self.assertFalse((memory.store.root / ".archive-object-key").exists())
+
+            apply = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "archive-encrypt",
+                    "--apply",
+                    "--limit",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(apply.returncode, 0, apply.stdout + apply.stderr)
+            apply_payload = json.loads(apply.stdout)
+            self.assertEqual(apply_payload["raw"], 1)
+            self.assertEqual(apply_payload["encrypted"], 1)
+            self.assertTrue((memory.store.root / ".archive-object-key").exists())
 
     def test_verify_backup_rejects_tampered_zip_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4997,6 +5172,34 @@ class MemoryFlowTests(unittest.TestCase):
             self_backup = source.backup(output=source.store.root / "backups" / "self.zip").path
             direct = restore_backup_direct(self_backup, source.store.root, force=True, trust_root=source.store.root)
             self.assertTrue(direct["passed"], direct)
+
+    def test_backup_restore_recovers_encrypted_archive_object_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.bin"
+            artifact_bytes = b"encrypted archive object restore roundtrip"
+            artifact.write_bytes(artifact_bytes)
+            source = AraMemory(root / "source")
+            event_id = ingest_file(source, path=artifact, scope="alpha")
+            event = source.store.get_events([event_id])[0]
+            metadata = json.loads(event["metadata_json"])
+            source_archive_path = source.store.root / metadata["archive_path"]
+            self.assertEqual(decrypt_archive_object(source.store.root, source_archive_path), artifact_bytes)
+
+            backup_path = root / "backup.zip"
+            backup = source.backup(output=backup_path)
+            self.assertIn("archive_object_key_escrow", backup.manifest)
+            restored_root = root / "restored"
+            result = source.restore_backup(backup_path, restored_root)
+            self.assertTrue(result["passed"], result)
+
+            restored = AraMemory(restored_root)
+            restored_event = restored.store.get_events([event_id])[0]
+            restored_metadata = json.loads(restored_event["metadata_json"])
+            self.assertFalse(Path(restored_metadata["archive_path"]).is_absolute())
+            restored_archive_path = restored.store.root / restored_metadata["archive_path"]
+            self.assertTrue(restored_archive_path.exists())
+            self.assertEqual(decrypt_archive_object(restored.store.root, restored_archive_path), artifact_bytes)
 
     def test_backup_restore_preserves_pending_spool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

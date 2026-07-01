@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.advisor import MemoryAdvisor, MemoryReviewEngine, build_memory_advisor
+from ara_memory.archive_crypto import migrate_archive_objects
 from ara_memory.audit import MemoryAuditor
 from ara_memory.backup import BackupResult, create_backup, drill_restore_backup, restore_backup, verify_backup
 from ara_memory.backup_stewardship import BackupStewardshipReport, run_backup_stewardship
@@ -450,6 +451,9 @@ class AraMemory:
 
     def maintenance(self, *, vacuum: bool = True) -> MaintenanceReport:
         return run_maintenance(self.store, vacuum=vacuum)
+
+    def archive_encrypt(self, *, apply: bool = False, limit: int | None = None) -> dict[str, Any]:
+        return migrate_archive_objects(self.store.root, apply=apply, limit=limit)
 
     def retention(self, *, scope: str | None = None, cold_limit: int = 20) -> RetentionReport:
         scope = _canonical_scope(scope)

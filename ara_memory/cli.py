@@ -497,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         choices=["objects", "full", "none"],
         default=None,
         help=(
-            "Archive payload to include. objects keeps raw artifact objects without recursive derived "
+            "Archive payload to include. objects keeps encrypted artifact objects without recursive derived "
             "cold/export/failed-backup bundles; full includes the entire archive tree; none omits archive files."
         ),
     )
@@ -640,6 +640,12 @@ def main(argv: list[str] | None = None) -> int:
     ops.add_argument("--limit", type=int, default=20)
     maintenance = sub.add_parser("maintenance")
     maintenance.add_argument("--no-vacuum", action="store_true")
+    archive_encrypt = sub.add_parser(
+        "archive-encrypt",
+        description="Encrypt plaintext archive/objects payloads in place. Dry-run by default.",
+    )
+    archive_encrypt.add_argument("--apply", action="store_true")
+    archive_encrypt.add_argument("--limit", type=int, default=None)
     retention = sub.add_parser("retention")
     retention.add_argument("--scope", default=None)
     retention.add_argument("--cold-limit", type=int, default=20)
@@ -1546,6 +1552,11 @@ def main(argv: list[str] | None = None) -> int:
         result = memory.maintenance(vacuum=not args.no_vacuum)
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result.sqlite_integrity == "ok" else 1
+
+    if args.cmd == "archive-encrypt":
+        result = memory.archive_encrypt(apply=args.apply, limit=args.limit)
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["passed"] else 1
 
     if args.cmd == "retention":
         result = memory.retention(scope=args.scope, cold_limit=args.cold_limit)

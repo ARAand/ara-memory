@@ -20,6 +20,14 @@ from ara_memory.archive_safety import (
     member_sha256,
     read_member_text,
 )
+from ara_memory.archive_crypto import (
+    ARCHIVE_OBJECT_KEY_NAME,
+    ARCHIVE_OBJECT_MAGIC,
+    create_archive_key_escrow,
+    decrypt_archive_object_bytes,
+    restore_archive_key_from_escrow,
+    unwrap_archive_key_escrow,
+)
 from ara_memory.models import utc_now
 from ara_memory.recall import RecallCompiler
 from ara_memory.storage import MemoryStore, SCHEMA_VERSION
@@ -29,6 +37,7 @@ BACKUP_FORMAT = "ara-memory-backup-v2"
 BACKUP_SIGNING_KEY_NAME = ".backup-signing-key"
 ENTRY_HASHES_FIELD = "entry_hashes_sha256"
 MANIFEST_SIGNATURE_FIELD = "manifest_hmac_sha256"
+ARCHIVE_OBJECT_KEY_ESCROW_FIELD = "archive_object_key_escrow"
 SIGNATURE_ALGORITHM = "hmac-sha256-manifest-v1"
 ARCHIVE_MODE_OBJECTS = "objects"
 ARCHIVE_MODE_FULL = "full"
@@ -61,6 +70,13 @@ def create_backup(
     excluded_paths = {output_path}
     signing_key = _load_or_create_backup_signing_key(store.root)
     archive_mode = _resolve_archive_mode(include_archive=include_archive, archive_mode=archive_mode)
+    archive_key_escrow = create_archive_key_escrow(store.root, signing_key) if archive_mode != ARCHIVE_MODE_NONE else None
+    if (
+        archive_mode != ARCHIVE_MODE_NONE
+        and archive_key_escrow is None
+        and _path_has_encrypted_archive_objects(store.archive_dir / "objects")
+    ):
+        raise ValueError("Encrypted archive objects exist but .archive-object-key is missing.")
 
     manifest = {
         "created_at": utc_now(),
@@ -73,6 +89,8 @@ def create_backup(
         "signature_algorithm": SIGNATURE_ALGORITHM,
         "backup_key_id": _backup_key_id(signing_key),
     }
+    if archive_key_escrow is not None:
+        manifest[ARCHIVE_OBJECT_KEY_ESCROW_FIELD] = archive_key_escrow
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_db = Path(tmp) / "memory.db"
@@ -117,9 +135,15 @@ def verify_backup(path: Path, *, trust_root: Path | None = None) -> dict:
         else:
             manifest = {}
         hash_report = _verify_entry_hashes(zf, names, manifest) if safety["passed"] else _skipped_hash_report()
+        effective_trust_root = _infer_trust_root(path, trust_root=trust_root)
         signature_report = _verify_manifest_signature(
             manifest,
-            trust_root=_infer_trust_root(path, trust_root=trust_root),
+            trust_root=effective_trust_root,
+        )
+        archive_key_report = (
+            _verify_archive_key_escrow(zf, names, manifest, trust_root=effective_trust_root)
+            if safety["passed"]
+            else {"status": "skipped", "encrypted_objects": 0}
         )
         format_ok = manifest.get("format") == BACKUP_FORMAT
         signature_algorithm_ok = manifest.get("signature_algorithm") == SIGNATURE_ALGORITHM
@@ -153,6 +177,7 @@ def verify_backup(path: Path, *, trust_root: Path | None = None) -> dict:
             and not foreign_key_violations
             and hash_report["status"] == "ok"
             and signature_report["status"] == "ok"
+            and archive_key_report["status"] in {"ok", "not-needed"}
         )
         return {
             "path": str(path),
@@ -169,6 +194,7 @@ def verify_backup(path: Path, *, trust_root: Path | None = None) -> dict:
             "entries": len(names),
             "entry_hashes": hash_report,
             "manifest_signature": signature_report,
+            "archive_object_key_escrow": archive_key_report,
         }
 
 
@@ -200,6 +226,13 @@ def restore_backup(path: Path, target_root: Path, *, force: bool = False, trust_
                 destination = _safe_restore_destination(target_root, name)
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 copy_member_to_path(zf, name, destination)
+
+        escrow = verification["manifest"].get(ARCHIVE_OBJECT_KEY_ESCROW_FIELD)
+        if isinstance(escrow, dict):
+            signing_key = _load_backup_signing_key(effective_trust_root) if effective_trust_root is not None else None
+            if signing_key is None:
+                raise ValueError("Backup verified but archive key escrow cannot be restored without trust root key.")
+            restore_archive_key_from_escrow(target_root, escrow, signing_key, overwrite=True)
 
         restored = MemoryStore(target_root)
         restored.init()
@@ -314,6 +347,109 @@ def _resolve_archive_mode(*, include_archive: bool, archive_mode: str | None) ->
 def _write_file(zf: zipfile.ZipFile, path: Path, arcname: str, *, entry_hashes: dict[str, str]) -> None:
     entry_hashes[arcname] = _file_sha256(path)
     zf.write(path, arcname)
+
+
+def _path_has_encrypted_archive_objects(root: Path) -> bool:
+    if not root.exists():
+        return False
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as fh:
+                if fh.read(len(ARCHIVE_OBJECT_MAGIC)) == ARCHIVE_OBJECT_MAGIC:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _verify_archive_key_escrow(
+    zf: zipfile.ZipFile,
+    names: set[str],
+    manifest: dict[str, Any],
+    *,
+    trust_root: Path | None,
+) -> dict[str, Any]:
+    headers = []
+    errors = []
+    for name in sorted(names):
+        if not name.startswith("archive/objects/") or name.endswith("/"):
+            continue
+        try:
+            header = _read_archive_object_header_from_zip(zf, name)
+        except Exception as exc:
+            errors.append({"entry": name, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if header is not None:
+            headers.append({"entry": name, "header": header})
+    if errors:
+        return {"status": "failed", "encrypted_objects": len(headers), "errors": errors[:20]}
+    if not headers:
+        return {"status": "not-needed", "encrypted_objects": 0}
+
+    escrow = manifest.get(ARCHIVE_OBJECT_KEY_ESCROW_FIELD)
+    if not isinstance(escrow, dict):
+        return {"status": "missing", "encrypted_objects": len(headers)}
+    if trust_root is None:
+        return {"status": "missing-key", "encrypted_objects": len(headers)}
+    signing_key = _load_backup_signing_key(trust_root)
+    if signing_key is None:
+        return {"status": "missing-key", "encrypted_objects": len(headers)}
+    try:
+        archive_key = unwrap_archive_key_escrow(escrow, signing_key)
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "encrypted_objects": len(headers),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    escrow_key_id = str(escrow.get("archive_key_id"))
+    mismatches = [
+        {"entry": item["entry"], "key_id": item["header"].get("key_id")}
+        for item in headers
+        if item["header"].get("key_id") != escrow_key_id
+    ]
+    if mismatches:
+        return {
+            "status": "failed",
+            "encrypted_objects": len(headers),
+            "archive_key_id": escrow_key_id,
+            "mismatches": mismatches[:20],
+        }
+    decrypt_errors = []
+    for item in headers:
+        try:
+            decrypt_archive_object_bytes(zf.read(item["entry"]), archive_key)
+        except Exception as exc:
+            decrypt_errors.append({"entry": item["entry"], "error": f"{type(exc).__name__}: {exc}"})
+    if decrypt_errors:
+        return {
+            "status": "failed",
+            "encrypted_objects": len(headers),
+            "archive_key_id": escrow_key_id,
+            "decrypt_errors": decrypt_errors[:20],
+        }
+    return {"status": "ok", "encrypted_objects": len(headers), "archive_key_id": escrow_key_id}
+
+
+def _read_archive_object_header_from_zip(zf: zipfile.ZipFile, name: str) -> dict[str, Any] | None:
+    with zf.open(name, "r") as fh:
+        if fh.read(len(ARCHIVE_OBJECT_MAGIC)) != ARCHIVE_OBJECT_MAGIC:
+            return None
+        size_raw = fh.read(4)
+        if len(size_raw) != 4:
+            raise ValueError("encrypted archive object header is truncated")
+        size = int.from_bytes(size_raw, "big")
+        if size <= 0 or size > 4096:
+            raise ValueError("encrypted archive object header size is invalid")
+        header_bytes = fh.read(size)
+        if len(header_bytes) != size:
+            raise ValueError("encrypted archive object header body is truncated")
+        header = json.loads(header_bytes.decode("utf-8"))
+        if not isinstance(header.get("key_id"), str) or not isinstance(header.get("plaintext_sha256"), str):
+            raise ValueError("encrypted archive object header is missing required fields")
+        return header
 
 
 def _verify_entry_hashes(zf: zipfile.ZipFile, names: set[str], manifest: dict[str, Any]) -> dict[str, Any]:
@@ -482,7 +618,16 @@ def _safe_restore_destination(root: Path, archive_name: str) -> Path:
 
 
 def _clear_memory_root(root: Path) -> None:
-    allowed = {"memory.db", "ledger", "archive", "hot", "spool", "backups", "manifest.json"}
+    allowed = {
+        "memory.db",
+        "ledger",
+        "archive",
+        "hot",
+        "spool",
+        "backups",
+        "manifest.json",
+        ARCHIVE_OBJECT_KEY_NAME,
+    }
     for child in root.iterdir():
         if child.name == BACKUP_SIGNING_KEY_NAME:
             continue
