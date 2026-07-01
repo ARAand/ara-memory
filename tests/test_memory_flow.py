@@ -774,6 +774,44 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("No direct memory evidence matched this query", fallback.pack)
             self.assertNotIn("Visible evidence diagnostics should be counted", fallback.pack)
 
+    def test_recall_result_never_exceeds_tiny_hard_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: hard recall budgets must be ceilings, not suggestions.",
+                source="test",
+                scope="alpha",
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: hard recall budget ceiling",
+                body=(
+                    "Hard recall budgets must be ceilings, not suggestions. "
+                    "Verbose evidence may be useful but must disappear before the pack exceeds budget. "
+                )
+                * 12,
+                scope="alpha",
+                confidence=0.86,
+                salience=0.88,
+                source_event_ids=[event.id],
+                tags=["hard", "budget", "recall"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+
+            result = memory.recall_result(
+                "hard recall budget ceiling",
+                scope="alpha",
+                budget=10,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertLessEqual(result.diagnostics["estimated_tokens_after"], 10)
+            self.assertEqual(result.diagnostics["visible_capsule_ids"], [])
+            self.assertNotIn("hard recall budget ceiling", result.pack.lower())
+
     def test_recall_plan_scores_visible_evidence_above_salience_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

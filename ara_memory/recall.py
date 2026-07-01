@@ -432,6 +432,7 @@ def _format_capsule(cap: dict) -> str:
 def _enforce_budget(parts: list[str], budget: int) -> str:
     if budget <= 0:
         return ""
+    original_parts = list(parts)
     pack = "\n\n".join(parts).strip()
     if estimate_tokens(pack) <= budget:
         return pack
@@ -464,7 +465,42 @@ def _enforce_budget(parts: list[str], budget: int) -> str:
     if estimate_tokens(pack) > budget:
         trimmed = _drop_low_value_recall_parts(trimmed, budget=budget)
         pack = "\n\n".join(trimmed).strip()
+    if estimate_tokens(pack) > budget:
+        pack = _hard_cap_recall_pack(original_parts, budget)
     return pack
+
+
+def _hard_cap_recall_pack(parts: list[str], budget: int) -> str:
+    title = _first_recall_part(parts, "# Ara Memory Pack") or "# Ara Memory Pack"
+    query = _first_recall_part(parts, "Query:")
+    scope = _first_recall_part(parts, "Scope:")
+    candidates = []
+    if query and scope:
+        candidates.append(f"{title}\n\n{query}\n\n{scope}\n\n- Budget exhausted.")
+    if query:
+        candidates.append(f"{title}\n\n{query}")
+    candidates.extend(
+        [
+            f"{title}\n\n- Budget exhausted.",
+            title,
+            "Ara Memory Pack",
+            "Memory",
+            "M",
+        ]
+    )
+    for candidate in candidates:
+        text = candidate.strip()
+        if estimate_tokens(text) <= budget:
+            return text
+    return ""
+
+
+def _first_recall_part(parts: list[str], prefix: str) -> str | None:
+    for part in parts:
+        stripped = part.strip()
+        if stripped.startswith(prefix):
+            return stripped
+    return None
 
 
 def _maybe_apply_soft_budget(
