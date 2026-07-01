@@ -8,6 +8,9 @@ from ara_memory.risk import MemoryRiskAssessor, RiskVerdict
 from ara_memory.storage import MemoryStore, row_to_event
 
 
+TRUSTED_DECISION_SOURCES = {"manual", "codex-turn", "codex-user"}
+
+
 @dataclass(slots=True)
 class PromotionGateResult:
     allowed: bool
@@ -70,10 +73,12 @@ def can_promote_capsule(
         trusted_ids = _trusted_source_event_ids(capsule, list(events_by_id.values()))
         if missing_ids:
             reasons.append(f"missing source event rows: {len(missing_ids)}")
-        if len(source_ids) < 2 and source_capsule_count < 2 and not trusted_ids:
+        if not source_ids:
+            reasons.append("automatic promotion requires at least one existing source event")
+        elif len(source_ids) < 2 and source_capsule_count < 2 and not trusted_ids:
             reasons.append(
                 "automatic promotion requires two source events, two consolidated source capsules, "
-                "or one explicit decision source"
+                "or one trusted explicit source"
             )
 
     return PromotionGateResult(
@@ -120,7 +125,7 @@ def _trusted_source_event_ids(capsule: dict[str, Any], events: list[Any]) -> lis
     trusted: list[str] = []
     capsule_kind = str(capsule.get("kind") or "")
     for event in events:
-        if event.kind == EventKind.DECISION:
+        if event.source in TRUSTED_DECISION_SOURCES and event.kind == EventKind.DECISION:
             trusted.append(event.id)
             continue
         if event.source == "manual" and event.kind in {EventKind.DECISION, EventKind.NOTE}:

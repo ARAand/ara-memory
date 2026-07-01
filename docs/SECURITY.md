@@ -29,8 +29,8 @@
 - The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing across capsule title, body, and tags before hot memory is rebuilt.
 - Instruction-like, secret-like, and direct-identifier tags are suppressed from recall tag surfaces.
 - Default recall, manual promotion, quality review, and external advisor payloads reuse that deterministic risk boundary; risky advisor candidates are redacted before any external command receives them.
-- Promotion recommendation and the actual `stable` write are separated by a shared promotion gate. Automatic promotion from sleep, review-worker apply mode, external advisors, or summary consolidation requires real provenance: two existing source events, two consolidated source capsules, or one explicit decision/manual source.
-- Automatic promotion writes are candidate-only compare-and-set updates, so stale sleep or review-worker decisions cannot overwrite a concurrent quarantine, rejection, or supersession.
+- Promotion recommendation and the actual `stable` write are separated by a shared promotion gate. Automatic promotion from sleep, review-worker apply mode, external advisors, or summary consolidation requires real provenance: two existing source events, one trusted explicit source, or a summary backed by consolidated source capsules plus at least one existing source event.
+- Automatic promotion writes are candidate-only compare-and-set updates, so stale sleep or review-worker decisions cannot overwrite a concurrent quarantine, rejection, or supersession. Summary consolidation also rechecks source capsules before and during supersession.
 - Recall requires an explicit scope.
 - Audit flags instruction-like memory, low-confidence stable memory, and missing provenance.
 - Sleep consolidation records every automatic promotion/supersession as an action.

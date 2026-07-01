@@ -5244,13 +5244,13 @@ class MemoryFlowTests(unittest.TestCase):
             memory.retain(
                 kind="decision",
                 text="Decision: project alpha must use append-only ledger with scoped recall.",
-                source="test",
+                source="manual",
                 scope="alpha",
             )
             memory.retain(
                 kind="decision",
                 text="Decision: project alpha must use append-only ledger with scoped recall.",
-                source="test-2",
+                source="manual",
                 scope="alpha",
             )
             memory.consolidate()
@@ -5938,7 +5938,7 @@ class MemoryFlowTests(unittest.TestCase):
             memory.retain(
                 kind="decision",
                 text="Decision: review scope should promote durable append-only memory policy.",
-                source="test",
+                source="manual",
                 scope="review-scope",
             )
             memory.retain(
@@ -5965,7 +5965,7 @@ class MemoryFlowTests(unittest.TestCase):
             durable_event = memory.retain(
                 kind="decision",
                 text="Decision: quality scoring should promote durable high-signal memories.",
-                source="test",
+                source="manual",
                 scope="quality-scope",
             )
             risky_event = memory.retain(
@@ -6076,6 +6076,38 @@ class MemoryFlowTests(unittest.TestCase):
             report = memory.sleep(scope="promotion-gate-pass")
             self.assertEqual(report.promoted, 1)
             self.assertEqual(memory.store.get_capsule(strong.id)["status"], MemoryStatus.STABLE.value)
+
+    def test_automatic_promotion_rejects_single_untrusted_decision_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: file-ingested text should not become stable from one source.",
+                source="file-ingest",
+                scope="promotion-untrusted-decision",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="untrusted single decision candidate",
+                body="File-ingested text should not become stable from one source.",
+                scope="promotion-untrusted-decision",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[event.id],
+                tags=["promotion", "gate"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+
+            review = memory.review(scope="promotion-untrusted-decision")
+            rec = next(item for item in review if item["capsule_id"] == candidate.id)
+            self.assertEqual(rec["action"], "keep")
+            self.assertIn("promotion gate blocked", rec["reason"])
+
+            report = memory.sleep(scope="promotion-untrusted-decision")
+            self.assertEqual(report.promoted, 0)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
 
     def test_automatic_promotion_rejects_missing_source_event_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6210,7 +6242,7 @@ class MemoryFlowTests(unittest.TestCase):
             promote_event = memory.retain(
                 kind="decision",
                 text="Decision: review worker can promote excellent candidate memory.",
-                source="test",
+                source="manual",
                 scope="worker-scope",
             )
             risky_event = memory.retain(
@@ -6524,7 +6556,7 @@ class MemoryFlowTests(unittest.TestCase):
                 memory.retain(
                     kind="decision",
                     text="Decision: sample advisor should promote durable memory.",
-                    source="test",
+                    source="manual",
                     scope="sample-advisor",
                 )
                 memory.retain(
@@ -7092,6 +7124,38 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(set(stable[0]["source_event_ids"]), set(event_ids))
             superseded = memory.list_capsules(scope="alpha", status="superseded", kind="failure", limit=10)
             self.assertEqual(len(superseded), 3)
+
+    def test_candidate_summary_requires_real_source_events_even_with_source_capsules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            for idx in range(3):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.FAILURE,
+                        title=f"Failure memory: Command: synthetic shard {idx}",
+                        body=f"Command: synthetic shard {idx} -> passed",
+                        scope="summary-provenance-gate",
+                        confidence=0.72,
+                        salience=0.8,
+                        source_event_ids=[],
+                        tags=["command"],
+                        status=MemoryStatus.CANDIDATE,
+                    )
+                )
+
+            applied = memory.candidate_summary(
+                scope="summary-provenance-gate",
+                pattern="failure_success_command",
+                min_group_size=3,
+                dry_run=False,
+            )
+            self.assertEqual(applied.summaries_created, 0, applied.as_dict())
+            self.assertEqual(applied.superseded, 0)
+            self.assertEqual(len(applied.groups), 1)
+            self.assertIn("promotion gate blocked", applied.groups[0].blocked_reason)
+            stable = memory.list_capsules(scope="summary-provenance-gate", status="stable", kind="summary", limit=10)
+            self.assertEqual(stable, [])
 
     def test_candidate_summary_consolidates_progress_updates_misfiled_as_procedures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

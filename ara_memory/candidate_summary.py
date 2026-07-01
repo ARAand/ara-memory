@@ -345,12 +345,27 @@ class CandidateSummaryConsolidator:
         if not gate.allowed:
             group.blocked_reason = promotion_block_reason(gate)
             return None
+        for cap in candidates:
+            current = self.store.get_capsule(cap["id"])
+            if current is None or current["status"] != MemoryStatus.CANDIDATE.value:
+                group.blocked_reason = "candidate summary blocked: source capsule changed before consolidation"
+                return None
         self.store.upsert_capsule(summary)
         for cap in candidates:
-            self.store.update_capsule_status(
+            changed = self.store.update_capsule_status_if_current(
                 cap["id"],
+                MemoryStatus.CANDIDATE,
                 MemoryStatus.SUPERSEDED,
                 actor="candidate-summary",
                 reason=f"consolidated into {summary.id}",
             )
+            if not changed:
+                self.store.update_capsule_status(
+                    summary.id,
+                    MemoryStatus.SUPERSEDED,
+                    actor="candidate-summary",
+                    reason="source capsule changed during consolidation",
+                )
+                group.blocked_reason = "candidate summary blocked: source capsule changed during consolidation"
+                return None
         return summary

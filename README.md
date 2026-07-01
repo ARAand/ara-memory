@@ -267,7 +267,7 @@ python -m ara_memory review-compact --scope ara-memory
 python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
-python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture"
+python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
 python -m ara_memory lifecycle --scope ara-memory
 python -m ara_memory cold-export --scope ara-memory --order oldest --output .ara-memory/archive/cold/ara-memory-cold.zip
@@ -517,6 +517,11 @@ Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger
 hot memory files, archived artifacts, durable spool envelopes, and a manifest
 with schema/stats. Verification checks SQLite integrity and foreign-key
 consistency so old or externally modified stores with orphan rows do not pass.
+Default backups include archived artifacts and the full spool directory,
+including pending/done/failed envelopes, snapshots, and `.seal-key`, so sealed
+pending work remains drainable after restore. `backup --no-archive` omits
+archived artifacts/cold evidence; do not use it as pruning-readiness or full
+evidence-restore proof.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
 Restore refuses to overwrite a non-empty target unless `--force` is passed.
@@ -594,8 +599,8 @@ Changing a capsule to `stable` can change future behavior. Manual promotion,
 sleep consolidation, review-worker apply mode, and external advisor results
 therefore share the same final gate before a stable write. The gate reruns the
 deterministic risk boundary and automatic promotion also requires either two
-real source events, two consolidated source capsules, or one explicit
-decision/manual source. Missing source rows,
+real source events, one trusted explicit source, or a summary backed by
+consolidated source capsules plus at least one real source event. Missing source rows,
 quarantined/rejected/superseded capsules, instruction-like text, secrets,
 self-serving claims, and keyword stuffing block behavior-changing promotion.
 Evidence summaries may still become stable when keyword repetition is the only
@@ -606,6 +611,8 @@ Automatic promotion writes are conditional: a capsule must still be
 `candidate` at write time. If another worker or operator quarantines, rejects,
 or supersedes it after review but before write, the stale promotion cannot
 resurrect it as stable.
+Summary consolidation also checks source capsules before and during
+supersession so a concurrent status change cannot be silently overwritten.
 
 Inspect candidate memories before promoting:
 

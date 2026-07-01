@@ -214,11 +214,11 @@ promotion recommendation
 
 Manual promotion uses the shared deterministic risk gate but remains an
 explicit operator decision. Automatic promotion from sleep, review-worker apply,
-or an external advisor additionally requires either two existing source events
-two consolidated source capsules for summary creation, or one explicit
-decision/manual source. Source IDs that do not resolve to event rows block
-automatic promotion, so provenance cannot be forged by editing a capsule
-payload.
+or an external advisor additionally requires either two existing source events,
+one trusted explicit source, or a summary backed by consolidated source
+capsules plus at least one existing source event. Source IDs that do not
+resolve to event rows block automatic promotion, so provenance cannot be forged
+by editing a capsule payload.
 
 ## Memory Organs
 
