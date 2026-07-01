@@ -482,11 +482,15 @@ run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 from reviewed pruning readiness evidence, while `cold-stewardship` additionally
 checks freshness and drift against the current live cold set.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
-events into a portable zip so pruning can later be audited or reversed. Verification
-fails when exported capsules reference source events that are missing from
-`events.jsonl`; `--no-events` is therefore only for inspection exports, not pruning
-readiness evidence. Manual
-limited exports default to newest-first for inspection; use `--order oldest`
+events into a portable zip so pruning can later be audited. Restoring a pruned
+store still requires a full verified backup, not a cold export alone. Verification
+first bounds ZIP entry count, entry size, total expansion, and compression
+ratio, then checks per-entry SHA-256 hashes, the local-key manifest HMAC, and
+whether exported capsules reference source events that are missing from
+`events.jsonl`. JSONL payloads are scanned line-by-line with per-file and
+per-line limits before they are trusted. `--no-events` is therefore only for
+inspection exports; prune gates require signed v2 cold exports with source
+events included. Manual limited exports default to newest-first for inspection; use `--order oldest`
 when preparing a manual export for `prune-plan`, because the planner chooses
 the oldest eligible cold capsules first. `retention-cycle --limit` does this
 oldest-first export internally so its cold export matches the planned capsule
@@ -531,12 +535,23 @@ python -m ara_memory restore-drill .ara-memory/backups/milestone.zip --scope ara
 python -m ara_memory restore-backup .ara-memory/backups/milestone.zip --target-root .ara-memory-restored
 ```
 
+When verifying or restoring an archive copied from another memory root, pass the
+source root explicitly:
+
+```powershell
+python -m ara_memory verify-backup copied/milestone.zip --trust-root path/to/source/.ara-memory
+python -m ara_memory verify-cold-export copied/cold.zip --trust-root path/to/source/.ara-memory
+```
+
 Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger,
 hot memory files, archived artifacts, durable spool envelopes, and a manifest
 with schema/stats plus per-entry SHA-256 hashes. Verification checks every
 hashed ZIP entry, the manifest HMAC, SQLite integrity, and foreign-key
 consistency so entry tampering, manifest rewrites without the local signing key,
-and orphan rows do not pass.
+and orphan rows do not pass. Backup and cold-export verification also reject
+unsafe archive names, duplicate entries, oversized members, excessive total
+uncompressed size, suspicious compression ratios, and filesystem-normalized path
+collisions before hashing or parsing large members.
 Default backups include archived artifacts and the full spool directory,
 including pending/done/failed envelopes, snapshots, and `.seal-key`, so sealed
 pending work remains drainable after restore. `backup --no-archive` omits
@@ -547,7 +562,10 @@ stored inside backup ZIPs. Preserve it as local trust material if old backups
 must remain cryptographically verifiable on another machine.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
-Restore refuses to overwrite a non-empty target unless `--force` is passed.
+Restore copies the source ZIP to a temporary snapshot and verifies/extracts that
+same byte stream to reduce source-file swap risk. It refuses to overwrite a
+non-empty target unless `--force` is passed; even then, force only clears known
+memory-root paths and preserves `.backup-signing-key`.
 Because retention-cycle creates verified backups as evidence, backup bytes can
 dominate the local store even when live memory is small. Use
 `backup-stewardship` to review redundant verified backups before touching live

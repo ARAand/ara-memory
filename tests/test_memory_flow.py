@@ -2268,6 +2268,7 @@ class MemoryFlowTests(unittest.TestCase):
                 scope="alpha",
             )
             memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
             backup_path = root / "backup.zip"
             tampered_path = root / "tampered-manifest.zip"
             memory.backup(output=backup_path)
@@ -2290,6 +2291,120 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(verification["passed"], verification)
             self.assertEqual(verification["entry_hashes"]["status"], "ok")
             self.assertEqual(verification["manifest_signature"]["status"], "failed")
+
+    def test_verify_backup_rejects_suspicious_compression_ratio_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: backup verification must bound archive expansion.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+            backup_path = root / "backup.zip"
+            suspicious_path = root / "suspicious.zip"
+            memory.backup(output=backup_path)
+
+            _rewrite_zip_entry(
+                backup_path,
+                suspicious_path,
+                replacements={},
+                extra_entries={"archive/bomb.txt": b"A" * (1024 * 1024)},
+            )
+
+            verification = memory.verify_backup(suspicious_path)
+            self.assertFalse(verification["passed"], verification)
+            self.assertFalse(verification["archive_safety"]["passed"], verification)
+            self.assertIn("compression_ratio_exceeded", verification["archive_safety"]["issues"])
+            self.assertEqual(verification["entry_hashes"]["status"], "skipped")
+
+    def test_verify_backup_rejects_unsafe_and_normalized_duplicate_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: backup verification must reject archive names that collide after normalization.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+            backup_path = root / "backup.zip"
+            unsafe_path = root / "unsafe.zip"
+            duplicate_path = root / "duplicate.zip"
+            memory.backup(output=backup_path)
+
+            _rewrite_zip_entry(
+                backup_path,
+                unsafe_path,
+                replacements={},
+                extra_entries={"../outside.txt": b"outside"},
+            )
+            unsafe = memory.verify_backup(unsafe_path)
+            self.assertFalse(unsafe["passed"], unsafe)
+            self.assertIn("unsafe_names", unsafe["archive_safety"]["issues"])
+
+            _rewrite_zip_entry(
+                backup_path,
+                duplicate_path,
+                replacements={},
+                extra_entries={"hot\\alpha.md": b"collision"},
+            )
+            duplicate = memory.verify_backup(duplicate_path)
+            self.assertFalse(duplicate["passed"], duplicate)
+            self.assertIn("duplicate_names", duplicate["archive_safety"]["issues"])
+            self.assertIn("hot/alpha.md", duplicate["archive_safety"]["duplicate_names"])
+
+            from ara_memory.archive_safety import inspect_zip
+
+            first = zipfile.ZipInfo("hot/alpha.md")
+            second = zipfile.ZipInfo("hot/alpha.md")
+            second.filename = "hot\\alpha.md"
+            third = zipfile.ZipInfo("hot/A.md")
+            fourth = zipfile.ZipInfo("hot/a.md")
+
+            class FakeZip:
+                def infolist(self) -> list[zipfile.ZipInfo]:
+                    return [first, second, third, fourth]
+
+            normalized = inspect_zip(FakeZip())  # type: ignore[arg-type]
+            self.assertFalse(normalized["passed"], normalized)
+            self.assertIn("duplicate_names", normalized["issues"])
+            self.assertIn("hot\\alpha.md", normalized["normalized_duplicate_names"])
+            self.assertIn("hot/a.md", normalized["normalized_duplicate_names"])
+
+    def test_verify_backup_accepts_explicit_cross_root_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = AraMemory(root / "source")
+            source.retain(
+                kind="decision",
+                text="Decision: archive verification should make the trust root explicit.",
+                source="test",
+                scope="alpha",
+            )
+            source.consolidate()
+            backup_path = root / "source-backup.zip"
+            source.backup(output=backup_path)
+            verifier = AraMemory(root / "verifier")
+            verifier.retain(
+                kind="decision",
+                text="Decision: verifier has a different local signing key.",
+                source="test",
+                scope="beta",
+            )
+            verifier.backup(output=root / "verifier-backup.zip")
+
+            wrong_root = verifier.verify_backup(backup_path)
+            right_root = verifier.verify_backup(backup_path, trust_root=source.store.root)
+
+            self.assertFalse(wrong_root["passed"], wrong_root)
+            self.assertEqual(wrong_root["manifest_signature"]["status"], "failed")
+            self.assertTrue(right_root["passed"], right_root)
 
     def test_backup_refuses_symlinked_tree_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2846,10 +2961,13 @@ class MemoryFlowTests(unittest.TestCase):
             result = memory.cold_export(output=output, scope="alpha")
 
             self.assertTrue(output.exists())
-            self.assertEqual(result.manifest["format"], "ara-memory-cold-export-v1")
+            self.assertEqual(result.manifest["format"], "ara-memory-cold-export-v2")
+            self.assertIn("entry_hashes_sha256", result.manifest)
+            self.assertIn("manifest_hmac_sha256", result.manifest)
             self.assertEqual(result.manifest["capsule_count"], 2)
             verified = memory.verify_cold_export(output)
             self.assertTrue(verified["passed"], verified)
+            self.assertEqual(set(verified["capsule_ids"]), {superseded.id, quarantined.id})
 
             with zipfile.ZipFile(output, "r") as zf:
                 capsules = [json.loads(line) for line in zf.read("capsules.jsonl").decode("utf-8").splitlines()]
@@ -2891,6 +3009,206 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(verified["event_count_ok"])
             self.assertFalse(verified["provenance_ok"])
             self.assertEqual(verified["missing_source_event_ids"], [event.id])
+
+    def test_cold_export_rejects_manifest_rewrite_without_signing_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: signed cold exports must reject rewritten capsule bodies.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old signed cold project",
+                body="original cold evidence",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.4,
+                source_event_ids=[event.id],
+                tags=["old"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(cold)
+            export_path = root / "cold.zip"
+            tampered_path = root / "cold-tampered.zip"
+            memory.cold_export(output=export_path, scope="alpha")
+            replacement = json.dumps(
+                {
+                    "id": cold.id,
+                    "kind": cold.kind.value,
+                    "title": cold.title,
+                    "body": "tampered cold evidence",
+                    "scope": cold.scope,
+                    "confidence": cold.confidence,
+                    "salience": cold.salience,
+                    "created_at": cold.created_at,
+                    "updated_at": cold.updated_at,
+                    "source_event_ids": [event.id],
+                    "tags": cold.tags,
+                    "status": MemoryStatus.SUPERSEDED.value,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8") + b"\n"
+
+            def rewrite_manifest(manifest: dict[str, object]) -> dict[str, object]:
+                hashes = dict(manifest["entry_hashes_sha256"])  # type: ignore[index]
+                hashes["capsules.jsonl"] = hashlib.sha256(replacement).hexdigest()
+                manifest["entry_hashes_sha256"] = hashes
+                return manifest
+
+            _rewrite_zip_entry(
+                export_path,
+                tampered_path,
+                replacements={"capsules.jsonl": replacement},
+                manifest_rewrite=rewrite_manifest,
+            )
+
+            verified = memory.verify_cold_export(tampered_path)
+            self.assertFalse(verified["passed"], verified)
+            self.assertEqual(verified["entry_hashes"]["status"], "ok")
+            self.assertEqual(verified["manifest_signature"]["status"], "failed")
+
+    def test_cold_export_rejects_tampered_payload_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: signed cold exports must still hash every payload entry.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old hashed cold project",
+                body="original cold payload",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.4,
+                source_event_ids=[event.id],
+                tags=["old"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(cold)
+            export_path = root / "cold.zip"
+            tampered_path = root / "cold-entry-tampered.zip"
+            memory.cold_export(output=export_path, scope="alpha")
+            replacement = json.dumps(
+                {
+                    "id": cold.id,
+                    "kind": cold.kind.value,
+                    "title": cold.title,
+                    "body": "tampered without manifest rewrite",
+                    "scope": cold.scope,
+                    "confidence": cold.confidence,
+                    "salience": cold.salience,
+                    "created_at": cold.created_at,
+                    "updated_at": cold.updated_at,
+                    "source_event_ids": [event.id],
+                    "tags": cold.tags,
+                    "status": MemoryStatus.SUPERSEDED.value,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8") + b"\n"
+
+            _rewrite_zip_entry(
+                export_path,
+                tampered_path,
+                replacements={"capsules.jsonl": replacement},
+            )
+
+            verified = memory.verify_cold_export(tampered_path)
+            self.assertFalse(verified["passed"], verified)
+            self.assertEqual(verified["entry_hashes"]["status"], "failed")
+            self.assertTrue(
+                any(item["entry"] == "capsules.jsonl" for item in verified["entry_hashes"]["mismatches"]),
+                verified,
+            )
+            self.assertEqual(verified["manifest_signature"]["status"], "ok")
+
+    def test_cold_export_rejects_wrong_trust_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = AraMemory(root / "source")
+            event = source.retain(
+                kind="decision",
+                text="Decision: cold export signatures belong to one memory root.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old trust-root cold project",
+                body="trust root evidence",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.4,
+                source_event_ids=[event.id],
+                tags=["old"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            source.store.upsert_capsule(cold)
+            export_path = root / "source-cold.zip"
+            source.cold_export(output=export_path, scope="alpha")
+            verifier = AraMemory(root / "verifier")
+            verifier.retain(
+                kind="decision",
+                text="Decision: verifier has a different cold-export signing key.",
+                source="test",
+                scope="beta",
+            )
+            verifier.backup(output=root / "verifier-backup.zip")
+
+            wrong_root = verifier.verify_cold_export(export_path)
+            right_root = verifier.verify_cold_export(export_path, trust_root=source.store.root)
+
+            self.assertFalse(wrong_root["passed"], wrong_root)
+            self.assertEqual(wrong_root["manifest_signature"]["status"], "failed")
+            self.assertTrue(right_root["passed"], right_root)
+
+    def test_cold_export_rejects_suspicious_compression_ratio_before_jsonl_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: cold export verification must bound archive expansion.",
+                source="test",
+                scope="alpha",
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old bounded cold project",
+                body="bounded cold evidence",
+                scope="alpha",
+                confidence=0.5,
+                salience=0.4,
+                source_event_ids=[event.id],
+                tags=["old"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(cold)
+            export_path = root / "cold.zip"
+            suspicious_path = root / "cold-suspicious.zip"
+            memory.cold_export(output=export_path, scope="alpha")
+
+            _rewrite_zip_entry(
+                export_path,
+                suspicious_path,
+                replacements={"capsules.jsonl": b"A" * (1024 * 1024)},
+            )
+
+            verified = memory.verify_cold_export(suspicious_path)
+            self.assertFalse(verified["passed"], verified)
+            self.assertFalse(verified["archive_safety"]["passed"], verified)
+            self.assertIn("compression_ratio_exceeded", verified["archive_safety"]["issues"])
+            self.assertIsNone(verified["jsonl_error"])
+            self.assertEqual(verified["entry_hashes"]["status"], "skipped")
 
     def test_cold_stewardship_groups_cold_memory_and_event_protection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3342,6 +3660,18 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(plan.protected_event_ids, [shared_event.id])
             self.assertEqual(plan.prunable_event_ids, [cold_only_event.id])
             self.assertEqual(plan.recall_checks[0]["cold_overlap"], [])
+
+            no_events_export = root / "cold-no-events.zip"
+            memory.cold_export(output=no_events_export, scope="alpha", include_events=False)
+            no_events_plan = memory.prune_plan(
+                scope="alpha",
+                export_path=no_events_export,
+                recall_queries=["shared provenance"],
+                recall_budget=900,
+            )
+            cold_gate = next(gate for gate in no_events_plan.gates if gate["name"] == "cold_export")
+            self.assertFalse(no_events_plan.passed, no_events_plan.as_dict())
+            self.assertFalse(cold_gate["details"]["include_events_ok"], cold_gate)
 
     def test_prune_plan_rejects_limited_export_that_misses_planned_capsules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3956,7 +4286,71 @@ class MemoryFlowTests(unittest.TestCase):
             )
 
             self.assertFalse(result.passed, result.as_dict())
-            self.assertTrue(any("Approved backup no longer verifies" in item for item in result.recommendations))
+            self.assertTrue(any("file changed after approval" in item for item in result.recommendations))
+            self.assertTrue(memory.store.get_capsule(cold.id))
+            self.assertEqual(memory.irreversible_operations(limit=5), [])
+
+    def test_live_prune_blocks_if_approved_cold_export_changes_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: live prune approval must bind the exact cold export artifact bytes.",
+                source="test",
+                scope="alpha",
+            )
+            stable = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="active export identity decision",
+                body="export identity remains queryable",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["live-prune"],
+                status=MemoryStatus.STABLE,
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="old export identity project",
+                body="cold capsule must not be deleted if export evidence changes",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[event.id],
+                tags=["live-prune"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(stable)
+            memory.store.upsert_capsule(cold)
+            backup_path = root / "backup.zip"
+            export_path = root / "cold.zip"
+            memory.backup(output=backup_path)
+            memory.cold_export(output=export_path, scope="alpha")
+            approval = memory.prepare_live_prune(
+                backup_path=backup_path,
+                export_path=export_path,
+                scope="alpha",
+                recall_queries=["export identity"],
+                recall_budget=900,
+                doctor_query="export identity",
+            )
+            memory.retain(
+                kind="note",
+                text="Non-cold event changes export source stats after approval without changing the cold set.",
+                source="test",
+                scope="alpha",
+            )
+            memory.cold_export(output=export_path, scope="alpha")
+
+            result = memory.live_prune(
+                approval_token=approval.token,
+                confirmation="DELETE COLD CAPSULES",
+            )
+
+            self.assertFalse(result.passed, result.as_dict())
+            self.assertTrue(any("file changed after approval" in item for item in result.recommendations))
             self.assertTrue(memory.store.get_capsule(cold.id))
             self.assertEqual(memory.irreversible_operations(limit=5), [])
 
@@ -4086,26 +4480,25 @@ class MemoryFlowTests(unittest.TestCase):
                 recall_budget=900,
                 doctor_query="delete-time status guard",
             )
-            original_exported_ids = prune_module._exported_capsule_ids
+            original_delete = prune_module._delete_capsules_only
 
-            def exported_ids_and_promote(path: Path) -> set[str]:
-                ids = original_exported_ids(path)
+            def promote_then_delete(store: Any, capsule_ids: list[str]) -> dict[str, Any]:
                 memory.store.update_capsule_status(
                     cold.id,
                     MemoryStatus.STABLE,
                     actor="test",
                     reason="simulate delete-time race",
                 )
-                return ids
+                return original_delete(store, capsule_ids)
 
-            prune_module._exported_capsule_ids = exported_ids_and_promote
+            prune_module._delete_capsules_only = promote_then_delete
             try:
                 result = memory.live_prune(
                     approval_token=approval.token,
                     confirmation="DELETE COLD CAPSULES",
                 )
             finally:
-                prune_module._exported_capsule_ids = original_exported_ids
+                prune_module._delete_capsules_only = original_delete
 
             self.assertFalse(result.passed)
             self.assertTrue(any("changed during deletion" in item for item in result.recommendations))
@@ -4224,6 +4617,12 @@ class MemoryFlowTests(unittest.TestCase):
             forced_memory = AraMemory(force_root)
             forced_pack = forced_memory.recall("restore usable memory", scope="alpha", include_hot=True, budget=1200)
             self.assertIn("restore-backup", forced_pack)
+
+            from ara_memory.backup import restore_backup as restore_backup_direct
+
+            self_backup = source.backup(output=source.store.root / "backups" / "self.zip").path
+            direct = restore_backup_direct(self_backup, source.store.root, force=True, trust_root=source.store.root)
+            self.assertTrue(direct["passed"], direct)
 
     def test_backup_restore_preserves_pending_spool(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9171,16 +9570,22 @@ def _rewrite_zip_entry(
     *,
     replacements: dict[str, bytes],
     manifest_rewrite: Any | None = None,
+    extra_entries: dict[str, bytes] | None = None,
 ) -> None:
     with zipfile.ZipFile(source, "r") as zin, zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zout:
         for info in zin.infolist():
-            data = zin.read(info.filename)
+            data = zin.read(info)
             if info.filename in replacements:
                 data = replacements[info.filename]
             if info.filename == "manifest.json" and manifest_rewrite is not None:
                 manifest = json.loads(data.decode("utf-8"))
                 manifest = manifest_rewrite(manifest)
                 data = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+            zout.writestr(info, data)
+        for name, data in (extra_entries or {}).items():
+            info = zipfile.ZipInfo(name)
+            info.filename = name
+            info.compress_type = zipfile.ZIP_DEFLATED
             zout.writestr(info, data)
 
 

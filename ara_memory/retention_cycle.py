@@ -178,7 +178,7 @@ class RetentionCycleRunner:
 
         cold = export_cold_capsules(self.store, output=cold_output, scope=scope, limit=limit, order="oldest")
         cold_payload = cold.as_dict()
-        cold_verification = verify_cold_export(cold.path)
+        cold_verification = verify_cold_export(cold.path, trust_root=self.store.root)
 
         plan = PrunePlanner(self.store).run(
             scope=scope,

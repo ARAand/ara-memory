@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import secrets
 import tempfile
-import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
@@ -235,6 +234,7 @@ class PrunePlanner:
         gates.append(_gate(bool(candidates), "cold_candidates", f"{len(candidates)} cold capsules selected."))
         gates.append(
             _export_gate(
+                self.store,
                 export_path,
                 scope=scope,
                 expected_capsules=len(candidates),
@@ -399,6 +399,7 @@ class LivePruneController:
         ttl_minutes: int = 30,
     ) -> LivePruneApproval:
         self.store.init()
+        artifact_identity_before = _artifact_identity(backup_path, export_path)
         shadow = ShadowPruner(self.store).run(
             backup_path=backup_path,
             export_path=export_path,
@@ -411,6 +412,11 @@ class LivePruneController:
         )
         if not shadow.passed:
             raise ValueError("Cannot prepare live prune because shadow-prune did not pass.")
+        artifact_identity_after = _artifact_identity(backup_path, export_path)
+        if artifact_identity_before != artifact_identity_after:
+            raise ValueError("Cannot prepare live prune because backup or cold export changed during shadow-prune.")
+        shadow_payload = shadow.as_dict()
+        shadow_payload["artifact_identity"] = artifact_identity_after
         token = secrets.token_urlsafe(24)
         approval_id = new_id("prune_approval")
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
@@ -431,7 +437,7 @@ class LivePruneController:
                     str(export_path),
                     json.dumps(recall_queries or [], ensure_ascii=False, sort_keys=True),
                     json.dumps(shadow.plan.as_dict(), ensure_ascii=False, sort_keys=True),
-                    json.dumps(shadow.as_dict(), ensure_ascii=False, sort_keys=True),
+                    json.dumps(shadow_payload, ensure_ascii=False, sort_keys=True),
                     expires_at,
                     "prepared",
                     utc_now(),
@@ -483,6 +489,11 @@ class LivePruneController:
                 approval,
                 "Approved cold capsule set changed or no longer matches live memory; rerun retention-cycle and prepare-live-prune.",
             )
+        if not _approval_artifacts_match(approval, shadow):
+            return _blocked_live_report(
+                approval,
+                "Approved backup or cold export file changed after approval; rerun retention-cycle and prepare-live-prune.",
+            )
         try:
             backup_verification = verify_backup(Path(approval["backup_path"]), trust_root=self.store.root)
         except Exception as exc:
@@ -492,10 +503,18 @@ class LivePruneController:
                 approval,
                 "Approved backup no longer verifies; rerun retention-cycle and prepare-live-prune.",
             )
-        verification = verify_cold_export(Path(approval["cold_export_path"]))
+        try:
+            verification = verify_cold_export(Path(approval["cold_export_path"]), trust_root=self.store.root)
+        except Exception as exc:
+            verification = {"passed": False, "error": f"{type(exc).__name__}: {exc}"}
         if not verification.get("passed"):
             return _blocked_live_report(approval, "Approved cold export no longer verifies.")
-        exported_ids = _exported_capsule_ids(Path(approval["cold_export_path"]))
+        if not verification.get("manifest", {}).get("include_events"):
+            return _blocked_live_report(
+                approval,
+                "Approved cold export was created without source events; rerun retention-cycle and prepare-live-prune.",
+            )
+        exported_ids = set(verification.get("capsule_ids", []))
         missing_export_ids = sorted(set(approved_candidate_ids) - exported_ids)
         if missing_export_ids:
             return _blocked_live_report(
@@ -649,6 +668,7 @@ def _active_event_ids(store: MemoryStore, *, scope: str | None) -> set[str]:
 
 
 def _export_gate(
+    store: MemoryStore,
     export_path: Path | None,
     *,
     scope: str | None,
@@ -658,26 +678,38 @@ def _export_gate(
 ) -> dict[str, Any]:
     if export_path is None:
         return _gate(False, "cold_export", "No verified cold export supplied.")
-    verification = verify_cold_export(export_path)
+    try:
+        verification = verify_cold_export(export_path, trust_root=store.root)
+    except Exception as exc:
+        verification = {"passed": False, "error": f"{type(exc).__name__}: {exc}", "manifest": {}}
     manifest = verification.get("manifest", {})
-    exported_ids = _exported_capsule_ids(export_path) if verification.get("passed") else set()
+    exported_ids = set(verification.get("capsule_ids", [])) if verification.get("passed") else set()
     scope_ok = manifest.get("scope") == scope
     count_ok = manifest.get("capsule_count", 0) >= expected_capsules
     limit_ok = limit is None or manifest.get("limit") in (None, limit)
     coverage_ok = expected_ids is None or expected_ids.issubset(exported_ids)
-    passed = bool(verification.get("passed")) and scope_ok and count_ok and limit_ok and coverage_ok
+    include_events_ok = manifest.get("include_events") is True
+    passed = (
+        bool(verification.get("passed"))
+        and scope_ok
+        and count_ok
+        and limit_ok
+        and coverage_ok
+        and include_events_ok
+    )
     return _gate(
         passed,
         "cold_export",
         "Verified cold export covers the planned capsule set."
         if passed
-        else "Cold export is missing, invalid, scoped differently, smaller than, or missing capsules from the planned set.",
+        else "Cold export is missing, invalid, scoped differently, smaller than, missing source events, or missing capsules from the planned set.",
         details={
             "verification": verification,
             "scope_ok": scope_ok,
             "count_ok": count_ok,
             "limit_ok": limit_ok,
             "coverage_ok": coverage_ok,
+            "include_events_ok": include_events_ok,
             "missing_capsule_ids": sorted((expected_ids or set()) - exported_ids)[:20],
         },
     )
@@ -710,18 +742,34 @@ def _recall_checks(
     return checks
 
 
-def _exported_capsule_ids(export_path: Path) -> set[str]:
-    with zipfile.ZipFile(export_path, "r") as zf:
-        if "capsules.jsonl" not in zf.namelist():
-            return set()
-        raw = zf.read("capsules.jsonl").decode("utf-8")
-    ids = set()
-    for line in raw.splitlines():
-        if line.strip():
-            payload = json.loads(line)
-            if "id" in payload:
-                ids.add(payload["id"])
-    return ids
+def _artifact_identity(backup_path: Path, export_path: Path) -> dict[str, str]:
+    backup_resolved = backup_path.resolve()
+    export_resolved = export_path.resolve()
+    return {
+        "backup_path": str(backup_resolved),
+        "backup_sha256": _path_sha256(backup_resolved),
+        "cold_export_path": str(export_resolved),
+        "cold_export_sha256": _path_sha256(export_resolved),
+    }
+
+
+def _approval_artifacts_match(approval: dict[str, Any], shadow: dict[str, Any]) -> bool:
+    expected = shadow.get("artifact_identity")
+    if not isinstance(expected, dict):
+        return False
+    try:
+        current = _artifact_identity(Path(approval["backup_path"]), Path(approval["cold_export_path"]))
+    except OSError:
+        return False
+    return current == expected
+
+
+def _path_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _recommend(totals: dict[str, int], gates: list[dict[str, Any]], *, recall_queries: list[str]) -> list[str]:

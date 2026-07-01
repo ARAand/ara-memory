@@ -47,8 +47,10 @@
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
-- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` checks entry hashes, manifest signature, SQLite integrity, and foreign keys.
-- `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.
+- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` first bounds ZIP entry count, entry size, total expansion, compression ratio, and normalized path collisions, then checks entry hashes, manifest signature, SQLite integrity, and foreign keys.
+- Signed v2 cold exports include per-entry SHA-256 hashes and a manifest HMAC using the same local trust key; `verify-cold-export` bounds archive expansion, streams JSONL with per-file/per-line limits, checks hashes/signature, and rejects exports whose capsules reference source events missing from `events.jsonl`.
+- `restore-backup` copies the source ZIP to a temporary snapshot and verifies/extracts that same byte stream; `--force` only clears recognized memory-root paths and preserves local signing keys.
+- `live-prune` binds approvals to exact capsule IDs plus backup/export SHA-256 identities, rechecks export coverage from the verified cold-export scan, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
 - `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation.
 - `lifecycle` is analysis-only: it separates core, working, guarded, evidence, archive, and reject memory without changing capsule status or deleting provenance.

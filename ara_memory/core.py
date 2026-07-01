@@ -377,14 +377,21 @@ class AraMemory:
     def backup(self, *, output: Path | None = None, include_archive: bool = True) -> BackupResult:
         return create_backup(self.store, output=output, include_archive=include_archive)
 
-    def verify_backup(self, path: Path) -> dict[str, Any]:
-        return verify_backup(path, trust_root=self.store.root)
+    def verify_backup(self, path: Path, *, trust_root: Path | None = None) -> dict[str, Any]:
+        return verify_backup(path, trust_root=trust_root or self.store.root)
 
     def backup_stewardship(self, **kwargs: Any) -> BackupStewardshipReport:
         return run_backup_stewardship(self.store, **kwargs)
 
-    def restore_backup(self, path: Path, target_root: Path, *, force: bool = False) -> dict[str, Any]:
-        return restore_backup(path, target_root, force=force, trust_root=self.store.root)
+    def restore_backup(
+        self,
+        path: Path,
+        target_root: Path,
+        *,
+        force: bool = False,
+        trust_root: Path | None = None,
+    ) -> dict[str, Any]:
+        return restore_backup(path, target_root, force=force, trust_root=trust_root or self.store.root)
 
     def restore_drill(
         self,
@@ -393,13 +400,14 @@ class AraMemory:
         scope: str = "global",
         recall_query: str | None = None,
         recall_budget: int = 1200,
+        trust_root: Path | None = None,
     ) -> dict[str, Any]:
         return drill_restore_backup(
             path,
             scope=scope,
             recall_query=recall_query,
             recall_budget=recall_budget,
-            trust_root=self.store.root,
+            trust_root=trust_root or self.store.root,
         )
 
     def maintenance(self, *, vacuum: bool = True) -> MaintenanceReport:
@@ -462,8 +470,8 @@ class AraMemory:
             order=order,
         )
 
-    def verify_cold_export(self, path: Path) -> dict[str, Any]:
-        return verify_cold_export(path)
+    def verify_cold_export(self, path: Path, *, trust_root: Path | None = None) -> dict[str, Any]:
+        return verify_cold_export(path, trust_root=trust_root or self.store.root)
 
     def prune_plan(
         self,

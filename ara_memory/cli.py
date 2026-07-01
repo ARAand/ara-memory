@@ -532,15 +532,33 @@ def main(argv: list[str] | None = None) -> int:
     backup_stewardship.add_argument("--json", action="store_true")
     verify_backup = sub.add_parser("verify-backup")
     verify_backup.add_argument("path", type=Path)
+    verify_backup.add_argument(
+        "--trust-root",
+        type=Path,
+        default=None,
+        help="Memory root whose .backup-signing-key should verify this archive. Defaults to --root.",
+    )
     restore_backup = sub.add_parser("restore-backup")
     restore_backup.add_argument("path", type=Path)
     restore_backup.add_argument("--target-root", type=Path, required=True)
     restore_backup.add_argument("--force", action="store_true")
+    restore_backup.add_argument(
+        "--trust-root",
+        type=Path,
+        default=None,
+        help="Memory root whose .backup-signing-key should verify this archive. Defaults to --root.",
+    )
     restore_drill = sub.add_parser("restore-drill")
     restore_drill.add_argument("path", type=Path)
     restore_drill.add_argument("--scope", default="global")
     restore_drill.add_argument("--query", default=None)
     restore_drill.add_argument("--recall-budget", type=int, default=1200)
+    restore_drill.add_argument(
+        "--trust-root",
+        type=Path,
+        default=None,
+        help="Memory root whose .backup-signing-key should verify this archive. Defaults to --root.",
+    )
     cold_export = sub.add_parser("cold-export")
     cold_export.add_argument("--output", type=Path, default=None)
     cold_export.add_argument("--scope", default=None)
@@ -556,6 +574,12 @@ def main(argv: list[str] | None = None) -> int:
     cold_export.add_argument("--no-events", action="store_true")
     verify_cold_export = sub.add_parser("verify-cold-export")
     verify_cold_export.add_argument("path", type=Path)
+    verify_cold_export.add_argument(
+        "--trust-root",
+        type=Path,
+        default=None,
+        help="Memory root whose .backup-signing-key should verify this export. Defaults to --root.",
+    )
     prune_plan = sub.add_parser("prune-plan")
     prune_plan.add_argument("--scope", default=None)
     prune_plan.add_argument("--limit", type=int, default=None)
@@ -1344,12 +1368,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.passed else 1
 
     if args.cmd == "verify-backup":
-        result = memory.verify_backup(args.path)
+        result = memory.verify_backup(args.path, trust_root=args.trust_root)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["passed"] else 1
 
     if args.cmd == "restore-backup":
-        result = memory.restore_backup(args.path, args.target_root, force=args.force)
+        result = memory.restore_backup(args.path, args.target_root, force=args.force, trust_root=args.trust_root)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["passed"] else 1
 
@@ -1359,6 +1383,7 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             recall_query=args.query,
             recall_budget=args.recall_budget,
+            trust_root=args.trust_root,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["passed"] else 1
@@ -1376,7 +1401,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "verify-cold-export":
-        result = memory.verify_cold_export(args.path)
+        result = memory.verify_cold_export(args.path, trust_root=args.trust_root)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["passed"] else 1
 
