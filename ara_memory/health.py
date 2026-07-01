@@ -359,7 +359,7 @@ def _latest_backup(root: Path) -> dict[str, Any] | None:
     candidates = sorted(backup_dir.glob("*.zip"), key=lambda path: path.stat().st_mtime, reverse=True)
     for path in candidates:
         try:
-            verification = verify_backup(path)
+            verification = verify_backup(path, trust_root=root)
         except (OSError, zipfile.BadZipFile, json.JSONDecodeError, KeyError):
             continue
         created_at = _backup_created_at(path, verification)

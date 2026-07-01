@@ -515,13 +515,18 @@ python -m ara_memory restore-backup .ara-memory/backups/milestone.zip --target-r
 
 Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger,
 hot memory files, archived artifacts, durable spool envelopes, and a manifest
-with schema/stats. Verification checks SQLite integrity and foreign-key
-consistency so old or externally modified stores with orphan rows do not pass.
+with schema/stats plus per-entry SHA-256 hashes. Verification checks every
+hashed ZIP entry, the manifest HMAC, SQLite integrity, and foreign-key
+consistency so entry tampering, manifest rewrites without the local signing key,
+and orphan rows do not pass.
 Default backups include archived artifacts and the full spool directory,
 including pending/done/failed envelopes, snapshots, and `.seal-key`, so sealed
 pending work remains drainable after restore. `backup --no-archive` omits
 archived artifacts/cold evidence; do not use it as pruning-readiness or full
 evidence-restore proof.
+The backup signing key lives at `.ara-memory/.backup-signing-key` and is not
+stored inside backup ZIPs. Preserve it as local trust material if old backups
+must remain cryptographically verifiable on another machine.
 `restore-drill` restores into a temporary directory and can run a bounded recall
 query, proving the snapshot is usable before any real restore or pruning.
 Restore refuses to overwrite a non-empty target unless `--force` is passed.

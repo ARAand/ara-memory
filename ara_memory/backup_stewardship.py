@@ -14,6 +14,7 @@ from ara_memory.storage import MemoryStore
 
 
 BACKUP_DELETE_CONFIRMATION = "DELETE OLD BACKUPS"
+VERIFICATION_CACHE_VERSION = 2
 DEFAULT_TARGET_BACKUP_BYTES = 64 * 1024 * 1024
 
 
@@ -145,7 +146,13 @@ def run_backup_stewardship(
     items: list[BackupStewardshipItem] = []
     for index, (path, metadata) in enumerate(scanned):
         resolved = path.resolve(strict=False)
-        info = _backup_item(path, metadata, verification_cache=verification_cache, current_cache=current_cache)
+        info = _backup_item(
+            path,
+            metadata,
+            trust_root=root,
+            verification_cache=verification_cache,
+            current_cache=current_cache,
+        )
         if index < keep_latest:
             info.keep_reasons.append(f"latest-{index + 1}-of-{keep_latest}")
         if resolved in retention_refs:
@@ -186,7 +193,7 @@ def run_backup_stewardship(
             try:
                 _assert_safe_backup_path(backup_dir, path)
                 size = path.stat().st_size
-                verification = verify_backup(path)
+                verification = verify_backup(path, trust_root=root)
                 if not verification.get("passed"):
                     item.verified = False
                     item.error = json.dumps(verification.get("missing") or verification, ensure_ascii=False)[:500]
@@ -276,6 +283,7 @@ def _backup_item(
     path: Path,
     metadata: stat_result,
     *,
+    trust_root: Path,
     verification_cache: dict[str, Any],
     current_cache: dict[str, Any],
 ) -> BackupStewardshipItem:
@@ -285,7 +293,7 @@ def _backup_item(
     try:
         if _is_reparse_point(path):
             raise ValueError(f"Refusing to verify backup symlink or reparse point: {path}")
-        verification = cached if cached is not None else verify_backup(path)
+        verification = cached if cached is not None else verify_backup(path, trust_root=trust_root)
         verified = bool(verification.get("passed"))
         created_at = (verification.get("manifest") or {}).get("created_at")
         error = None if verified else json.dumps(verification.get("missing") or verification, ensure_ascii=False)[:500]
@@ -461,9 +469,9 @@ def _load_verification_cache(root: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"version": 1, "entries": {}}
-    if payload.get("version") != 1 or not isinstance(payload.get("entries"), dict):
-        return {"version": 1, "entries": {}}
+        return {"version": VERIFICATION_CACHE_VERSION, "entries": {}}
+    if payload.get("version") != VERIFICATION_CACHE_VERSION or not isinstance(payload.get("entries"), dict):
+        return {"version": VERIFICATION_CACHE_VERSION, "entries": {}}
     return payload
 
 
@@ -474,7 +482,7 @@ def _save_verification_cache(root: Path, entries: dict[str, Any], *, deleted_pat
         for key, value in entries.items()
         if key not in deleted_paths and value.get("verification", {}).get("passed") is not None
     }
-    payload = {"version": 1, "updated_at": utc_now(), "entries": filtered}
+    payload = {"version": VERIFICATION_CACHE_VERSION, "updated_at": utc_now(), "entries": filtered}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")

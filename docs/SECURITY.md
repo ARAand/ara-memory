@@ -47,7 +47,7 @@
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
-- Backups include durable spool envelopes and `verify-backup` runs SQLite foreign-key checks.
+- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` checks entry hashes, manifest signature, SQLite integrity, and foreign keys.
 - `live-prune` binds approvals to exact capsule IDs, rechecks export coverage, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
 - `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, and proved source-event preservation.
@@ -66,6 +66,7 @@
 - Treat spooled envelopes as untrusted input until `sleep`, audit, risk, and recall-regression gates have run.
 - Treat `spool/snapshots` as part of live queued evidence; do not clean it independently from its pending/done/failed envelope.
 - Treat `.ara-memory/spool/.seal-key` as private local trust material; backups preserve it so pending sealed envelopes remain drainable after restore.
+- Treat `.ara-memory/.backup-signing-key` as private local trust material; it is not stored in backup ZIPs, so copied backups need the corresponding key to remain cryptographically verifiable.
 - Keep project scopes isolated unless the user asks for cross-project recall.
 - Never use memory as a substitute for reading current files when coding.
 - Treat `ARA_MEMORY_ADVISOR_COMMAND` as trusted code, not as data.

@@ -142,6 +142,8 @@ sleep()
 - `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
 - `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
+- `.ara-memory/.backup-signing-key`: local HMAC trust key for backup manifests;
+  it is intentionally excluded from backup ZIPs.
 - Large provenance event lookups are de-duplicated and chunked so cold export,
   risk review, and restore/prune preparation do not hit SQLite variable limits.
 

@@ -336,7 +336,7 @@ class ShadowPruner:
 
         with tempfile.TemporaryDirectory() as tmp:
             shadow_root = Path(tmp) / "shadow-memory"
-            backup_restore = restore_backup(backup_path, shadow_root)
+            backup_restore = restore_backup(backup_path, shadow_root, trust_root=self.store.root)
             shadow_store = MemoryStore(shadow_root)
             before_recalls = _recall_snapshot(
                 self.store,

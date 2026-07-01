@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import secrets
 import sqlite3
+import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -12,6 +16,13 @@ from typing import Any
 from ara_memory.models import utc_now
 from ara_memory.recall import RecallCompiler
 from ara_memory.storage import MemoryStore, SCHEMA_VERSION
+
+
+BACKUP_FORMAT = "ara-memory-backup-v2"
+BACKUP_SIGNING_KEY_NAME = ".backup-signing-key"
+ENTRY_HASHES_FIELD = "entry_hashes_sha256"
+MANIFEST_SIGNATURE_FIELD = "manifest_hmac_sha256"
+SIGNATURE_ALGORITHM = "hmac-sha256-manifest-v1"
 
 
 @dataclass(slots=True)
@@ -31,6 +42,7 @@ def create_backup(store: MemoryStore, *, output: Path | None = None, include_arc
     output_path = (output or _default_backup_path(store.root)).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     excluded_paths = {output_path}
+    signing_key = _load_or_create_backup_signing_key(store.root)
 
     manifest = {
         "created_at": utc_now(),
@@ -38,30 +50,41 @@ def create_backup(store: MemoryStore, *, output: Path | None = None, include_arc
         "stats": store.stats(),
         "include_archive": include_archive,
         "include_spool": True,
-        "format": "ara-memory-backup-v1",
+        "format": BACKUP_FORMAT,
+        "signature_algorithm": SIGNATURE_ALGORITHM,
+        "backup_key_id": _backup_key_id(signing_key),
     }
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_db = Path(tmp) / "memory.db"
         _snapshot_sqlite(store.db_path, tmp_db)
         with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
-            zf.write(tmp_db, "memory.db")
-            _write_tree(zf, store.ledger_dir, "ledger", exclude=excluded_paths)
-            _write_tree(zf, store.hot_dir, "hot", exclude=excluded_paths)
-            _write_tree(zf, store.root / "spool", "spool", exclude=excluded_paths)
+            entry_hashes: dict[str, str] = {}
+            _write_file(zf, tmp_db, "memory.db", entry_hashes=entry_hashes)
+            _write_tree(zf, store.ledger_dir, "ledger", exclude=excluded_paths, entry_hashes=entry_hashes)
+            _write_tree(zf, store.hot_dir, "hot", exclude=excluded_paths, entry_hashes=entry_hashes)
+            _write_tree(zf, store.root / "spool", "spool", exclude=excluded_paths, entry_hashes=entry_hashes)
             if include_archive:
-                _write_tree(zf, store.archive_dir, "archive", exclude=excluded_paths)
+                _write_tree(zf, store.archive_dir, "archive", exclude=excluded_paths, entry_hashes=entry_hashes)
+            manifest[ENTRY_HASHES_FIELD] = entry_hashes
+            manifest["entry_count"] = len(entry_hashes)
+            manifest[MANIFEST_SIGNATURE_FIELD] = _manifest_signature(manifest, signing_key)
+            zf.writestr("manifest.json", _manifest_json(manifest))
 
     return BackupResult(path=output_path, manifest=manifest)
 
 
-def verify_backup(path: Path) -> dict:
+def verify_backup(path: Path, *, trust_root: Path | None = None) -> dict:
     with zipfile.ZipFile(path, "r") as zf:
         names = set(zf.namelist())
         required = {"manifest.json", "memory.db"}
         missing = sorted(required - names)
         manifest = json.loads(zf.read("manifest.json").decode("utf-8")) if "manifest.json" in names else {}
+        hash_report = _verify_entry_hashes(zf, names, manifest)
+        signature_report = _verify_manifest_signature(
+            manifest,
+            trust_root=_infer_trust_root(path, trust_root=trust_root),
+        )
         integrity = "not checked"
         foreign_key_violations: list[tuple[Any, ...]] = []
         if "memory.db" in names:
@@ -77,20 +100,29 @@ def verify_backup(path: Path) -> dict:
                     ]
                 finally:
                     conn.close()
+        passed = (
+            not missing
+            and integrity == "ok"
+            and not foreign_key_violations
+            and hash_report["status"] == "ok"
+            and signature_report["status"] == "ok"
+        )
         return {
             "path": str(path),
-            "passed": not missing and integrity == "ok" and not foreign_key_violations,
+            "passed": passed,
             "missing": missing,
             "sqlite_integrity": integrity,
             "foreign_key_violations": foreign_key_violations[:20],
             "manifest": manifest,
             "entries": len(names),
+            "entry_hashes": hash_report,
+            "manifest_signature": signature_report,
         }
 
 
-def restore_backup(path: Path, target_root: Path, *, force: bool = False) -> dict:
+def restore_backup(path: Path, target_root: Path, *, force: bool = False, trust_root: Path | None = None) -> dict:
     path = path.resolve()
-    verification = verify_backup(path)
+    verification = verify_backup(path, trust_root=trust_root)
     if not verification["passed"]:
         raise ValueError(f"Backup verification failed: {verification}")
 
@@ -118,7 +150,7 @@ def restore_backup(path: Path, target_root: Path, *, force: bool = False) -> dic
 
         restored = MemoryStore(target_root)
         restored.init()
-        post = verify_backup(restore_source)
+        post = verify_backup(restore_source, trust_root=trust_root)
         source_schema = int(verification["manifest"].get("schema_version", 0) or 0)
         restored_schema = restored.schema_version()
         schema_ok = (
@@ -142,8 +174,9 @@ def drill_restore_backup(
     scope: str = "global",
     recall_query: str | None = None,
     recall_budget: int = 1200,
+    trust_root: Path | None = None,
 ) -> dict:
-    verification = verify_backup(path)
+    verification = verify_backup(path, trust_root=trust_root)
     if not verification["passed"]:
         return {
             "path": str(path),
@@ -155,7 +188,7 @@ def drill_restore_backup(
 
     with tempfile.TemporaryDirectory() as tmp:
         target_root = Path(tmp) / "restored-memory"
-        restored = restore_backup(path, target_root)
+        restored = restore_backup(path, target_root, trust_root=trust_root)
         store = MemoryStore(target_root)
         recall = None
         if recall_query:
@@ -189,13 +222,157 @@ def _snapshot_sqlite(source: Path, target: Path) -> None:
         source_conn.close()
 
 
-def _write_tree(zf: zipfile.ZipFile, root: Path, arc_root: str, *, exclude: set[Path] | None = None) -> None:
+def _write_tree(
+    zf: zipfile.ZipFile,
+    root: Path,
+    arc_root: str,
+    *,
+    exclude: set[Path] | None = None,
+    entry_hashes: dict[str, str],
+) -> None:
     if not root.exists():
         return
     excluded = exclude or set()
+    resolved_root = root.resolve()
     for path in sorted(root.rglob("*")):
-        if path.is_file() and path.resolve() not in excluded:
-            zf.write(path, f"{arc_root}/{path.relative_to(root).as_posix()}")
+        if not path.is_file():
+            continue
+        resolved_path = path.resolve()
+        if resolved_path in excluded:
+            continue
+        if path.is_symlink() or _is_reparse_point(path):
+            raise ValueError(f"Refusing to back up symlink or reparse point: {path}")
+        if resolved_root not in (resolved_path, *resolved_path.parents):
+            raise ValueError(f"Refusing to back up path outside tree: {path}")
+        _write_file(zf, path, f"{arc_root}/{path.relative_to(root).as_posix()}", entry_hashes=entry_hashes)
+
+
+def _write_file(zf: zipfile.ZipFile, path: Path, arcname: str, *, entry_hashes: dict[str, str]) -> None:
+    entry_hashes[arcname] = _file_sha256(path)
+    zf.write(path, arcname)
+
+
+def _verify_entry_hashes(zf: zipfile.ZipFile, names: set[str], manifest: dict[str, Any]) -> dict[str, Any]:
+    expected = manifest.get(ENTRY_HASHES_FIELD)
+    if not isinstance(expected, dict):
+        return {
+            "status": "missing",
+            "checked": 0,
+            "missing_hashes": [],
+            "missing_entries": [],
+            "extra_entries": [],
+            "mismatches": [],
+        }
+    entries = {name for name in names if name != "manifest.json" and not name.endswith("/")}
+    expected_names = {str(name) for name in expected}
+    missing_hashes = sorted(entries - expected_names)
+    missing_entries = sorted(expected_names - entries)
+    mismatches = []
+    for name in sorted(entries & expected_names):
+        actual = hashlib.sha256(zf.read(name)).hexdigest()
+        wanted = str(expected[name])
+        if not hmac.compare_digest(actual, wanted):
+            mismatches.append({"entry": name, "expected": wanted, "actual": actual})
+    status = "ok" if not missing_hashes and not missing_entries and not mismatches else "failed"
+    return {
+        "status": status,
+        "checked": len(entries & expected_names),
+        "missing_hashes": missing_hashes,
+        "missing_entries": missing_entries,
+        "extra_entries": missing_hashes,
+        "mismatches": mismatches[:20],
+    }
+
+
+def _verify_manifest_signature(manifest: dict[str, Any], *, trust_root: Path | None) -> dict[str, Any]:
+    signature = manifest.get(MANIFEST_SIGNATURE_FIELD)
+    if not isinstance(signature, str) or not signature:
+        return {"status": "missing", "key_id": manifest.get("backup_key_id")}
+    if trust_root is None:
+        return {"status": "missing-key", "key_id": manifest.get("backup_key_id")}
+    key = _load_backup_signing_key(trust_root)
+    if key is None:
+        return {"status": "missing-key", "key_id": manifest.get("backup_key_id")}
+    actual = _manifest_signature(manifest, key)
+    return {
+        "status": "ok" if hmac.compare_digest(actual, signature) else "failed",
+        "key_id": _backup_key_id(key),
+        "manifest_key_id": manifest.get("backup_key_id"),
+    }
+
+
+def _manifest_signature(manifest: dict[str, Any], key: bytes) -> str:
+    payload = dict(manifest)
+    payload.pop(MANIFEST_SIGNATURE_FIELD, None)
+    return hmac.new(key, _canonical_json(payload).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _manifest_json(manifest: dict[str, Any]) -> str:
+    return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _canonical_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _load_or_create_backup_signing_key(root: Path) -> bytes:
+    existing = _load_backup_signing_key(root)
+    if existing is not None:
+        return existing
+    path = root / BACKUP_SIGNING_KEY_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_bytes(32)
+    path.write_text(key.hex(), encoding="ascii")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return key
+
+
+def _load_backup_signing_key(root: Path) -> bytes | None:
+    path = root / BACKUP_SIGNING_KEY_NAME
+    try:
+        raw = path.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
+    try:
+        key = bytes.fromhex(raw)
+    except ValueError:
+        return None
+    return key if len(key) >= 32 else None
+
+
+def _backup_key_id(key: bytes) -> str:
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _infer_trust_root(path: Path, *, trust_root: Path | None) -> Path | None:
+    if trust_root is not None:
+        return trust_root.resolve()
+    resolved = path.resolve()
+    if resolved.parent.name.lower() == "backups":
+        return resolved.parent.parent
+    return None
+
+
+def _is_reparse_point(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    try:
+        attrs = path.stat(follow_symlinks=False).st_file_attributes
+    except (AttributeError, OSError):
+        return False
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(reparse_flag and attrs & reparse_flag)
 
 
 def _default_backup_path(root: Path) -> Path:

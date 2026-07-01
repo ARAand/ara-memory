@@ -378,13 +378,13 @@ class AraMemory:
         return create_backup(self.store, output=output, include_archive=include_archive)
 
     def verify_backup(self, path: Path) -> dict[str, Any]:
-        return verify_backup(path)
+        return verify_backup(path, trust_root=self.store.root)
 
     def backup_stewardship(self, **kwargs: Any) -> BackupStewardshipReport:
         return run_backup_stewardship(self.store, **kwargs)
 
     def restore_backup(self, path: Path, target_root: Path, *, force: bool = False) -> dict[str, Any]:
-        return restore_backup(path, target_root, force=force)
+        return restore_backup(path, target_root, force=force, trust_root=self.store.root)
 
     def restore_drill(
         self,
@@ -394,7 +394,13 @@ class AraMemory:
         recall_query: str | None = None,
         recall_budget: int = 1200,
     ) -> dict[str, Any]:
-        return drill_restore_backup(path, scope=scope, recall_query=recall_query, recall_budget=recall_budget)
+        return drill_restore_backup(
+            path,
+            scope=scope,
+            recall_query=recall_query,
+            recall_budget=recall_budget,
+            trust_root=self.store.root,
+        )
 
     def maintenance(self, *, vacuum: bool = True) -> MaintenanceReport:
         return run_maintenance(self.store, vacuum=vacuum)

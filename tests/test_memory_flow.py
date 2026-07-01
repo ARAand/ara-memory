@@ -12,6 +12,7 @@ import time
 import zipfile
 from pathlib import Path
 from subprocess import run
+from typing import Any
 from unittest import mock
 
 import ara_memory.backup_stewardship as backup_stewardship_module
@@ -2210,10 +2211,14 @@ class MemoryFlowTests(unittest.TestCase):
             output = root / "backup.zip"
             result = memory.backup(output=output)
             self.assertTrue(output.exists())
-            self.assertEqual(result.manifest["format"], "ara-memory-backup-v1")
+            self.assertEqual(result.manifest["format"], "ara-memory-backup-v2")
+            self.assertIn("entry_hashes_sha256", result.manifest)
+            self.assertIn("manifest_hmac_sha256", result.manifest)
             verified = memory.verify_backup(output)
             self.assertTrue(verified["passed"], verified)
             self.assertEqual(verified["sqlite_integrity"], "ok")
+            self.assertEqual(verified["entry_hashes"]["status"], "ok")
+            self.assertEqual(verified["manifest_signature"]["status"], "ok")
 
             with zipfile.ZipFile(output, "r") as zf:
                 names = set(zf.namelist())
@@ -2221,7 +2226,88 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertIn("memory.db", names)
                 self.assertIn("ledger/events.jsonl", names)
                 self.assertIn("hot/alpha.md", names)
+                self.assertNotIn(".backup-signing-key", names)
                 self.assertTrue(any(name.startswith("archive/objects/") for name in names))
+
+    def test_verify_backup_rejects_tampered_zip_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: backup verification must detect changed entries.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=500)
+            backup_path = root / "backup.zip"
+            tampered_path = root / "tampered.zip"
+            memory.backup(output=backup_path)
+
+            _rewrite_zip_entry(
+                backup_path,
+                tampered_path,
+                replacements={"hot/alpha.md": b"# tampered hot memory\n"},
+            )
+
+            verification = memory.verify_backup(tampered_path)
+            self.assertFalse(verification["passed"], verification)
+            self.assertEqual(verification["entry_hashes"]["status"], "failed")
+            mismatches = verification["entry_hashes"]["mismatches"]
+            self.assertTrue(any(item["entry"] == "hot/alpha.md" for item in mismatches), verification)
+
+    def test_verify_backup_rejects_manifest_rewrite_without_signing_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: backup manifest rewrites must not bypass verification.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            backup_path = root / "backup.zip"
+            tampered_path = root / "tampered-manifest.zip"
+            memory.backup(output=backup_path)
+            replacement = b'{"tampered": true}\n'
+
+            def rewrite_manifest(manifest: dict[str, object]) -> dict[str, object]:
+                hashes = dict(manifest["entry_hashes_sha256"])  # type: ignore[index]
+                hashes["ledger/events.jsonl"] = hashlib.sha256(replacement).hexdigest()
+                manifest["entry_hashes_sha256"] = hashes
+                return manifest
+
+            _rewrite_zip_entry(
+                backup_path,
+                tampered_path,
+                replacements={"ledger/events.jsonl": replacement},
+                manifest_rewrite=rewrite_manifest,
+            )
+
+            verification = memory.verify_backup(tampered_path)
+            self.assertFalse(verification["passed"], verification)
+            self.assertEqual(verification["entry_hashes"]["status"], "ok")
+            self.assertEqual(verification["manifest_signature"]["status"], "failed")
+
+    def test_backup_refuses_symlinked_tree_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "outside-secret.txt"
+            outside.write_text("do not back up through a symlink\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            memory.init()
+            link_dir = memory.store.archive_dir / "links"
+            link_dir.mkdir(parents=True, exist_ok=True)
+            link = link_dir / "outside-secret.txt"
+            try:
+                os.symlink(outside, link)
+            except (AttributeError, NotImplementedError, OSError) as exc:
+                raise unittest.SkipTest(f"symlink creation unavailable: {exc}")
+
+            with self.assertRaises(ValueError):
+                memory.backup(output=root / "backup.zip")
 
     def test_backup_excludes_its_own_output_when_inside_included_tree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8564,6 +8650,25 @@ def _retention_cycle_payload(
         },
         "recommendations": ["review before live prune"],
     }
+
+
+def _rewrite_zip_entry(
+    source: Path,
+    target: Path,
+    *,
+    replacements: dict[str, bytes],
+    manifest_rewrite: Any | None = None,
+) -> None:
+    with zipfile.ZipFile(source, "r") as zin, zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename in replacements:
+                data = replacements[info.filename]
+            if info.filename == "manifest.json" and manifest_rewrite is not None:
+                manifest = json.loads(data.decode("utf-8"))
+                manifest = manifest_rewrite(manifest)
+                data = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+            zout.writestr(info, data)
 
 
 def _restore_env(name: str, value: str | None) -> None:
