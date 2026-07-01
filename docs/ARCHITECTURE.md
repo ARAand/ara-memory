@@ -24,6 +24,7 @@ storage, and not a substitute for reading the current workspace.
 
 ```text
 retain(event)
+  -> pre-retain privacy redaction for secrets, direct identifiers, hidden reasoning, metadata keys, and source/scope labels containing recognized private patterns
   -> content fingerprint dedupe
   -> append-only JSONL ledger
   -> SQLite event index + FTS
@@ -43,14 +44,14 @@ govern_turn(envelope)
   -> no event retention and no AI API call
 
 spool_turn(envelope)
-  -> atomic JSON write under .ara-memory/spool/pending
+  -> privacy-guarded atomic JSON write under .ara-memory/spool/pending
   -> local HMAC seal over the pending envelope
   -> later drain_spool()
   -> verify seal and strict option bounds before retention
   -> recover stale .ara-memory/spool/processing records
   -> remember_turn(envelope)
   -> optional post-drain stabilization summaries
-  -> done/failed archive with original envelope preserved
+  -> done/failed archive with sealed guarded envelope preserved
 
 consolidate()
   -> episode capsule
@@ -146,7 +147,7 @@ sleep()
 - `.ara-memory/ledger/events.jsonl`: append-only source of truth.
 - `.ara-memory/memory.db`: SQLite tables, active-capsule FTS indexes, temporal edges.
 - `.ara-memory/archive/`: derived evidence area; subdirectories have distinct lifecycle policy.
-- `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts needed by routine restores.
+- `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts needed by routine restores. These are raw bytes, not redacted or encrypted; default backups include them.
 - `.ara-memory/archive/cold/`: signed cold capsule exports used as pruning evidence.
 - `.ara-memory/archive/retention-cycles/`: compact retention-cycle reports.
 - `.ara-memory/archive/failed-backups/`: quarantined failed backup ZIPs kept for manual inspection.
@@ -166,17 +167,20 @@ sleep()
 `remember-turn` is the synchronous automation boundary. A Codex skill or wrapper
 does not need to understand the database schema; it emits one JSON turn envelope
 containing the user prompt, assistant result, files, images, commands, and
-explicit decisions. Ara Memory OS then preserves raw evidence first and performs
-compression later.
+explicit decisions. Ara Memory OS applies the pre-retain privacy guard before
+text events reach the ledger, SQLite, or FTS, then preserves bounded local
+evidence and performs compression later.
 
-`spool-turn` is the unattended boundary. It writes the same envelope to an
-atomic local file queue before touching the memory database, copies existing
-file/image artifacts into `spool/snapshots`, and stores a bounded worktree
-snapshot inside the envelope. It also seals the pending JSON with a local HMAC
-key stored under the memory root. `drain-spool` verifies the seal, strict option
-types, integer bounds, and enqueue-time artifact snapshots before processing the
-envelope through `remember-turn`; successful records move to `done`, and failed
-records move to `failed` with the original envelope and error details intact. This is the
+`spool-turn` is the unattended boundary. It writes a privacy-guarded copy of the
+envelope to an atomic local file queue before touching the memory database,
+copies existing file/image artifacts into `spool/snapshots`, and stores a
+bounded worktree snapshot inside the envelope. It also seals the pending JSON
+with a local HMAC key stored under the memory root. `drain-spool` verifies the
+seal, strict option types, integer bounds, and enqueue-time artifact snapshots
+before processing the envelope through `remember-turn`; successful records move
+to `done`, and failed records move to `failed` with the sealed guarded envelope
+and result/error details intact. Artifact bytes, snapshot paths, and explicit
+raw overrides remain private local evidence. This is the
 preferred bridge for always-on capture because a Codex crash, DB lock, missing
 artifact, later file edit/delete, or later worker failure does not erase or
 rewrite the user's prompt, files, or worktree evidence. If a worker dies after
@@ -187,7 +191,7 @@ When the foreground session needs to recall immediately after draining, use
 `drain-spool --stabilize`. It performs the same conservative episode/candidate
 summary folds that the worker uses for repeated command, file, git-status,
 bounded session narrative, and memory-policy decision noise, then refreshes hot
-memory for the drained scopes. This keeps raw turn preservation crash-safe while
+memory for the drained scopes. This keeps queued turn preservation crash-safe while
 preventing fresh operational evidence from destabilizing the next recall pack.
 
 `worker` is the separate memory processor. Codex can keep acting as the live

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.models import new_id, utc_now
+from ara_memory.privacy import guard_turn_payload, privacy_safe_label
 from ara_memory.turn import remember_turn
 from ara_memory.worktree import snapshot_worktree
 
@@ -82,14 +83,18 @@ def enqueue_turn(
     include_untracked_content: bool = False,
     max_file_chars: int = 8000,
     max_text_chars: int = 12000,
+    allow_raw_private: bool = False,
 ) -> SpoolRecord:
     memory.init()
     paths = _spool_paths(memory.store.root)
     turn_payload = dict(turn)
-    turn_id = str(turn_payload.get("turn_id") or new_id("turn"))
+    raw_turn_id = str(turn_payload.get("turn_id") or new_id("turn"))
+    turn_id = privacy_safe_label(raw_turn_id, label="turn", allow_raw_private=allow_raw_private)
     turn_payload["turn_id"] = turn_id
     spool_id = _new_spool_id(turn_id)
     created_at = utc_now()
+    safe_scope = privacy_safe_label(scope, label="scope", allow_raw_private=allow_raw_private)
+    safe_source = privacy_safe_label(source, label="source", allow_raw_private=allow_raw_private)
     metadata = dict(turn_payload.get("metadata")) if isinstance(turn_payload.get("metadata"), dict) else {}
     metadata.setdefault("turn_captured_at", created_at)
     metadata.setdefault("spool_id", spool_id)
@@ -116,6 +121,16 @@ def enqueue_turn(
             "events": len(worktree_snapshot),
             "captured_at": created_at,
         }
+    raw_turn_payload = turn_payload
+    turn_guard = guard_turn_payload(turn_payload, allow_raw_private=allow_raw_private)
+    turn_payload = turn_guard.value
+    _restore_snapshot_artifact_paths(turn_payload, raw_turn_payload, root=memory.store.root)
+    if turn_guard.reasons or turn_guard.redacted or turn_guard.allow_raw_private:
+        metadata = dict(turn_payload.get("metadata")) if isinstance(turn_payload.get("metadata"), dict) else {}
+        metadata["spool_privacy"] = turn_guard.metadata_note()
+        turn_payload["metadata"] = metadata
+    snapshot_guard = guard_turn_payload({"snapshots": snapshots}, allow_raw_private=allow_raw_private)
+    snapshots = snapshot_guard.value.get("snapshots", snapshots)
     payload = {
         "format": "ara-memory-spooled-turn-v1",
         "spool_id": spool_id,
@@ -124,8 +139,8 @@ def enqueue_turn(
         "turn": turn_payload,
         "snapshots": snapshots,
         "options": {
-            "scope": scope,
-            "source": source,
+            "scope": safe_scope,
+            "source": safe_source,
             "consolidate": consolidate,
             "sleep": sleep,
             "hot_budget": hot_budget,
@@ -133,6 +148,7 @@ def enqueue_turn(
             "include_untracked_content": include_untracked_content,
             "max_file_chars": max_file_chars,
             "max_text_chars": max_text_chars,
+            "allow_raw_private": allow_raw_private,
         },
     }
     payload["seal"] = _seal_payload(payload, root=memory.store.root)
@@ -165,14 +181,15 @@ def drain_spool(
 ) -> DrainReport:
     memory.init()
     paths = _spool_paths(memory.store.root)
-    recovered = _recover_stale_processing(paths, stale_seconds=processing_stale_seconds, scope=scope)
+    scope_filter = _scope_filter(scope)
+    recovered = _recover_stale_processing(paths, stale_seconds=processing_stale_seconds, scope_filter=scope_filter)
     items: list[DrainItem] = []
     succeeded_scopes: set[str] = set()
     scope_hot_budgets: dict[str, int] = {}
     for pending_path in sorted(paths["pending"].glob("*.json")):
         if len(items) >= limit:
             break
-        if scope is not None and _spool_record_scope(pending_path) not in {None, scope}:
+        if scope_filter is not None and _spool_record_scope(pending_path) not in {None, *scope_filter}:
             continue
         processing_path = paths["processing"] / pending_path.name
         try:
@@ -206,6 +223,7 @@ def drain_spool(
                 include_untracked_content=options["include_untracked_content"],
                 max_file_chars=options["max_file_chars"],
                 max_text_chars=options["max_text_chars"],
+                allow_raw_private=options.get("allow_raw_private", False),
             )
             done_path = _archive_spool_record(paths["done"], processing_path, payload, result=result)
             items.append(DrainItem(spool_id=spool_id, state="done", path=str(done_path), result=result))
@@ -225,6 +243,7 @@ def drain_spool(
             if stop_on_error:
                 break
     if stabilization_scope:
+        stabilization_scope = _canonical_scope_label(stabilization_scope)
         succeeded_scopes.add(stabilization_scope)
         scope_hot_budgets.setdefault(stabilization_scope, 1200)
     stabilization = (
@@ -268,6 +287,8 @@ def validate_spool_envelope(payload: dict[str, Any], *, root: Path) -> None:
     for key in ("consolidate", "sleep", "include_untracked_content"):
         if not isinstance(options.get(key), bool):
             raise ValueError(f"Spooled option {key} must be a JSON boolean.")
+    if "allow_raw_private" in options and not isinstance(options.get("allow_raw_private"), bool):
+        raise ValueError("Spooled option allow_raw_private must be a JSON boolean.")
     _bounded_int(options.get("hot_budget"), "hot_budget", minimum=0, maximum=5000)
     _bounded_int(options.get("max_file_chars"), "max_file_chars", minimum=0, maximum=100000)
     _bounded_int(options.get("max_text_chars"), "max_text_chars", minimum=100, maximum=200000)
@@ -421,6 +442,25 @@ def _validate_artifact_snapshot_metadata(turn_payload: dict[str, Any], *, root: 
                 item["metadata"] = item_metadata
 
 
+def _restore_snapshot_artifact_paths(guarded_turn: dict[str, Any], raw_turn: dict[str, Any], *, root: Path) -> None:
+    snapshot_root = (root / "spool" / "snapshots").resolve()
+    for key in ("files", "images"):
+        guarded_items = guarded_turn.get(key)
+        raw_items = raw_turn.get(key)
+        if not isinstance(guarded_items, list) or not isinstance(raw_items, list):
+            continue
+        for index, guarded_item in enumerate(guarded_items):
+            if index >= len(raw_items) or not isinstance(guarded_item, dict):
+                continue
+            try:
+                raw_path, _, _ = _artifact_item(raw_items[index])
+                resolved = _resolve_snapshot_path(raw_path, root=root)
+                resolved.relative_to(snapshot_root)
+            except (TypeError, ValueError):
+                continue
+            guarded_item["path"] = str(resolved)
+
+
 def _resolve_snapshot_path(path: Path, *, root: Path) -> Path:
     resolved = path.resolve()
     snapshot_root = (root / "spool" / "snapshots").resolve()
@@ -517,7 +557,7 @@ def _spool_paths(root: Path) -> dict[str, Path]:
     return paths
 
 
-def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int, scope: str | None = None) -> int:
+def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int, scope_filter: set[str] | None = None) -> int:
     if stale_seconds <= 0:
         return 0
     now = time.time()
@@ -529,7 +569,7 @@ def _recover_stale_processing(paths: dict[str, Path], *, stale_seconds: int, sco
             continue
         if age < stale_seconds:
             continue
-        if scope is not None and _spool_record_scope(processing_path) not in {None, scope}:
+        if scope_filter is not None and _spool_record_scope(processing_path) not in {None, *scope_filter}:
             continue
         pending_path = paths["pending"] / processing_path.name
         if pending_path.exists():
@@ -555,6 +595,16 @@ def _spool_record_scope(path: Path) -> str | None:
     if not isinstance(options, dict):
         return "global"
     return str(options.get("scope", "global"))
+
+
+def _scope_filter(scope: str | None) -> set[str] | None:
+    if scope is None:
+        return None
+    return {str(scope), _canonical_scope_label(scope)}
+
+
+def _canonical_scope_label(scope: str) -> str:
+    return privacy_safe_label(str(scope), label="scope")
 
 
 def _archive_spool_record(
@@ -637,9 +687,8 @@ def _snapshot_artifact_item(
     digest = _sha256_file(resolved)
     snapshot_dir = root / "spool" / "snapshots" / _safe_name(spool_id) / "artifacts"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    safe_stem = _safe_name(resolved.stem) or "artifact"
     safe_suffix = resolved.suffix if resolved.suffix and all(ch.isalnum() or ch == "." for ch in resolved.suffix) else ""
-    snapshot_name = f"{role}-{index:03d}-{digest[:12]}-{safe_stem}{safe_suffix}"
+    snapshot_name = f"{role}-{index:03d}-{digest[:12]}{safe_suffix}"
     snapshot_path = snapshot_dir / snapshot_name
     if not snapshot_path.exists():
         shutil.copy2(resolved, snapshot_path)
@@ -708,6 +757,7 @@ def _options(value: Any) -> dict[str, Any]:
         "include_untracked_content": bool(raw.get("include_untracked_content", False)),
         "max_file_chars": int(raw.get("max_file_chars", 8000)),
         "max_text_chars": int(raw.get("max_text_chars", 12000)),
+        "allow_raw_private": bool(raw.get("allow_raw_private", False)),
     }
 
 

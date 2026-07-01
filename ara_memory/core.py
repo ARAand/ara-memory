@@ -15,6 +15,7 @@ from ara_memory.hot import HotState, HotStateBuilder
 from ara_memory.maintenance import MaintenanceReport, run_maintenance
 from ara_memory.memory_lifecycle import MemoryLifecycleReport
 from ara_memory.models import Event, EventKind, MemoryStatus
+from ara_memory.privacy import guard_event_payload, privacy_safe_label
 from ara_memory.prune import (
     LivePruneApproval,
     LivePruneController,
@@ -51,13 +52,24 @@ class AraMemory:
         source: str = "manual",
         scope: str = "global",
         metadata: dict[str, Any] | None = None,
+        allow_raw_private: bool = False,
     ) -> Event:
-        event = Event.create(
-            kind=EventKind(kind),
+        guarded = guard_event_payload(
             text=text,
+            metadata=metadata,
             source=source,
             scope=scope,
-            metadata=metadata or {},
+            allow_raw_private=allow_raw_private,
+        )
+        event_metadata = dict(guarded.metadata)
+        if guarded.reasons or guarded.redacted or guarded.allow_raw_private:
+            event_metadata["privacy"] = guarded.metadata_note()
+        event = Event.create(
+            kind=EventKind(kind),
+            text=guarded.text,
+            source=guarded.source or source,
+            scope=guarded.scope or scope,
+            metadata=event_metadata,
         )
         return self.store.append_event(event)
 
@@ -90,6 +102,7 @@ class AraMemory:
         include_global: bool = True,
         include_hot: bool = False,
     ) -> RecallResult:
+        scope = _canonical_scope(scope) or "global"
         hot = self.read_hot(scope=scope) if include_hot else None
         return RecallCompiler(self.store).recall(
             query,
@@ -109,6 +122,7 @@ class AraMemory:
         include_hot: bool = False,
         candidate_limit: int = 18,
     ) -> RecallCandidateResult:
+        scope = _canonical_scope(scope) or "global"
         hot = self.read_hot(scope=scope) if include_hot else None
         return RecallCompiler(self.store).recall_candidates(
             query,
@@ -170,6 +184,7 @@ class AraMemory:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         status_value = MemoryStatus(status) if status else None
+        scope = _canonical_scope(scope)
         return [
             row_to_capsule(row)
             for row in self.store.list_capsules(scope=scope, status=status_value, kind=kind, limit=limit)
@@ -179,24 +194,29 @@ class AraMemory:
         return [dict(row) for row in self.store.list_actions(limit=limit)]
 
     def sleep(self, *, scope: str = "global", dry_run: bool = False) -> SleepReport:
+        scope = _canonical_scope(scope) or "global"
         return SleepConsolidator(self.store, advisor=self._advisor()).run(scope=scope, dry_run=dry_run)
 
     def list_sleep_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
         return [dict(row) for row in self.store.list_consolidation_runs(limit=limit)]
 
     def risk_report(self, *, scope: str = "global", limit: int = 200) -> list[dict[str, Any]]:
+        scope = _canonical_scope(scope) or "global"
         return [verdict.as_dict() for verdict in MemoryRiskAssessor(self.store).assess_scope(scope=scope, limit=limit)]
 
     def review(self, *, scope: str = "global", limit: int = 500) -> list[dict[str, Any]]:
+        scope = _canonical_scope(scope) or "global"
         return [
             rec.as_dict()
             for rec in MemoryReviewEngine(self.store, advisor=self._advisor()).review_scope(scope=scope, limit=limit)
         ]
 
     def quality(self, *, scope: str | None = None, limit: int = 500, persist: bool = False) -> QualityReport:
+        scope = _canonical_scope(scope)
         return QualityScorer(self.store).run(scope=scope, limit=limit, persist=persist)
 
     def review_queue(self, *, scope: str | None = None, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
+        scope = _canonical_scope(scope)
         return QualityScorer(self.store).list_queue(scope=scope, status=status, limit=limit)
 
     def resolve_review(self, queue_id: str) -> bool:
@@ -210,6 +230,7 @@ class AraMemory:
         limit: int = 500,
         examples_per_group: int = 3,
     ) -> Any:
+        scope = _canonical_scope(scope)
         return QualityScorer(self.store).triage_queue(
             scope=scope,
             status=status,
@@ -218,15 +239,19 @@ class AraMemory:
         )
 
     def review_worker(self, *, scope: str | None = None, limit: int = 25, dry_run: bool = True) -> ReviewWorkerReport:
+        scope = _canonical_scope(scope)
         return QualityScorer(self.store).work_queue(scope=scope, limit=limit, dry_run=dry_run)
 
     def review_compact(self, *, scope: str | None = None, limit: int = 250, dry_run: bool = True) -> Any:
+        scope = _canonical_scope(scope)
         return QualityScorer(self.store).compact_queue(scope=scope, limit=limit, dry_run=dry_run)
 
     def build_hot(self, *, scope: str = "global", budget: int = 1200) -> HotState:
+        scope = _canonical_scope(scope) or "global"
         return HotStateBuilder(self.store).build(scope=scope, budget=budget)
 
     def read_hot(self, *, scope: str = "global") -> HotState | None:
+        scope = _canonical_scope(scope) or "global"
         return HotStateBuilder(self.store).read(scope=scope)
 
     def evaluate(self) -> Any:
@@ -361,6 +386,7 @@ class AraMemory:
         hot_budget: int = 1200,
         include_global: bool = True,
     ) -> DoctorReport:
+        scope = _canonical_scope(scope) or "global"
         return MemoryDoctor(self.store).run(
             scope=scope,
             recall_query=recall_query,
@@ -413,6 +439,7 @@ class AraMemory:
         recall_budget: int = 1200,
         trust_root: Path | None = None,
     ) -> dict[str, Any]:
+        scope = _canonical_scope(scope) or "global"
         return drill_restore_backup(
             path,
             scope=scope,
@@ -425,6 +452,7 @@ class AraMemory:
         return run_maintenance(self.store, vacuum=vacuum)
 
     def retention(self, *, scope: str | None = None, cold_limit: int = 20) -> RetentionReport:
+        scope = _canonical_scope(scope)
         return RetentionAnalyzer(self.store).run(scope=scope, cold_limit=cold_limit)
 
     def cold_stewardship(self, **kwargs: Any) -> Any:
@@ -443,6 +471,7 @@ class AraMemory:
     def candidate_pressure(self, *, scope: str | None = None, limit: int = 20) -> Any:
         from ara_memory.candidate_pressure import CandidatePressureAnalyzer
 
+        scope = _canonical_scope(scope)
         return CandidatePressureAnalyzer(self.store).run(scope=scope, limit=limit)
 
     def candidate_summary(self, **kwargs: Any) -> Any:
@@ -471,6 +500,7 @@ class AraMemory:
         order: str = "newest",
     ) -> ColdExportResult:
         status_values = [MemoryStatus(status) for status in statuses] if statuses else None
+        scope = _canonical_scope(scope)
         return export_cold_capsules(
             self.store,
             output=output,
@@ -494,6 +524,7 @@ class AraMemory:
         recall_budget: int = 1200,
         include_global: bool = True,
     ) -> PrunePlanReport:
+        scope = _canonical_scope(scope)
         return PrunePlanner(self.store).run(
             scope=scope,
             limit=limit,
@@ -515,6 +546,7 @@ class AraMemory:
         include_global: bool = True,
         doctor_query: str = "current memory state",
     ) -> ShadowPruneReport:
+        scope = _canonical_scope(scope)
         return ShadowPruner(self.store).run(
             backup_path=backup_path,
             export_path=export_path,
@@ -539,6 +571,7 @@ class AraMemory:
         doctor_query: str = "current memory state",
         ttl_minutes: int = 30,
     ) -> LivePruneApproval:
+        scope = _canonical_scope(scope)
         return LivePruneController(self.store).prepare(
             backup_path=backup_path,
             export_path=export_path,
@@ -561,3 +594,9 @@ class AraMemory:
         if self.advisor is None:
             self.advisor = build_memory_advisor(self.store)
         return self.advisor
+
+
+def _canonical_scope(scope: str | None) -> str | None:
+    if scope is None:
+        return None
+    return privacy_safe_label(str(scope), label="scope")

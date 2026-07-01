@@ -43,6 +43,7 @@ def ingest_file(
     caption: str = "",
     max_text_chars: int = 12000,
     metadata_extra: dict[str, Any] | None = None,
+    allow_raw_private: bool = False,
 ) -> str:
     resolved = path.resolve()
     if not resolved.is_file():
@@ -72,7 +73,14 @@ def ingest_file(
             f"SHA256: {digest}\n"
             f"Archived at: {archive_path}"
         )
-        event = memory.retain(kind="image", text=text, source=source, scope=scope, metadata=metadata)
+        event = memory.retain(
+            kind="image",
+            text=text,
+            source=source,
+            scope=scope,
+            metadata=metadata,
+            allow_raw_private=allow_raw_private,
+        )
         return event.id
 
     if _looks_textual(resolved, mime_type):
@@ -81,7 +89,14 @@ def ingest_file(
         except UnicodeDecodeError:
             content = resolved.read_text(encoding="utf-8", errors="replace")
         text = compact_text(f"File artifact: {resolved.name}\nSHA256: {digest}\n\n{content}", limit=max_text_chars)
-        event = memory.retain(kind="file", text=text, source=source, scope=scope, metadata=metadata)
+        event = memory.retain(
+            kind="file",
+            text=text,
+            source=source,
+            scope=scope,
+            metadata=metadata,
+            allow_raw_private=allow_raw_private,
+        )
         return event.id
 
     text = (
@@ -90,7 +105,14 @@ def ingest_file(
         f"SHA256: {digest}\n"
         f"Archived at: {archive_path}"
     )
-    event = memory.retain(kind="file", text=text, source=source, scope=scope, metadata=metadata)
+    event = memory.retain(
+        kind="file",
+        text=text,
+        source=source,
+        scope=scope,
+        metadata=metadata,
+        allow_raw_private=allow_raw_private,
+    )
     return event.id
 
 

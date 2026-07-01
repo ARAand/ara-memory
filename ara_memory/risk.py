@@ -78,9 +78,9 @@ SECRET_PATTERNS = (
 )
 DIRECT_IDENTIFIER_PATTERNS = (
     ("email address", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
-    ("phone-like identifier", re.compile(r"\b(?:\+?\d[\d .()/-]{8,}\d)\b")),
     ("resident-id-like identifier", re.compile(r"\b\d{6}-[1-4]\d{6}\b")),
 )
+PHONE_SEPARATOR_CHARS = set(" .()/-")
 SELF_SERVING_PATTERNS = (
     "ara is always right",
     "ara is never wrong",
@@ -280,28 +280,31 @@ def _sensitive_matches(text: str) -> list[str]:
 
 def _direct_identifier_matches(text: str) -> list[str]:
     matches = []
+    if _phone_like_spans(text):
+        matches.append("phone-like identifier")
     for name, pattern in DIRECT_IDENTIFIER_PATTERNS:
-        if name == "phone-like identifier":
-            if any(_is_phone_like_identifier(match.group(0)) for match in pattern.finditer(text)):
-                matches.append(name)
+        if not _direct_pattern_possible(name, text):
             continue
         if pattern.search(text):
             matches.append(name)
     return matches
 
 
+def sensitive_text_matches(text: str) -> list[str]:
+    return _sensitive_matches(text)
+
+
+def direct_identifier_matches(text: str) -> list[str]:
+    return _direct_identifier_matches(text)
+
+
 def redact_sensitive_text(text: str) -> str:
     redacted = text
     for name, pattern in SECRET_PATTERNS:
         redacted = pattern.sub(f"[redacted {name}]", redacted)
+    redacted = _redact_phone_like_identifiers(redacted)
     for name, pattern in DIRECT_IDENTIFIER_PATTERNS:
-        if name == "phone-like identifier":
-            redacted = pattern.sub(
-                lambda match: "[redacted phone-like identifier]"
-                if _is_phone_like_identifier(match.group(0))
-                else match.group(0),
-                redacted,
-            )
+        if not _direct_pattern_possible(name, redacted):
             continue
         redacted = pattern.sub(f"[redacted {name}]", redacted)
     return redacted
@@ -341,6 +344,60 @@ def _is_phone_like_identifier(value: str) -> bool:
         return False
     if " " in normalized and not any(marker in normalized for marker in "+()-") and len(groups) < 3:
         return False
+    return True
+
+
+def _phone_like_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        starts_number = char.isdigit() or (char == "+" and index + 1 < length and text[index + 1].isdigit())
+        if not starts_number:
+            index += 1
+            continue
+        start = index
+        cursor = index
+        digits = 0
+        while cursor < length:
+            current = text[cursor]
+            if current.isdigit():
+                digits += 1
+                cursor += 1
+                continue
+            if current in PHONE_SEPARATOR_CHARS:
+                cursor += 1
+                continue
+            if current == "+" and cursor == start:
+                cursor += 1
+                continue
+            break
+        if 10 <= digits <= 16 and _is_phone_like_identifier(text[start:cursor]):
+            spans.append((start, cursor))
+        index = max(cursor, start + 1)
+    return spans
+
+
+def _redact_phone_like_identifiers(text: str) -> str:
+    spans = _phone_like_spans(text)
+    if not spans:
+        return text
+    parts: list[str] = []
+    last = 0
+    for start, end in spans:
+        parts.append(text[last:start])
+        parts.append("[redacted phone-like identifier]")
+        last = end
+    parts.append(text[last:])
+    return "".join(parts)
+
+
+def _direct_pattern_possible(name: str, text: str) -> bool:
+    if name == "email address":
+        return "@" in text
+    if name == "resident-id-like identifier":
+        return "-" in text
     return True
 
 

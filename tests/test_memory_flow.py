@@ -27,6 +27,7 @@ from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
 from ara_memory.regression import RecallRegressionCase
+from ara_memory.risk import redact_sensitive_text
 from ara_memory.turn import plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -6896,11 +6897,11 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertNotIn("ExampleCredentialValue123", result.pack)
             self.assertNotIn("api_key", result.pack.lower())
 
-    def test_secret_like_memory_is_quarantined_and_blocked_from_hot_and_recall(self) -> None:
+    def test_secret_like_retain_is_redacted_before_ledger_and_recall(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
             memory.init()
-            memory.retain(
+            event = memory.retain(
                 kind="decision",
                 text=(
                     "Decision: rotate api_key = ExampleCredentialValue123 "
@@ -6908,14 +6909,32 @@ class MemoryFlowTests(unittest.TestCase):
                 ),
                 source="manual",
                 scope="alpha",
+                metadata={
+                    "owner_email": "jongseo@example.com",
+                    "reasoning_summary": "hidden chain-of-thought should not be persisted",
+                },
             )
+            self.assertNotIn("ExampleCredentialValue123", event.text)
+            self.assertIn("[redacted credential assignment]", event.text)
+            self.assertEqual(event.metadata["privacy"]["action"], "redacted")
+            self.assertTrue(event.metadata["privacy"]["text_redacted"])
+            self.assertTrue(event.metadata["privacy"]["metadata_redacted"])
+            self.assertNotIn("jongseo@example.com", json.dumps(event.metadata, ensure_ascii=False))
+            self.assertNotIn("hidden chain-of-thought", json.dumps(event.metadata, ensure_ascii=False))
+
+            with memory.store.db_path.open("rb") as fh:
+                raw_db = fh.read()
+            self.assertNotIn(b"ExampleCredentialValue123", raw_db)
+            ledger = (memory.store.ledger_dir / "events.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("ExampleCredentialValue123", ledger)
+            self.assertNotIn("jongseo@example.com", ledger)
             memory.consolidate()
 
             risk = memory.risk_report(scope="alpha")
-            self.assertTrue(any(item["should_quarantine"] and item["sensitive"] for item in risk), risk)
+            self.assertFalse(any(item["sensitive"] for item in risk), risk)
 
             report = memory.sleep(scope="alpha")
-            self.assertGreaterEqual(report.quarantined, 1)
+            self.assertEqual(report.quarantined, 0)
             hot = memory.build_hot(scope="alpha", budget=700)
             self.assertNotIn("ExampleCredentialValue123", hot.text)
 
@@ -6926,6 +6945,318 @@ class MemoryFlowTests(unittest.TestCase):
                 budget=1200,
             )
             self.assertNotIn("ExampleCredentialValue123", pack)
+
+    def test_retain_redacts_source_scope_metadata_keys_and_hidden_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            event = memory.retain(
+                kind="decision",
+                text="Reasoning: hidden scratchpad should not persist\nDecision: keep the public conclusion.",
+                source="jongseo@example.com",
+                scope="sk-abcdefghijklmnopqrstuvwxyz123456",
+                metadata={
+                    "jongseo@example.com": "owner",
+                    "nested": {
+                        "reasoning_summary": "private chain-of-thought",
+                        "contacts": ("010-1234-5678",),
+                    },
+                },
+            )
+
+            self.assertEqual(event.source[:15], "private-source-")
+            self.assertEqual(event.scope[:14], "private-scope-")
+            self.assertIn("Reasoning: [redacted hidden reasoning]", event.text)
+            self.assertNotIn("hidden scratchpad", event.text)
+            payload = json.dumps(event.metadata, ensure_ascii=False)
+            self.assertNotIn("jongseo@example.com", payload)
+            self.assertNotIn("private chain-of-thought", payload)
+            self.assertNotIn("010-1234-5678", payload)
+            self.assertIn("redacted_key_", payload)
+
+            ledger = (memory.store.ledger_dir / "events.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("jongseo@example.com", ledger)
+            self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", ledger)
+            self.assertNotIn("hidden scratchpad", ledger)
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                rows = conn.execute("SELECT text, source, scope, metadata_json FROM events").fetchall()
+            finally:
+                conn.close()
+            stored = json.dumps(rows, ensure_ascii=False)
+            self.assertNotIn("jongseo@example.com", stored)
+            self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz123456", stored)
+            self.assertNotIn("private chain-of-thought", stored)
+
+    def test_private_scope_remains_user_addressable_for_recall_and_spool_drain(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            private_scope = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: private scope canonicalization keeps recall addressable.",
+                source="test",
+                scope=private_scope,
+            )
+            memory.consolidate()
+
+            pack = memory.recall("scope canonicalization", scope=private_scope, include_global=False, budget=1000)
+            self.assertIn("canonicalization", pack.lower())
+
+            record = memory.spool_turn(
+                {"turn_id": "private-scope-spool", "prompt": "Scoped spool should drain by original scope."},
+                scope=private_scope,
+                consolidate=False,
+                hot_budget=0,
+            )
+            pending_payload = Path(record.path).read_text(encoding="utf-8")
+            self.assertNotIn(private_scope, pending_payload)
+            report = memory.drain_spool(scope=private_scope, limit=1)
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.succeeded, 1)
+
+    def test_retain_handles_cyclic_and_deep_metadata_without_raw_leak_or_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            cyclic: dict[str, Any] = {"owner": "safe"}
+            cyclic["self"] = cyclic
+            deep: dict[str, Any] = {}
+            cursor = deep
+            for _ in range(80):
+                child: dict[str, Any] = {}
+                cursor["child"] = child
+                cursor = child
+
+            event = memory.retain(
+                kind="note",
+                text="Store bounded metadata safely.",
+                scope="alpha",
+                metadata={"cyclic": cyclic, "deep": deep},
+            )
+
+            payload = json.dumps(event.metadata, ensure_ascii=False)
+            self.assertIn("[redacted cyclic metadata]", payload)
+            self.assertIn("[redacted deeply nested metadata]", payload)
+            ledger = (memory.store.ledger_dir / "events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("[redacted cyclic metadata]", ledger)
+
+    def test_sensitive_redaction_avoids_pathological_identifier_regex_runtime(self) -> None:
+        text = "1-" * 100000
+        started = time.perf_counter()
+        redacted = redact_sensitive_text(text)
+        elapsed = time.perf_counter() - started
+
+        self.assertEqual(redacted, text)
+        self.assertLess(elapsed, 1.0)
+
+    def test_allow_raw_secret_records_explicit_privacy_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Forensic fixture api_key = ExampleCredentialValue123 should stay raw only by override.",
+                source="test",
+                scope="alpha",
+                metadata={"reasoning_summary": "allowed only because this is explicit"},
+                allow_raw_private=True,
+            )
+
+            self.assertIn("ExampleCredentialValue123", event.text)
+            self.assertEqual(event.metadata["privacy"]["action"], "allowed_raw_private")
+            self.assertFalse(event.metadata["privacy"]["text_redacted"])
+            self.assertIn("allowed only because this is explicit", json.dumps(event.metadata, ensure_ascii=False))
+
+    def test_remember_turn_redacts_command_output_before_event_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            token = "Bearer AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
+
+            result = remember_turn(
+                memory,
+                {
+                    "prompt": "Capture command output safely.",
+                    "commands": [{"cmd": "curl", "exit_code": 1, "output": f"Authorization: {token}"}],
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+            )
+
+            self.assertGreaterEqual(len(result["events_retained"]), 2)
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                rows = conn.execute("SELECT text, metadata_json FROM events").fetchall()
+            finally:
+                conn.close()
+            payload = "\n".join(f"{text}\n{metadata}" for text, metadata in rows)
+            self.assertNotIn(token, payload)
+            self.assertIn("[redacted bearer token]", payload)
+
+    def test_spooled_turn_redacts_on_drain_before_event_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            memory.spool_turn(
+                {
+                    "prompt": f"Please remember this diagnostic key {secret}",
+                    "metadata": {"reasoning_summary": "private scratchpad should not enter event metadata"},
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+            )
+
+            report = memory.drain_spool(limit=1)
+
+            self.assertTrue(report.passed, report.as_dict())
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                rows = conn.execute("SELECT text, metadata_json FROM events").fetchall()
+            finally:
+                conn.close()
+            payload = "\n".join(f"{text}\n{metadata}" for text, metadata in rows)
+            self.assertNotIn(secret, payload)
+            self.assertNotIn("private scratchpad", payload)
+            self.assertIn("[redacted openai style key]", payload)
+
+    def test_spooled_turn_redacts_pending_envelope_text_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            record = memory.spool_turn(
+                {
+                    "turn_id": "private-spool-turn",
+                    "prompt": f"Please remember this diagnostic key {secret}",
+                    "metadata": {"reasoning_summary": "private scratchpad should not enter the queue"},
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+            )
+
+            pending_payload = Path(record.path).read_text(encoding="utf-8")
+            self.assertNotIn(secret, pending_payload)
+            self.assertNotIn("private scratchpad", pending_payload)
+            self.assertIn("[redacted openai style key]", pending_payload)
+
+    def test_spooled_secret_like_artifact_path_is_redacted_from_pending_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            artifact = root / f"{secret}.md"
+            artifact.write_text("Artifact body is not the path secret.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+
+            record = memory.spool_turn(
+                {
+                    "turn_id": "secret-path-spool",
+                    "prompt": "Artifact path should not leak through spool JSON.",
+                    "files": [{"path": str(artifact), "caption": "secret-like path fixture"}],
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+            )
+
+            pending_payload = Path(record.path).read_text(encoding="utf-8")
+            self.assertNotIn(secret, pending_payload)
+            self.assertIn("[redacted openai style key]", pending_payload)
+            report = memory.drain_spool(limit=1)
+            self.assertTrue(report.passed, report.as_dict())
+
+    def test_legacy_spooled_turn_without_allow_raw_private_still_drains(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            record = memory.spool_turn(
+                {"turn_id": "legacy-spool", "prompt": "Legacy pending record."},
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+            )
+            path = Path(record.path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            del payload["options"]["allow_raw_private"]
+            payload["seal"] = spool_module._seal_payload(payload, root=memory.store.root)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+            report = memory.drain_spool(limit=1)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.succeeded, 1)
+
+    def test_execute_turn_ingress_spool_mode_preserves_explicit_raw_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Artifact forces spool mode.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+
+            result = memory.execute_turn_ingress(
+                {
+                    "turn_id": "override-spool",
+                    "prompt": f"Forensic fixture {secret}",
+                    "files": [{"path": str(artifact), "caption": "force spool"}],
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+                mode="spool-turn",
+                allow_raw_private=True,
+            )
+            self.assertEqual(result["selected_mode"], "spool-turn")
+            report = memory.drain_spool(limit=1)
+
+            self.assertTrue(report.passed, report.as_dict())
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                rows = conn.execute("SELECT text, metadata_json FROM events").fetchall()
+            finally:
+                conn.close()
+            payload = "\n".join(f"{text}\n{metadata}" for text, metadata in rows)
+            self.assertIn(secret, payload)
+            self.assertIn("allowed_raw_private", payload)
+
+    def test_allow_raw_secret_reaches_artifact_and_worktree_event_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            secret = "ExampleCredentialValue123"
+            artifact.write_text(f"api_key = {secret}\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+
+            remember_turn(
+                memory,
+                {
+                    "turn_id": "raw-artifact-worktree",
+                    "files": [{"path": str(artifact), "caption": "forensic artifact"}],
+                    "worktree_snapshot": [
+                        {
+                            "kind": "file",
+                            "text": f"Untracked diagnostic api_key = {secret}",
+                            "source": "git-untracked-file",
+                            "metadata": {"file": "diagnostic.txt"},
+                        }
+                    ],
+                },
+                scope="alpha",
+                consolidate=False,
+                hot_budget=0,
+                allow_raw_private=True,
+            )
+
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                rows = conn.execute("SELECT text, metadata_json FROM events").fetchall()
+            finally:
+                conn.close()
+            payload = "\n".join(f"{text}\n{metadata}" for text, metadata in rows)
+            self.assertIn(secret, payload)
+            self.assertIn("allowed_raw_private", payload)
 
     def test_recall_filters_sensitive_stable_capsule_before_sleep(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7819,6 +8150,7 @@ class MemoryFlowTests(unittest.TestCase):
                     text=f"Decision: rotate api_key = {secret_value}.",
                     source="manual",
                     scope="external-redaction",
+                    allow_raw_private=True,
                 )
                 memory.consolidate()
 

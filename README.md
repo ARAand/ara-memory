@@ -38,8 +38,15 @@ explicit opt-in advisor/model wrappers.
 Primary risks are memory poisoning, preference overfitting, compression drift,
 scope leakage, plaintext memory spill, background overreach, and provenance
 collapse. The default defenses are candidate-first promotion, scoped recall,
-deterministic risk gates, visible-evidence regression, sealed spooling, dry-run
-review workers, and verified backup/cold-export gates.
+pre-retain privacy redaction, deterministic risk gates, visible-evidence
+regression, sealed spooling, dry-run review workers, and verified
+backup/cold-export gates. Secret-like values, direct identifiers, hidden
+reasoning text/metadata, sensitive metadata keys, and source/scope labels with
+recognized private patterns are guarded before events enter the ledger, SQLite, or FTS;
+`--allow-raw-secret` is the explicit forensic override and records a privacy
+metadata note. Raw artifact archives remain private local evidence and need the
+separate encrypted/metadata-only archive track before they can be called
+redacted storage.
 
 ## Purpose
 
@@ -102,6 +109,14 @@ IDs, consolidates candidates, and refreshes hot memory. The synthetic episode
 helps recall recover the shape of the interaction without rereading every raw
 event.
 
+Before text events are written to the append-only ledger, SQLite, or FTS, the
+pre-retain privacy guard redacts secret-like credentials, direct identifiers,
+hidden reasoning text/metadata, and sensitive metadata keys. Source and scope
+labels containing recognized private patterns are replaced by
+deterministic private labels instead of being indexed raw. Use
+`--allow-raw-secret` only when preserving the raw private value is an
+intentional, reviewed forensic act.
+
 Use `plan-turn` before unattended capture when the envelope may be large. It is
 model-free: it hashes artifact paths, estimates raw-text tokens, estimates a
 bounded recall preview, and recommends `remember-turn` or `spool-turn` without
@@ -151,6 +166,13 @@ change what the spooled turn remembers. Each queued envelope also carries a
 local HMAC seal; `drain-spool` rejects unsealed or edited pending JSON before
 retaining any events.
 
+Spool envelopes are still private local evidence: pending, done, and failed
+queue files contain a sealed, privacy-guarded enqueue envelope, while artifact
+bytes, snapshot paths, malformed raw sidecars, and explicit raw overrides remain
+private plaintext until a future encrypted or metadata-only spool mode exists.
+The pre-retain privacy guard applies again when those envelopes are drained into
+text events, before ledger/SQLite/FTS storage.
+
 ```powershell
 @'
 {
@@ -180,10 +202,11 @@ python -m ara_memory drain-spool --limit 25 --stabilize
 ```
 
 Successful spooled turns move to `.ara-memory/spool/done/`. Failed turns move to
-`.ara-memory/spool/failed/` with the original envelope and error details intact
-for inspection. Malformed queue files keep a raw copy next to the failed record,
-and sealed-envelope plus artifact-snapshot preflight prevents a failed drain from
-retaining only part of a turn or later reading an unsnapshotted live path.
+`.ara-memory/spool/failed/` with the sealed guarded envelope and error details
+intact for inspection. Malformed queue files keep a raw copy next to the failed
+record, and sealed-envelope plus artifact-snapshot preflight prevents a failed
+drain from retaining only part of a turn or later reading an unsnapshotted live
+path.
 If a worker crashes after moving a file to `.ara-memory/spool/processing/`, the
 next `drain-spool` or `worker` recovers stale processing files back into pending
 before processing them. Tune that threshold with `--processing-stale-seconds`.
@@ -662,10 +685,12 @@ timestamp, and final verification result.
   capsules only; superseded, rejected, and quarantined memories stay preserved
   as cold evidence without paying active recall-index cost.
 - Raw ledger is append-only JSONL.
-- Exact duplicate events are deduplicated by content fingerprint before they hit
-  the ledger.
-- Hidden chain-of-thought is not stored. Decisions and reasons are stored as
-  explicit summaries with provenance.
+- Exact duplicate events are deduplicated by content fingerprint after the
+  pre-retain privacy guard and before they hit the ledger.
+- Recognized hidden-reasoning fields and line-prefixed text are redacted from
+  retained text events by default. Decisions and reasons are stored as explicit
+  summaries with provenance, while raw artifact/spool evidence remains private
+  plaintext unless a later encrypted mode is used.
 - Long-term memories start as candidates and are promoted only after repeated
   evidence, high salience, or explicit user confirmation.
 - Goals are first-class capsules, separate from decisions and procedures, so

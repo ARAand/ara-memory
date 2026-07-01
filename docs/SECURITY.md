@@ -27,6 +27,7 @@
 - Manual `promote` and `reject` commands exist.
 - Manual and automatic `quarantine` exists for suspicious behavioral memory.
 - The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing across capsule title, body, and tags before hot memory is rebuilt.
+- The pre-retain privacy guard redacts secret-like credentials, direct identifiers, hidden reasoning text/metadata, and sensitive metadata keys before text events are written to the append-only ledger, SQLite event table, or FTS index. Source and scope labels containing recognized private patterns are replaced with deterministic private labels. `--allow-raw-secret` is the explicit override and records the privacy action in event metadata.
 - Instruction-like, secret-like, and direct-identifier tags are suppressed from recall tag surfaces.
 - Default recall, manual promotion, quality review, and external advisor payloads reuse that deterministic risk boundary; risky advisor candidates are redacted before any external command receives them.
 - Promotion recommendation and the actual `stable` write are separated by a shared promotion gate. Automatic promotion from sleep, review-worker apply mode, external advisors, or summary consolidation requires real provenance: two existing source events, one trusted explicit source, or a summary backed by consolidated source capsules plus at least one existing source event.
@@ -37,10 +38,10 @@
 - Sleep runs a separate Memory Auditor before promotion.
 - External advisor commands are opt-in and fall back to deterministic review on invalid output.
 - Stale and malformed summaries are superseded instead of deleted, preserving provenance.
-- Hidden chain-of-thought is not stored; only observable decisions and summaries are retained.
-- `spool-turn` writes pending envelopes atomically before database ingestion, seals each envelope with a local HMAC, and snapshots existing file/image artifacts plus bounded worktree evidence at enqueue time.
+- Recognized hidden-reasoning fields and line-prefixed text are redacted from retained text events by default; only observable decisions and summaries should be retained. Raw artifact/spool evidence remains private plaintext unless an explicit encrypted mode is added.
+- `spool-turn` writes privacy-guarded pending envelopes atomically before database ingestion, seals each envelope with a local HMAC, and snapshots existing file/image artifacts plus bounded worktree evidence at enqueue time.
 - `drain-spool` verifies the local seal, strict option types, bounded sizes, and artifact snapshot hashes before retaining any events; unsealed or edited pending JSON is moved to failed.
-- `drain-spool` moves failures to `.ara-memory/spool/failed/` with the original envelope and error details intact; malformed queue files keep a raw sidecar there.
+- `drain-spool` moves failures to `.ara-memory/spool/failed/` with the sealed guarded envelope and error details intact; malformed queue files keep a raw sidecar there.
 - Artifact preflight runs before retaining turn text so a failed drain does not leave partial prompt-only memory or later read an unsnapshotted live artifact path.
 - Recall regression blocks retrieval drift, token jumps, and forbidden-text reintroduction after memory system changes.
 - `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`.
@@ -83,7 +84,7 @@
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
 - Treat stale or drifted cold-stewardship evidence as a watch signal; rerun retention-cycle before relying on it.
 - Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
-- Treat `.ara-memory`, backups, cold exports, hot-memory files, spool envelopes, and SQLite databases as private plaintext evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
+- Treat `.ara-memory`, backups, cold exports, hot-memory files, raw artifact archives, spool path metadata, and SQLite databases as private plaintext evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
 
 ## Recommended Future Defenses
 

@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     retain.add_argument("--source", default="manual")
     retain.add_argument("--scope", default="global")
     retain.add_argument("--metadata", default="{}")
+    retain.add_argument("--allow-raw-secret", action="store_true")
 
     ingest = sub.add_parser("ingest-file")
     ingest.add_argument("path", type=Path)
@@ -53,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     remember.add_argument("--include-untracked-content", action="store_true")
     remember.add_argument("--max-file-chars", type=int, default=8000)
     remember.add_argument("--max-text-chars", type=int, default=12000)
+    remember.add_argument("--allow-raw-secret", action="store_true")
 
     plan_turn = sub.add_parser("plan-turn")
     plan_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
@@ -75,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     ingress_turn.add_argument("--max-file-chars", type=int, default=8000)
     ingress_turn.add_argument("--max-text-chars", type=int, default=12000)
     ingress_turn.add_argument("--direct-text-threshold", type=int, default=16000)
+    ingress_turn.add_argument("--allow-raw-secret", action="store_true")
 
     spool_turn = sub.add_parser("spool-turn")
     spool_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
@@ -87,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     spool_turn.add_argument("--include-untracked-content", action="store_true")
     spool_turn.add_argument("--max-file-chars", type=int, default=8000)
     spool_turn.add_argument("--max-text-chars", type=int, default=12000)
+    spool_turn.add_argument("--allow-raw-secret", action="store_true")
 
     drain_spool = sub.add_parser("drain-spool")
     drain_spool.add_argument("--scope", default=None)
@@ -762,6 +766,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             scope=args.scope,
             metadata=metadata,
+            allow_raw_private=args.allow_raw_secret,
         )
         print(json.dumps({"event_id": event.id, "created_at": event.created_at}, ensure_ascii=False))
         return 0
@@ -795,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             include_untracked_content=args.include_untracked_content,
             max_file_chars=args.max_file_chars,
             max_text_chars=args.max_text_chars,
+            allow_raw_private=args.allow_raw_secret,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -828,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
             direct_text_threshold=args.direct_text_threshold,
             mode=args.mode,
             dry_run=args.dry_run,
+            allow_raw_private=args.allow_raw_secret,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -845,6 +852,7 @@ def main(argv: list[str] | None = None) -> int:
             include_untracked_content=args.include_untracked_content,
             max_file_chars=args.max_file_chars,
             max_text_chars=args.max_text_chars,
+            allow_raw_private=args.allow_raw_secret,
         )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0

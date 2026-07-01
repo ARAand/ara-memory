@@ -25,6 +25,7 @@ def remember_turn(
     include_untracked_content: bool = False,
     max_file_chars: int = 8000,
     max_text_chars: int = 12000,
+    allow_raw_private: bool = False,
 ) -> dict[str, Any]:
     memory.init()
     turn_id = str(turn.get("turn_id") or new_id("turn"))
@@ -55,6 +56,7 @@ def remember_turn(
                 source=source,
                 scope=scope,
                 metadata={**base_metadata, "turn_role": "user"},
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -67,6 +69,7 @@ def remember_turn(
                 source=source,
                 scope=scope,
                 metadata={**base_metadata, "turn_role": "assistant"},
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -78,6 +81,7 @@ def remember_turn(
                 source=source,
                 scope=scope,
                 metadata={**base_metadata, "turn_role": "note", "turn_index": index},
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -89,6 +93,7 @@ def remember_turn(
                 source=source,
                 scope=scope,
                 metadata={**base_metadata, "turn_role": "decision", "turn_index": index},
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -100,6 +105,7 @@ def remember_turn(
                 source=source,
                 scope=scope,
                 metadata={**base_metadata, "turn_role": "command", "turn_index": index},
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -119,6 +125,7 @@ def remember_turn(
                     "turn_role": "artifact",
                     "turn_index": index,
                 },
+                allow_raw_private=allow_raw_private,
             )
         )
 
@@ -129,6 +136,7 @@ def remember_turn(
             worktree_snapshot,
             scope=scope,
             metadata_extra={**base_metadata, "turn_role": "worktree_snapshot"},
+            allow_raw_private=allow_raw_private,
         )
     elif capture_cwd is not None:
         worktree_event_ids = capture_worktree(
@@ -137,6 +145,7 @@ def remember_turn(
             scope=scope,
             include_untracked_content=include_untracked_content,
             max_file_chars=max_file_chars,
+            allow_raw_private=allow_raw_private,
         )
 
     if event_ids or file_event_ids or worktree_event_ids:
@@ -160,6 +169,7 @@ def remember_turn(
                     "artifact_event_ids": [*file_event_ids],
                     "worktree_event_ids": [*worktree_event_ids],
                 },
+                allow_raw_private=allow_raw_private,
             ).id
         )
 
@@ -245,6 +255,7 @@ def execute_turn_ingress(
     direct_text_threshold: int = 16000,
     mode: str = "auto",
     dry_run: bool = False,
+    allow_raw_private: bool = False,
 ) -> dict[str, Any]:
     plan = plan_turn_ingress(
         turn,
@@ -270,6 +281,7 @@ def execute_turn_ingress(
             include_untracked_content=include_untracked_content,
             max_file_chars=max_file_chars,
             max_text_chars=max_text_chars,
+            allow_raw_private=allow_raw_private,
         )
         return {
             "dry_run": False,
@@ -289,6 +301,7 @@ def execute_turn_ingress(
         include_untracked_content=include_untracked_content,
         max_file_chars=max_file_chars,
         max_text_chars=max_text_chars,
+        allow_raw_private=allow_raw_private,
     )
     return {"dry_run": False, "selected_mode": selected_mode, "plan": plan, "result": result}
 

@@ -15,13 +15,14 @@ def capture_worktree(
     scope: str,
     include_untracked_content: bool = False,
     max_file_chars: int = 8000,
+    allow_raw_private: bool = False,
 ) -> list[str]:
     snapshot = snapshot_worktree(
         cwd=cwd,
         include_untracked_content=include_untracked_content,
         max_file_chars=max_file_chars,
     )
-    return retain_worktree_snapshot(memory, snapshot, scope=scope)
+    return retain_worktree_snapshot(memory, snapshot, scope=scope, allow_raw_private=allow_raw_private)
 
 
 def snapshot_worktree(
@@ -104,6 +105,7 @@ def retain_worktree_snapshot(
     *,
     scope: str,
     metadata_extra: dict[str, Any] | None = None,
+    allow_raw_private: bool = False,
 ) -> list[str]:
     event_ids: list[str] = []
     for index, item in enumerate(snapshot):
@@ -116,6 +118,7 @@ def retain_worktree_snapshot(
             source=str(item.get("source") or "git-snapshot"),
             scope=scope,
             metadata=metadata,
+            allow_raw_private=allow_raw_private,
         )
         event_ids.append(event.id)
     return event_ids
