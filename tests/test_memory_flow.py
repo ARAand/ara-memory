@@ -5104,6 +5104,71 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(memory.spool_stats()["done"], 1)
             self.assertTrue(report.reports[0]["doctor_passed"])
 
+    def test_worker_loop_reports_recall_regression_failure_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: Baseline drift should fail when recall selects a different worker capsule set.",
+                source="test",
+                scope="loop-regression",
+            )
+            memory.consolidate()
+            manifest = root / "recall_regression_manifest.json"
+            baseline = root / "recall-regression-baseline.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "name": "drift_case",
+                                "query": "baseline drift worker capsule set",
+                                "scope": "loop-regression",
+                                "expected_terms": ["baseline", "drift"],
+                                "budget": 900,
+                                "include_global": False,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baseline.write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "cases": [
+                            {
+                                "name": "drift_case",
+                                "passed": True,
+                                "details": {
+                                    "estimated_tokens": 100,
+                                    "selected_capsule_ids": ["cap_nonexistent"],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = memory.worker_loop(
+                scope="loop-regression",
+                iterations=1,
+                interval_seconds=0,
+                doctor_query="worker loop regression health",
+                recall_budget=1200,
+                hot_budget=700,
+                regression_manifest=manifest,
+                regression_baseline=baseline,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertIn("recall_regression", report.reports[0]["failed_steps"])
+            self.assertIn("selected_capsule_overlap_below_threshold", report.reports[0]["reason"])
+
     def test_worker_schedule_writes_reviewable_task_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5157,7 +5222,13 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Set-Location -LiteralPath `$WorkingDirectory", script)
             self.assertIn("-EncodedCommand", script)
             self.assertIn("worker-task.log", script)
-            self.assertIn("& `$PythonPath @WorkerArgs *>> `$LogPath", script)
+            self.assertIn(
+                "& `$PythonPath @WorkerArgs 2>&1 | Out-File -LiteralPath `$LogPath -Append -Encoding utf8",
+                script,
+            )
+            self.assertIn("Running worker preflight before registering scheduled task", script)
+            self.assertIn("& $PythonPath @WorkerArgs", script)
+            self.assertLess(script.index("Worker preflight failed"), script.index("Register-ScheduledTask"))
             self.assertIn("New-TimeSpan -Minutes 7", script)
             self.assertIn("ExecutionTimeLimit", script)
             self.assertIn("StartWhenAvailable", script)
@@ -5223,6 +5294,17 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertFalse(unsafe_loop.passed)
             self.assertTrue(any("--iterations 1" in item for item in unsafe_loop.issues))
+            output.write_text(
+                script.replace("& $PythonPath @WorkerArgs", "Write-Host \"worker preflight missing\""),
+                encoding="utf-8",
+            )
+            missing_preflight = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(missing_preflight.passed)
+            self.assertTrue(any("preflight invocation" in item for item in missing_preflight.issues))
 
     def test_worker_schedule_verify_cli_reports_missing_or_valid_scripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -62,13 +62,14 @@ class ScheduleVerification:
             "- install/status/uninstall scripts exist",
             "- scheduled action uses structured worker arguments",
             "- worker-loop runs as one external-scheduler iteration",
+            "- install script runs the same worker command once as a preflight before registration",
             "- overlapping scheduled starts are ignored",
             "- recall-regression manifest and baseline are valid when required",
             f"- repetition interval is <= {self.details.get('max_interval_minutes')} minutes",
             "",
             "Not checked:",
-            "- task installed or enabled in Windows Task Scheduler",
-            "- Python executable can run in the scheduled account",
+            "- install script has been executed and preflight has passed on this machine",
+            "- task installed or enabled in Windows Task Scheduler after installation",
             "- latest worker run passed",
             "- worker log health",
         ]
@@ -228,7 +229,9 @@ def verify_windows_worker_task_script(
         "encoded powershell action": "-EncodedCommand",
         "worker argv splatting": "@WorkerArgs",
         "python path invocation": "& `$PythonPath @WorkerArgs",
-        "worker log append": "*>> `$LogPath",
+        "utf8 worker log append": "Out-File -LiteralPath `$LogPath -Append -Encoding utf8",
+        "worker preflight invocation": "& $PythonPath @WorkerArgs",
+        "worker preflight failure gate": "Worker preflight failed",
         "overlap prevention": "MultipleInstances IgnoreNew",
         "execution time limit": "ExecutionTimeLimit",
         "missed run catch-up": "StartWhenAvailable",
@@ -246,6 +249,10 @@ def verify_windows_worker_task_script(
         issues.append("install script command preview does not match PythonPath and WorkerArgs")
     if not command_tokens:
         issues.append("install script missing command preview")
+    preflight_index = install_text.find("Worker preflight failed")
+    registration_index = install_text.find("Register-ScheduledTask")
+    if preflight_index == -1 or registration_index == -1 or preflight_index > registration_index:
+        issues.append("install script must run worker preflight before Register-ScheduledTask")
     if len(worker_args) < 3 or worker_args[:3] != ["-m", "ara_memory", "worker-loop"]:
         issues.append("install script must run ara_memory worker-loop")
     if worker_scope != scope:
@@ -319,6 +326,16 @@ def _powershell_task_script(
             f"$Command = '{_ps(command)}'",
             "$LogDirectory = Split-Path -Parent $LogPath",
             "New-Item -ItemType Directory -Force -Path $LogDirectory | Out-Null",
+            "Write-Host \"Running worker preflight before registering scheduled task...\"",
+            "& $PythonPath @WorkerArgs",
+            "$PreflightExit = $LASTEXITCODE",
+            "if ($null -eq $PreflightExit) {",
+            "    $PreflightExit = 0",
+            "}",
+            "if ($PreflightExit -ne 0) {",
+            "    throw \"Worker preflight failed with exit code $PreflightExit; fix worker gates before registering scheduled task.\"",
+            "}",
+            "Write-Host \"Worker preflight passed.\"",
             "$RunLines = @(",
             f"    \"`$WorkingDirectory = '{_ps(str(repo))}'\",",
             f"    \"`$LogPath = '{_ps(str(log_path))}'\",",
@@ -329,7 +346,7 @@ def _powershell_task_script(
             "    \"`$stamp = Get-Date -Format o\",",
             "    \"Add-Content -LiteralPath `$LogPath -Value `\"[`$stamp] starting Ara Memory worker`\"\",",
             "    'try {',",
-            "    \"    & `$PythonPath @WorkerArgs *>> `$LogPath\",",
+            "    \"    & `$PythonPath @WorkerArgs 2>&1 | Out-File -LiteralPath `$LogPath -Append -Encoding utf8\",",
             "    '    $exit = $LASTEXITCODE',",
             "    \"    Add-Content -LiteralPath `$LogPath -Value `\"[`$(Get-Date -Format o)] worker exited with code `$exit`\"\",",
             "    '    exit $exit',",
@@ -390,7 +407,7 @@ def _powershell_status_script(*, task_name: str, log_path: Path) -> str:
             "Write-Host \"Worker log: $LogPath\"",
             "if (Test-Path -LiteralPath $LogPath) {",
             "    Write-Host \"Recent worker log lines:\"",
-            "    Get-Content -LiteralPath $LogPath -Tail 40",
+            "    Get-Content -LiteralPath $LogPath -Tail 40 | ForEach-Object { $_ -replace \"`0\", \"\" }",
             "} else {",
             "    Write-Host \"Worker log does not exist yet.\"",
             "}",

@@ -408,17 +408,21 @@ a foreground loop while developing.
 `worker-schedule` writes a reviewable Windows Task Scheduler install script for
 running `worker-loop --iterations 1` periodically. It also writes matching
 status and uninstall scripts next to the install script, and routes scheduled
-worker output to `.ara-memory/logs/worker-task.log`. It does not register the
-task itself; inspect the generated scripts before running them.
+worker output to `.ara-memory/logs/worker-task.log`. The install script runs the
+same worker command once as a preflight and refuses to register the task if the
+worker gates fail. It does not register the task until that script is run;
+inspect the generated scripts before running them.
 `worker-schedule-verify` checks that the install/status/uninstall scripts exist,
 use structured worker arguments for `worker-loop --iterations 1`, keep
-overlapping runs ignored, include valid recall regression gates, and stay within
-the configured interval budget. This is script-readiness evidence only: after
-reviewing the scripts, install with `.ara-memory/scripts/install-worker-task.ps1`,
+overlapping runs ignored, include valid recall regression gates, include the
+registration preflight, and stay within the configured interval budget. This is
+script-readiness evidence only: after reviewing the scripts, install with
+`.ara-memory/scripts/install-worker-task.ps1`,
 inspect with `.ara-memory/scripts/status-worker-task.ps1`, and remove with
 `.ara-memory/scripts/uninstall-worker-task.ps1`.
 It does not prove that the task is installed, enabled, running under the intended
-Windows account, able to execute Python, or producing healthy worker logs.
+Windows account, or producing healthy worker logs. It also does not execute the
+preflight; the install script does.
 Schedule verification itself does not spend AI API tokens; it reads local scripts
 and JSON regression files. Scheduled worker runs are local/deterministic by
 default and only spend external model/API cost if an external advisor/model

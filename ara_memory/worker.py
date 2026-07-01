@@ -298,7 +298,12 @@ def _run_locked_worker(
         )
 
     passed = all(step.passed for step in steps)
-    return WorkerReport(scope=scope, passed=passed, steps=steps)
+    return WorkerReport(
+        scope=scope,
+        passed=passed,
+        reason="" if passed else _worker_failure_reason(steps),
+        steps=steps,
+    )
 
 
 def _compact_quality(payload: dict[str, Any], *, limit: int) -> dict[str, Any]:
@@ -350,11 +355,13 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
     regression = by_name.get("recall_regression")
     maintenance = by_name.get("maintenance")
     episode = by_name.get("episode_summary")
+    failed_steps = [step.name for step in report.steps if not step.passed]
     return {
         "iteration": iteration,
         "passed": report.passed,
         "skipped": report.skipped,
         "reason": report.reason,
+        "failed_steps": failed_steps,
         "drain": {
             "processed": _detail_value(drain, "processed", 0),
             "succeeded": _detail_value(drain, "succeeded", 0),
@@ -374,6 +381,62 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
         "recall_regression_passed": bool(regression.detail.get("passed", False)) if regression else None,
         "maintenance_integrity": maintenance.detail.get("sqlite_integrity") if maintenance else None,
     }
+
+
+def _worker_failure_reason(steps: list[WorkerStep]) -> str:
+    failed = [step for step in steps if not step.passed]
+    if not failed:
+        return ""
+    parts: list[str] = []
+    for step in failed[:3]:
+        detail = _step_failure_detail(step.detail)
+        parts.append(f"{step.name}: {detail}" if detail else step.name)
+    if len(failed) > 3:
+        parts.append(f"+{len(failed) - 3} more failed steps")
+    return "; ".join(parts)
+
+
+def _step_failure_detail(detail: dict[str, Any]) -> str:
+    reason = detail.get("reason")
+    if reason:
+        return str(reason)
+    baseline_failures = _regression_failures(detail.get("baseline_comparison", []))
+    if baseline_failures:
+        return "; ".join(baseline_failures)
+    case_failures = _regression_failures(detail.get("cases", []))
+    if case_failures:
+        return "; ".join(case_failures)
+    if detail.get("passed") is False:
+        return "passed=false"
+    return ""
+
+
+def _regression_failures(items: Any) -> list[str]:
+    failures: list[str] = []
+    if not isinstance(items, list):
+        return failures
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "case"))
+        details = item.get("details", {})
+        if not isinstance(details, dict):
+            continue
+        raw_failures = details.get("failures", [])
+        if isinstance(raw_failures, list) and raw_failures:
+            joined = ", ".join(str(value) for value in raw_failures[:3])
+            failures.append(f"{name} {joined}")
+            continue
+        if item.get("passed") is False:
+            expected_hits = details.get("expected_hits", {})
+            missing_terms = []
+            if isinstance(expected_hits, dict):
+                missing_terms = [str(term) for term, hit in expected_hits.items() if not hit]
+            if missing_terms:
+                failures.append(f"{name} missing expected terms: {', '.join(missing_terms[:3])}")
+            else:
+                failures.append(f"{name} failed")
+    return failures
 
 
 def _detail_value(step: WorkerStep | None, key: str, default: Any) -> Any:
