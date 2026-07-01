@@ -497,8 +497,10 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_TARGET_BACKUP_BYTES,
         help="Target backup bytes after deleting selected candidates. Defaults to 67108864 (64 MiB).",
     )
+    backup_stewardship.add_argument("--quarantine-failed", action="store_true")
     backup_stewardship.add_argument("--apply", action="store_true")
     backup_stewardship.add_argument("--confirm", default="")
+    backup_stewardship.add_argument("--quarantine-confirm", default="")
     backup_stewardship.add_argument("--json", action="store_true")
     verify_backup = sub.add_parser("verify-backup")
     verify_backup.add_argument("path", type=Path)
@@ -596,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
     retention_cycle.add_argument("--doctor-query", default="current memory state")
     retention_cycle.add_argument("--no-global", action="store_true")
     retention_cycle.add_argument("--no-shadow", action="store_true")
+    retention_cycle.add_argument("--no-lock", action="store_true")
+    retention_cycle.add_argument("--lock-stale-seconds", type=int, default=3600)
     retention_cycle.add_argument("--json", action="store_true")
     candidate_pressure = sub.add_parser("candidate-pressure")
     candidate_pressure.add_argument("--scope", default=None)
@@ -1276,8 +1280,10 @@ def main(argv: list[str] | None = None) -> int:
             keep_latest=args.keep_latest,
             keep_retention_cycles=args.keep_retention_cycles,
             target_backup_bytes=args.target_backup_bytes,
+            quarantine_failed=args.quarantine_failed,
             apply=args.apply,
             confirm=args.confirm,
+            quarantine_confirm=args.quarantine_confirm,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
@@ -1464,6 +1470,8 @@ def main(argv: list[str] | None = None) -> int:
             include_global=not args.no_global,
             doctor_query=args.doctor_query,
             shadow=not args.no_shadow,
+            use_lock=not args.no_lock,
+            lock_stale_seconds=args.lock_stale_seconds,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

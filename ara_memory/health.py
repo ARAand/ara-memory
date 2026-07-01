@@ -243,7 +243,10 @@ def _backup_stewardship_report(
     backup_bytes = int(stats.get("backup_bytes", 0) or 0)
     if backup_bytes <= target_backup_bytes:
         return None
-    return memory.backup_stewardship(target_backup_bytes=target_backup_bytes).as_dict()
+    return memory.backup_stewardship(
+        target_backup_bytes=target_backup_bytes,
+        quarantine_failed=True,
+    ).as_dict()
 
 
 def _backup_pressure_signal(
@@ -276,6 +279,17 @@ def _backup_pressure_signal(
             "backup_pressure",
             False,
             "backup stewardship is blocked; inspect backup directory safety before cleanup",
+            severity="warning",
+            value=stewardship,
+        )
+    quarantine_candidates = int(totals.get("quarantine_candidates", 0) or 0)
+    if quarantine_candidates:
+        after_quarantine = int(totals.get("bytes_after_quarantine_candidates", backup_bytes) or backup_bytes)
+        return HealthSignal(
+            "backup_pressure",
+            False,
+            f"backup bytes {backup_bytes} exceed target {target_backup_bytes}; "
+            f"{quarantine_candidates} failed-verification backups can be quarantined to leave {after_quarantine} live backup bytes",
             severity="warning",
             value=stewardship,
         )
@@ -509,7 +523,11 @@ def _recommend(signals: list[HealthSignal]) -> list[str]:
             recommendations.append("Create and verify a fresh backup, then run restore-drill.")
         elif signal.name == "backup_pressure":
             totals = (signal.value or {}).get("totals", {}) if isinstance(signal.value, dict) else {}
-            if int(totals.get("delete_candidates", 0) or 0) > 0:
+            if int(totals.get("quarantine_candidates", 0) or 0) > 0:
+                recommendations.append(
+                    "Run backup-stewardship dry-run with --quarantine-failed, then apply only reviewed failed-backup moves with exact quarantine confirmation."
+                )
+            elif int(totals.get("delete_candidates", 0) or 0) > 0:
                 recommendations.append(
                     "Run backup-stewardship dry-run, then apply only reviewed redundant verified backup deletions with exact confirmation."
                 )

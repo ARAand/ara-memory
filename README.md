@@ -468,7 +468,10 @@ any destructive pruning is considered.
 `retention-cycle` is the preferred non-destructive pruning readiness gate. It
 creates a fresh backup, verifies it, exports cold capsules, verifies that export,
 runs prune-plan with representative recall queries, and runs shadow-prune in a
-restored sandbox. It does not modify the live store. `--no-shadow` is allowed
+restored sandbox. It does not modify the live store. By default it takes the
+same worker lock used by scheduled worker-loop runs, so backup/export/shadow
+evidence is not generated while the background worker is mutating memory; use
+`--no-lock` only when the store is otherwise quiescent. `--no-shadow` is allowed
 only for partial evidence collection and does not pass pruning readiness. Each
 run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 `health` uses the latest passing report to distinguish unmanaged cold pressure
@@ -544,6 +547,8 @@ memory:
 
 ```powershell
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed --apply --quarantine-confirm "QUARANTINE FAILED BACKUPS"
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --apply --confirm "DELETE OLD BACKUPS"
 ```
 
@@ -553,6 +558,10 @@ toward that budget. Apply mode deletes only verified backups that are neither
 among the latest kept backups, nor referenced by recent passing retention-cycle
 reports, nor referenced by active live-prune approvals. Failed-verification
 backups are preserved for manual inspection instead of being silently removed.
+When at least one verified backup exists, `--quarantine-failed` can move
+failed-verification backup ZIPs to `.ara-memory/archive/failed-backups/` after
+exact confirmation, preserving them outside the live backup pool so health
+pressure reflects restorable backups instead of legacy or corrupted evidence.
 
 ## Design Choices
 

@@ -2409,6 +2409,77 @@ class MemoryFlowTests(unittest.TestCase):
             kept_oldest = next(item for item in applied.items if Path(item.path).resolve() == oldest.resolve())
             self.assertIn("referenced-by-retention-cycle", kept_oldest.keep_reasons)
 
+    def test_backup_stewardship_quarantines_failed_backups_without_deleting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: failed backups should move out of the live pool.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            verified = backup_dir / "verified.zip"
+            failed = backup_dir / "failed.zip"
+            memory.backup(output=verified)
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            failed.write_text("not a valid zip", encoding="utf-8")
+
+            dry = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=1_000_000,
+                quarantine_failed=True,
+            )
+
+            self.assertTrue(dry.passed, dry.as_dict())
+            self.assertEqual(dry.totals["quarantine_candidates"], 1)
+            self.assertGreater(dry.totals["quarantine_candidate_bytes"], 0)
+            self.assertTrue(failed.exists())
+
+            blocked = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=1_000_000,
+                quarantine_failed=True,
+                apply=True,
+            )
+            self.assertFalse(blocked.passed, blocked.as_dict())
+            self.assertTrue(failed.exists())
+
+            applied = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=1_000_000,
+                quarantine_failed=True,
+                apply=True,
+                quarantine_confirm="QUARANTINE FAILED BACKUPS",
+            )
+
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertEqual(applied.totals["quarantined"], 1)
+            self.assertTrue(verified.exists())
+            self.assertFalse(failed.exists())
+            quarantined_item = next(item for item in applied.items if item.quarantined)
+            self.assertTrue(Path(quarantined_item.quarantine_path).exists())
+            self.assertIn("archive", quarantined_item.quarantine_path)
+
+    def test_backup_stewardship_does_not_quarantine_when_no_verified_backup_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            backup_dir = memory.store.root / "backups"
+            failed = backup_dir / "only-failed.zip"
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            failed.write_text("not a valid zip", encoding="utf-8")
+
+            report = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+                quarantine_failed=True,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.totals["verified"], 0)
+            self.assertEqual(report.totals["quarantine_candidates"], 0)
+            self.assertTrue(failed.exists())
+
     def test_backup_stewardship_blocks_reparse_backup_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3449,6 +3520,41 @@ class MemoryFlowTests(unittest.TestCase):
             retention_signal = next(signal for signal in health.signals if signal.name == "retention_cycle")
             self.assertFalse(retention_signal.passed, health.as_dict())
             self.assertIn("blocked", retention_signal.detail)
+
+    def test_retention_cycle_respects_worker_lock_before_writing_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: retention-cycle must not race the scheduled worker.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            lock = FileLock(memory.store.root, "worker", stale_seconds=3600)
+            lock_result = lock.acquire()
+            self.assertTrue(lock_result.acquired)
+            try:
+                report = memory.retention_cycle(
+                    scope="alpha",
+                    backup_output=root / "cycle-backup.zip",
+                    cold_output=root / "cycle-cold.zip",
+                    report_output=root / "memory" / "archive" / "retention-cycles" / "locked-cycle.json",
+                    recall_queries=["scheduled worker race"],
+                    recall_budget=900,
+                    doctor_query="scheduled worker race",
+                )
+            finally:
+                lock.release()
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertFalse(report.lock["acquired"])
+            self.assertIn("worker lock", " ".join(report.recommendations))
+            self.assertFalse((root / "cycle-backup.zip").exists())
+            self.assertFalse((root / "cycle-cold.zip").exists())
+            self.assertFalse((root / "memory" / "archive" / "retention-cycles" / "locked-cycle.json").exists())
 
     def test_health_recognizes_latest_retention_cycle_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

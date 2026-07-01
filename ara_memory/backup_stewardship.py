@@ -14,6 +14,7 @@ from ara_memory.storage import MemoryStore
 
 
 BACKUP_DELETE_CONFIRMATION = "DELETE OLD BACKUPS"
+FAILED_BACKUP_QUARANTINE_CONFIRMATION = "QUARANTINE FAILED BACKUPS"
 VERIFICATION_CACHE_VERSION = 2
 DEFAULT_TARGET_BACKUP_BYTES = 64 * 1024 * 1024
 
@@ -28,6 +29,9 @@ class BackupStewardshipItem:
     referenced_by: list[str] = field(default_factory=list)
     delete_candidate: bool = False
     deleted: bool = False
+    quarantine_candidate: bool = False
+    quarantined: bool = False
+    quarantine_path: str | None = None
     verification_cached: bool = False
     error: str | None = None
 
@@ -41,6 +45,9 @@ class BackupStewardshipItem:
             "referenced_by": self.referenced_by,
             "delete_candidate": self.delete_candidate,
             "deleted": self.deleted,
+            "quarantine_candidate": self.quarantine_candidate,
+            "quarantined": self.quarantined,
+            "quarantine_path": self.quarantine_path,
             "verification_cached": self.verification_cached,
         }
         if self.error:
@@ -79,9 +86,14 @@ class BackupStewardshipReport:
                 f"target_backup_bytes={self.totals['target_backup_bytes']}, "
                 f"delete_candidates={self.totals['delete_candidates']}, "
                 f"candidate_bytes={self.totals['candidate_bytes']}, "
+                f"quarantine_candidates={self.totals['quarantine_candidates']}, "
+                f"quarantine_candidate_bytes={self.totals['quarantine_candidate_bytes']}, "
                 f"bytes_after_candidates={self.totals['bytes_after_candidates']}, "
+                f"bytes_after_quarantine_candidates={self.totals['bytes_after_quarantine_candidates']}, "
                 f"deleted={self.totals['deleted']}, "
+                f"quarantined={self.totals['quarantined']}, "
                 f"delete_errors={self.totals['delete_errors']}, "
+                f"quarantine_errors={self.totals['quarantine_errors']}, "
                 f"verification_cache_hits={self.totals['verification_cache_hits']}"
             ),
         ]
@@ -93,6 +105,10 @@ class BackupStewardshipReport:
             status = "delete-candidate" if item.delete_candidate else "keep"
             if item.deleted:
                 status = "deleted"
+            if item.quarantine_candidate:
+                status = "quarantine-candidate"
+            if item.quarantined:
+                status = "quarantined"
             reasons = ", ".join(item.keep_reasons) if item.keep_reasons else "redundant"
             lines.append(f"- {status}: {item.path} ({item.bytes} bytes; {reasons})")
         if len(self.items) > 20:
@@ -106,8 +122,10 @@ def run_backup_stewardship(
     keep_latest: int = 3,
     keep_retention_cycles: int = 2,
     target_backup_bytes: int | None = DEFAULT_TARGET_BACKUP_BYTES,
+    quarantine_failed: bool = False,
     apply: bool = False,
     confirm: str = "",
+    quarantine_confirm: str = "",
 ) -> BackupStewardshipReport:
     if keep_latest < 1:
         raise ValueError("keep_latest must be at least 1")
@@ -166,13 +184,21 @@ def run_backup_stewardship(
         items.append(info)
     items.extend(scan_errors)
     bytes_after_candidates = _mark_delete_candidates(items, target_backup_bytes=target_backup_bytes)
+    bytes_after_quarantine = _mark_quarantine_candidates(items, enabled=quarantine_failed)
 
     passed = True
-    if apply and confirm != BACKUP_DELETE_CONFIRMATION:
+    delete_candidates = sum(1 for item in items if item.delete_candidate)
+    if apply and (delete_candidates or not quarantine_failed) and confirm != BACKUP_DELETE_CONFIRMATION:
         passed = False
         recommendations = [
             f"Refusing deletion without confirm={BACKUP_DELETE_CONFIRMATION!r}.",
             "Rerun without --apply for review, or pass the exact confirmation string after reviewing candidates.",
+        ]
+    elif apply and quarantine_failed and quarantine_confirm != FAILED_BACKUP_QUARANTINE_CONFIRMATION:
+        passed = False
+        recommendations = [
+            f"Refusing failed-backup quarantine without quarantine_confirm={FAILED_BACKUP_QUARANTINE_CONFIRMATION!r}.",
+            "Rerun without --apply for review, or pass the exact quarantine confirmation after reviewing failed backups.",
         ]
     else:
         recommendations = _recommend(
@@ -180,11 +206,40 @@ def run_backup_stewardship(
             apply=apply,
             target_backup_bytes=target_backup_bytes,
             bytes_after_candidates=bytes_after_candidates,
+            bytes_after_quarantine=bytes_after_quarantine,
         )
 
     deleted_bytes = 0
     deleted = 0
     deletion_errors = 0
+    quarantined = 0
+    quarantine_bytes = 0
+    quarantine_errors = 0
+    if apply and passed and quarantine_failed:
+        quarantine_dir = root / "archive" / "failed-backups"
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        for item in items:
+            if not item.quarantine_candidate:
+                continue
+            path = Path(item.path)
+            try:
+                _assert_safe_backup_path(backup_dir, path)
+                if not path.is_file():
+                    raise FileNotFoundError(path)
+                target = _unique_quarantine_path(quarantine_dir, path.name)
+                path.replace(target)
+            except Exception as exc:
+                item.error = f"{type(exc).__name__}: {exc}"
+                item.keep_reasons.append("quarantine-failed-inspect-manually")
+                item.quarantine_candidate = False
+                quarantine_errors += 1
+                passed = False
+                continue
+            item.quarantined = True
+            item.quarantine_path = str(target)
+            quarantined += 1
+            quarantine_bytes += item.bytes
+
     if apply and passed:
         for item in items:
             if not item.delete_candidate:
@@ -225,9 +280,24 @@ def run_backup_stewardship(
             apply=True,
             target_backup_bytes=target_backup_bytes,
             bytes_after_candidates=bytes_after_candidates,
+            bytes_after_quarantine=bytes_after_quarantine,
         )
+    elif apply and passed and quarantine_failed:
+        recommendations = _recommend(
+            items,
+            apply=True,
+            target_backup_bytes=target_backup_bytes,
+            bytes_after_candidates=bytes_after_candidates,
+            bytes_after_quarantine=bytes_after_quarantine,
+        )
+    if apply and quarantine_errors:
+        recommendations = [
+            f"{quarantine_errors} failed-backup quarantines failed; inspect item errors before rerunning.",
+            "Successfully quarantined backups remain under archive/failed-backups.",
+        ]
 
     candidate_bytes = sum(item.bytes for item in items if item.delete_candidate)
+    quarantine_candidate_bytes = sum(item.bytes for item in items if item.quarantine_candidate)
     totals = {
         "backups": len(items),
         "bytes": sum(item.bytes for item in items),
@@ -235,11 +305,17 @@ def run_backup_stewardship(
         "verification_cache_hits": sum(1 for item in items if item.verification_cached),
         "target_backup_bytes": target_backup_bytes,
         "bytes_after_candidates": bytes_after_candidates,
+        "bytes_after_quarantine_candidates": bytes_after_quarantine,
         "target_reached": target_backup_bytes is None or bytes_after_candidates <= target_backup_bytes,
         "protected_bytes": sum(item.bytes for item in items if item.keep_reasons),
         "eligible_bytes": sum(item.bytes for item in items if item.verified and not item.keep_reasons),
         "delete_candidates": sum(1 for item in items if item.delete_candidate),
         "candidate_bytes": candidate_bytes,
+        "quarantine_candidates": sum(1 for item in items if item.quarantine_candidate),
+        "quarantine_candidate_bytes": quarantine_candidate_bytes,
+        "quarantined": quarantined,
+        "quarantine_bytes": quarantine_bytes,
+        "quarantine_errors": quarantine_errors,
         "deleted": deleted,
         "deleted_bytes": deleted_bytes,
         "delete_errors": deletion_errors,
@@ -277,6 +353,21 @@ def _mark_delete_candidates(items: list[BackupStewardshipItem], *, target_backup
         item.delete_candidate = True
         remaining_bytes -= item.bytes
     return remaining_bytes
+
+
+def _mark_quarantine_candidates(items: list[BackupStewardshipItem], *, enabled: bool) -> int:
+    for item in items:
+        item.quarantine_candidate = False
+    verified_exists = any(item.verified for item in items)
+    if not enabled or not verified_exists:
+        return sum(item.bytes for item in items if not item.delete_candidate)
+    for item in items:
+        if item.verified or item.deleted:
+            continue
+        if not Path(item.path).name.lower().endswith(".zip"):
+            continue
+        item.quarantine_candidate = True
+    return sum(item.bytes for item in items if not item.delete_candidate and not item.quarantine_candidate)
 
 
 def _backup_item(
@@ -421,6 +512,19 @@ def _assert_safe_backup_path(backup_dir: Path, path: Path) -> None:
         raise ValueError(f"Refusing to delete backup outside resolved backup directory: {path}")
 
 
+def _unique_quarantine_path(quarantine_dir: Path, name: str) -> Path:
+    candidate = quarantine_dir / name
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    for index in range(1, 10_000):
+        candidate = quarantine_dir / f"{stem}-{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"Could not allocate quarantine path for {name}")
+
+
 def _is_reparse_point(path: Path) -> bool:
     if path.is_symlink():
         return True
@@ -447,11 +551,17 @@ def _empty_totals(
         "verification_cache_hits": 0,
         "target_backup_bytes": target_backup_bytes,
         "bytes_after_candidates": 0,
+        "bytes_after_quarantine_candidates": 0,
         "target_reached": True,
         "protected_bytes": 0,
         "eligible_bytes": 0,
         "delete_candidates": 0,
         "candidate_bytes": 0,
+        "quarantine_candidates": 0,
+        "quarantine_candidate_bytes": 0,
+        "quarantined": 0,
+        "quarantine_bytes": 0,
+        "quarantine_errors": 0,
         "deleted": 0,
         "deleted_bytes": 0,
         "delete_errors": 0,
@@ -515,10 +625,23 @@ def _recommend(
     apply: bool,
     target_backup_bytes: int | None,
     bytes_after_candidates: int,
+    bytes_after_quarantine: int,
 ) -> list[str]:
     candidates = [item for item in items if item.delete_candidate]
+    quarantine_candidates = [item for item in items if item.quarantine_candidate]
+    quarantined = [item for item in items if item.quarantined]
     failed = [item for item in items if not item.verified]
     if apply:
+        if quarantined and not candidates:
+            recommendations = [
+                f"Quarantined {len(quarantined)} failed-verification backups under archive/failed-backups.",
+                "Verified backups were preserved in the live backup directory.",
+            ]
+            if target_backup_bytes is not None and bytes_after_quarantine > target_backup_bytes:
+                recommendations.append(
+                    "Backup bytes still exceed the target after quarantine because protected verified backups are above the budget."
+                )
+            return recommendations
         recommendations = [
             f"Deleted {len(candidates)} redundant verified backups.",
             "Latest backups, retention-cycle-referenced backups, and failed-verification backups were preserved.",
@@ -537,6 +660,17 @@ def _recommend(
             recommendations.insert(
                 1,
                 f"Candidate set is sized to leave about {bytes_after_candidates} backup bytes against target {target_backup_bytes}.",
+        )
+        return recommendations
+    if quarantine_candidates:
+        recommendations = [
+            f"{len(quarantine_candidates)} failed-verification backups can be moved to archive/failed-backups after review.",
+            f"Run with --apply --quarantine-failed --quarantine-confirm {FAILED_BACKUP_QUARANTINE_CONFIRMATION!r} to preserve them outside the live backup pool.",
+        ]
+        if target_backup_bytes is not None:
+            recommendations.insert(
+                1,
+                f"Quarantine would leave about {bytes_after_quarantine} live backup bytes against target {target_backup_bytes}.",
             )
         return recommendations
     if failed:

@@ -7,6 +7,7 @@ from typing import Any
 
 from ara_memory.backup import create_backup, verify_backup
 from ara_memory.cold_export import export_cold_capsules, verify_cold_export
+from ara_memory.lock import FileLock
 from ara_memory.models import utc_now
 from ara_memory.prune import PrunePlanner, ShadowPruner
 from ara_memory.storage import MemoryStore
@@ -24,6 +25,7 @@ class RetentionCycleReport:
     shadow_prune: dict[str, Any] | None
     recommendations: list[str]
     report_path: str | None = None
+    lock: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +39,7 @@ class RetentionCycleReport:
             "shadow_prune": self.shadow_prune,
             "recommendations": self.recommendations,
             "report_path": self.report_path,
+            "lock": self.lock,
         }
 
     def to_text(self) -> str:
@@ -47,6 +50,12 @@ class RetentionCycleReport:
         lines.append(f"status: {'pass' if self.passed else 'blocked'}")
         if self.report_path:
             lines.append(f"report: {self.report_path}")
+        if self.lock:
+            lines.append(
+                "lock: "
+                f"acquired={self.lock.get('acquired')}, "
+                f"reason={self.lock.get('reason', '')}"
+            )
         lines.append(f"backup: {self.backup.get('path')}")
         lines.append(f"cold_export: {self.cold_export.get('path')}")
         lines.append(
@@ -93,9 +102,75 @@ class RetentionCycleRunner:
         doctor_query: str = "current memory state",
         shadow: bool = True,
         report_output: Path | None = None,
+        use_lock: bool = True,
+        lock_stale_seconds: int = 3600,
     ) -> RetentionCycleReport:
         self.store.init()
         recall_queries = recall_queries or []
+        if use_lock:
+            lock = FileLock(self.store.root, "worker", stale_seconds=lock_stale_seconds)
+            lock_result = lock.acquire()
+            if not lock_result.acquired:
+                return RetentionCycleReport(
+                    scope=scope,
+                    passed=False,
+                    backup={},
+                    backup_verification={},
+                    cold_export={},
+                    cold_export_verification={},
+                    prune_plan={},
+                    shadow_prune=None,
+                    recommendations=[
+                        "Retention-cycle skipped because the memory worker lock is already held.",
+                        "Rerun after the active worker finishes, or use --no-lock only when the store is otherwise quiescent.",
+                    ],
+                    lock=lock_result.as_dict(),
+                )
+            try:
+                return self._run_unlocked(
+                    scope=scope,
+                    backup_output=backup_output,
+                    cold_output=cold_output,
+                    limit=limit,
+                    recall_queries=recall_queries,
+                    recall_budget=recall_budget,
+                    include_global=include_global,
+                    doctor_query=doctor_query,
+                    shadow=shadow,
+                    report_output=report_output,
+                    lock=lock_result.as_dict(),
+                )
+            finally:
+                lock.release()
+        return self._run_unlocked(
+            scope=scope,
+            backup_output=backup_output,
+            cold_output=cold_output,
+            limit=limit,
+            recall_queries=recall_queries,
+            recall_budget=recall_budget,
+            include_global=include_global,
+            doctor_query=doctor_query,
+            shadow=shadow,
+            report_output=report_output,
+            lock=None,
+        )
+
+    def _run_unlocked(
+        self,
+        *,
+        scope: str | None,
+        backup_output: Path | None,
+        cold_output: Path | None,
+        limit: int | None,
+        recall_queries: list[str],
+        recall_budget: int,
+        include_global: bool,
+        doctor_query: str,
+        shadow: bool,
+        report_output: Path | None,
+        lock: dict[str, Any] | None,
+    ) -> RetentionCycleReport:
 
         backup = create_backup(self.store, output=backup_output)
         backup_payload = backup.as_dict()
@@ -146,6 +221,7 @@ class RetentionCycleRunner:
             prune_plan=plan_payload,
             shadow_prune=shadow_payload,
             recommendations=_recommend(passed, plan_payload, shadow_payload, recall_queries=recall_queries),
+            lock=lock,
         )
         report.report_path = str(_write_report(self.store, report, output=report_output))
         return report
