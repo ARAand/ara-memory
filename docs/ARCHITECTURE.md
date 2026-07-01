@@ -55,7 +55,7 @@ recall(query, scope, budget)
   -> recall_candidates(query, scope)
   -> optional hot memory prelude
   -> typed context pack
-  -> token budget trimming
+  -> token budget trimming with soft-budget compaction after enough evidence
   -> count rendered capsules, visible sections, and visible query-term coverage
 
 recall_candidates(query, scope)

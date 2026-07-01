@@ -243,6 +243,15 @@ class RecallCompiler:
         )
         untrimmed = "\n\n".join(parts).strip()
         pack = _enforce_budget(parts, budget)
+        pack, soft_budget_tokens, soft_budget_applied = _maybe_apply_soft_budget(
+            parts,
+            pack,
+            budget=budget,
+            terms=terms,
+            rendered_capsules=rendered_capsules,
+            include_hot=hot_state is not None,
+            intent_query=intent_query,
+        )
         evidence_text = _evidence_text(pack)
         visible_query_terms = _matched_query_terms(evidence_text, terms)
         visible_sections = _visible_sections(pack)
@@ -252,6 +261,8 @@ class RecallCompiler:
             "budget_tokens": budget,
             "estimated_tokens_before": estimate_tokens(untrimmed),
             "estimated_tokens_after": estimate_tokens(pack),
+            "soft_budget_tokens": soft_budget_tokens,
+            "soft_budget_applied": soft_budget_applied,
             "capsules_considered": int(candidate_result.diagnostics["capsules_considered"]),
             "capsules_filtered_by_risk": int(candidate_result.diagnostics["capsules_filtered_by_risk"]),
             "capsules_selected": len(capsules),
@@ -454,6 +465,48 @@ def _enforce_budget(parts: list[str], budget: int) -> str:
         trimmed = _drop_low_value_recall_parts(trimmed, budget=budget)
         pack = "\n\n".join(trimmed).strip()
     return pack
+
+
+def _maybe_apply_soft_budget(
+    parts: list[str],
+    pack: str,
+    *,
+    budget: int,
+    terms: list[str],
+    rendered_capsules: list[dict],
+    include_hot: bool,
+    intent_query: bool,
+) -> tuple[str, int | None, bool]:
+    if not include_hot or budget <= 900:
+        return pack, None, False
+    current_tokens = estimate_tokens(pack)
+    if current_tokens <= 0:
+        return pack, None, False
+    soft_budget = _soft_recall_budget(budget, intent_query=intent_query)
+    if soft_budget >= budget or current_tokens <= soft_budget:
+        return pack, soft_budget, False
+
+    current_terms = _matched_query_terms(_evidence_text(pack), terms)
+    current_visible = _visible_capsules(pack, rendered_capsules)
+    if len(current_terms) < max(1, min(len(terms), 2)) or not current_visible:
+        return pack, soft_budget, False
+
+    trial = _enforce_budget(parts, soft_budget)
+    if estimate_tokens(trial) >= current_tokens:
+        return pack, soft_budget, False
+    trial_terms = _matched_query_terms(_evidence_text(trial), terms)
+    trial_visible = _visible_capsules(trial, rendered_capsules)
+    min_terms = max(1, min(len(current_terms), max(2, int(len(terms) * 0.5))))
+    min_visible = max(1, min(len(current_visible), 2))
+    if len(trial_terms) < min_terms or len(trial_visible) < min_visible:
+        return pack, soft_budget, False
+    return trial, soft_budget, True
+
+
+def _soft_recall_budget(budget: int, *, intent_query: bool) -> int:
+    if intent_query:
+        return min(budget, max(900, int(budget * 0.60)))
+    return min(budget, max(720, int(budget * 0.48)))
 
 
 def _initial_part_limit(part: str, budget: int, part_count: int) -> int:

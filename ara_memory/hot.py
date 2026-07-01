@@ -82,18 +82,13 @@ class HotStateBuilder:
         lines = []
         seen = set()
         for cap in capsules:
-            body = compact_text(cap["body"], limit=260)
-            dedupe_key = (cap["kind"], cap["title"].lower(), body.lower())
-            if cap["id"] in seen or dedupe_key in seen or body.lower() in seen:
+            rendered = _format_hot_capsule(cap)
+            dedupe_key = (cap["kind"], _hot_text_key(rendered))
+            if cap["id"] in seen or dedupe_key in seen:
                 continue
             seen.add(cap["id"])
             seen.add(dedupe_key)
-            seen.add(body.lower())
-            lines.append(
-                f"- [{cap['kind']}] {cap['title']} "
-                f"(confidence {cap['confidence']:.2f}, salience {cap['salience']:.2f})\n"
-                f"  {body}"
-            )
+            lines.append(rendered)
             if len(lines) >= limit:
                 break
         return "\n".join(lines)
@@ -109,6 +104,33 @@ def _hot_kind_priority(kind: str) -> int:
     if kind in {"self", "preference"}:
         return 4
     return 1
+
+
+def _format_hot_capsule(cap: dict) -> str:
+    title = compact_text(str(cap["title"]), limit=150)
+    body = compact_text(str(cap["body"]), limit=190)
+    meta = f"(confidence {cap['confidence']:.2f}, salience {cap['salience']:.2f})"
+    if _body_repeats_title(title, body):
+        return f"- [{cap['kind']}] {body} {meta}"
+    return f"- [{cap['kind']}] {title} {meta}\n  {body}"
+
+
+def _body_repeats_title(title: str, body: str) -> bool:
+    title_key = _hot_text_key(title)
+    body_key = _hot_text_key(body)
+    if len(title_key) < 12 or len(body_key) < 12:
+        return False
+    shorter, longer = sorted((title_key, body_key), key=len)
+    return shorter in longer
+
+
+def _hot_text_key(text: str) -> str:
+    cleaned = re.sub(
+        r"^(decision|goal evidence|goal memory|self memory candidate|preference candidate):\s*",
+        "",
+        text.strip().lower(),
+    )
+    return re.sub(r"[^a-z0-9\uac00-\ud7a3]+", " ", cleaned).strip()
 
 
 def _enforce_hot_budget(parts: list[str], budget: int) -> str:

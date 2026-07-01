@@ -195,6 +195,11 @@ high-salience fallback bodies and emits a small "No direct memory evidence"
 notice instead of pretending to remember. `recall-context` applies that plan and
 emits the selected pack, so normal work can use one command while still
 preserving the budget decision.
+Recall budgets are ceilings, not targets. When hot memory is included and the
+pack already has enough visible evidence, recall applies a smaller soft budget
+instead of spending the whole allowance. Hot-memory items also avoid repeating
+the same title/body payload, keeping the always-on identity and goal layer
+closer to an index than another transcript.
 `recall-candidates` is the cheaper pre-render path: it returns ranked capsule
 ids and diagnostics without formatting a full memory pack. Working memory uses
 this path so action cues can be built from selected evidence without spending

@@ -901,6 +901,76 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("planned memory pack", payload["pack"].lower())
             self.assertIn("Ara Recall Plan", context.to_text())
 
+    def test_recall_with_hot_uses_soft_budget_after_enough_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: compact recall should stop after enough architecture safety evidence.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: compact recall architecture safety",
+                body="Compact recall should keep architecture safety gates visible without spending every available token.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.90,
+                source_event_ids=[event.id],
+                tags=["goal", "architecture", "safety"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory candidate: compact hot identity",
+                body="Ara preserves compact identity context while retrieving detailed architecture evidence by query.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["self", "identity"],
+                status=MemoryStatus.STABLE,
+            )
+            for index in range(6):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.DECISION,
+                        title=f"Decision: architecture safety gate {index}",
+                        body=(
+                            "Architecture safety gate evidence should remain visible. "
+                            "This verbose supporting detail is useful but should be compacted once enough evidence appears. "
+                            f"gate-index={index}"
+                        ),
+                        scope="alpha",
+                        confidence=0.84,
+                        salience=0.76,
+                        source_event_ids=[event.id],
+                        tags=["architecture", "safety", "gate"],
+                        status=MemoryStatus.STABLE,
+                    )
+                )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.build_hot(scope="alpha", budget=1200)
+
+            result = memory.recall_result(
+                "current architecture safety gates",
+                scope="alpha",
+                budget=1600,
+                include_hot=True,
+                include_global=False,
+            )
+
+            self.assertTrue(result.diagnostics["soft_budget_applied"], result.diagnostics)
+            self.assertLessEqual(
+                result.diagnostics["estimated_tokens_after"],
+                result.diagnostics["soft_budget_tokens"],
+            )
+            self.assertIn("architecture", result.pack.lower())
+            self.assertIn("safety", result.pack.lower())
+            self.assertIn("## Hot Memory", result.pack)
+
     def test_intent_query_focuses_hot_memory_on_goals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -8910,6 +8980,33 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertLessEqual(estimate_tokens(tight.pack), 500)
             self.assertIn("\n\n## Hot Memory\n", tight.pack)
             self.assertIn("# Ara Hot Memory\n\nScope: alpha", tight.pack)
+
+    def test_hot_memory_deduplicates_repeated_title_and_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: natural compact purpose.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural compact purpose",
+                body="Natural compact purpose.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.90,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+
+            hot = memory.build_hot(scope="alpha", budget=700)
+
+            self.assertIn("natural compact purpose", hot.text.lower())
+            self.assertEqual(hot.text.lower().count("natural compact purpose"), 1)
 
     def test_hot_memory_keeps_only_lifecycle_core_while_recall_finds_working_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
