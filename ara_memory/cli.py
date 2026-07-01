@@ -385,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--hot-budget", type=int, default=1200)
     worker.add_argument("--regression-manifest", type=Path, default=None)
     worker.add_argument("--regression-baseline", type=Path, default=None)
+    worker.add_argument("--regression-baseline-warn-only", action="store_true")
     worker.add_argument("--no-maintenance", action="store_true")
     worker.add_argument("--no-vacuum", action="store_true")
     worker.add_argument("--report-item-limit", type=int, default=20)
@@ -413,6 +414,7 @@ def main(argv: list[str] | None = None) -> int:
     worker_loop.add_argument("--hot-budget", type=int, default=1200)
     worker_loop.add_argument("--regression-manifest", type=Path, default=None)
     worker_loop.add_argument("--regression-baseline", type=Path, default=None)
+    worker_loop.add_argument("--regression-baseline-warn-only", action="store_true")
     worker_loop.add_argument("--no-maintenance", action="store_true")
     worker_loop.add_argument("--no-vacuum", action="store_true")
     worker_loop.add_argument("--report-item-limit", type=int, default=20)
@@ -1157,6 +1159,7 @@ def main(argv: list[str] | None = None) -> int:
             hot_budget=args.hot_budget,
             regression_manifest=args.regression_manifest,
             regression_baseline=args.regression_baseline,
+            regression_baseline_drift_warn_only=args.regression_baseline_warn_only,
             run_maintenance_step=not args.no_maintenance,
             vacuum=not args.no_vacuum,
             report_item_limit=args.report_item_limit,
@@ -1190,6 +1193,7 @@ def main(argv: list[str] | None = None) -> int:
             hot_budget=args.hot_budget,
             regression_manifest=args.regression_manifest,
             regression_baseline=args.regression_baseline,
+            regression_baseline_drift_warn_only=args.regression_baseline_warn_only,
             run_maintenance_step=not args.no_maintenance,
             vacuum=not args.no_vacuum,
             report_item_limit=args.report_item_limit,

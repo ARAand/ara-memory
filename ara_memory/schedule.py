@@ -121,6 +121,7 @@ def write_windows_worker_task_script(
         str(regression_manifest),
         "--regression-baseline",
         str(regression_baseline),
+        "--regression-baseline-warn-only",
         "--report-item-limit",
         "3",
     ]
@@ -204,6 +205,7 @@ def verify_windows_worker_task_script(
     )
     regression_manifest = option_values["--regression-manifest"][-1] if option_values["--regression-manifest"] else ""
     regression_baseline = option_values["--regression-baseline"][-1] if option_values["--regression-baseline"] else ""
+    regression_baseline_warn_only = "--regression-baseline-warn-only" in worker_args
     details.update(
         {
             "task_name": task_name,
@@ -221,6 +223,7 @@ def verify_windows_worker_task_script(
             "worker_interval_seconds": worker_interval_seconds,
             "regression_manifest": regression_manifest,
             "regression_baseline": regression_baseline,
+            "regression_baseline_warn_only": regression_baseline_warn_only,
         }
     )
 
@@ -232,6 +235,7 @@ def verify_windows_worker_task_script(
         "utf8 worker log append": "Out-File -LiteralPath `$LogPath -Append -Encoding utf8",
         "worker preflight invocation": "& $PythonPath @WorkerArgs",
         "worker preflight failure gate": "Worker preflight failed",
+        "baseline drift warn policy": "--regression-baseline-warn-only",
         "overlap prevention": "MultipleInstances IgnoreNew",
         "execution time limit": "ExecutionTimeLimit",
         "missed run catch-up": "StartWhenAvailable",
@@ -249,6 +253,8 @@ def verify_windows_worker_task_script(
         issues.append("install script command preview does not match PythonPath and WorkerArgs")
     if not command_tokens:
         issues.append("install script missing command preview")
+    if not regression_baseline_warn_only:
+        issues.append("install script missing --regression-baseline-warn-only")
     preflight_index = install_text.find("Worker preflight failed")
     registration_index = install_text.find("Register-ScheduledTask")
     if preflight_index == -1 or registration_index == -1 or preflight_index > registration_index:

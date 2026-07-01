@@ -5169,6 +5169,25 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("recall_regression", report.reports[0]["failed_steps"])
             self.assertIn("selected_capsule_overlap_below_threshold", report.reports[0]["reason"])
 
+            warn_only = memory.worker_loop(
+                scope="loop-regression",
+                iterations=1,
+                interval_seconds=0,
+                doctor_query="worker loop regression health",
+                recall_budget=1200,
+                hot_budget=700,
+                regression_manifest=manifest,
+                regression_baseline=baseline,
+                regression_baseline_drift_warn_only=True,
+            )
+
+            self.assertTrue(warn_only.passed, warn_only.as_dict())
+            self.assertEqual(warn_only.reports[0]["failed_steps"], [])
+            self.assertFalse(warn_only.reports[0]["recall_regression_passed"])
+            self.assertTrue(warn_only.reports[0]["recall_regression_cases_passed"])
+            self.assertFalse(warn_only.reports[0]["recall_regression_baseline_passed"])
+            self.assertTrue(warn_only.reports[0]["recall_regression_baseline_warn_only"])
+
     def test_worker_schedule_writes_reviewable_task_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5226,6 +5245,7 @@ class MemoryFlowTests(unittest.TestCase):
                 "& `$PythonPath @WorkerArgs 2>&1 | Out-File -LiteralPath `$LogPath -Append -Encoding utf8",
                 script,
             )
+            self.assertIn("--regression-baseline-warn-only", script)
             self.assertIn("Running worker preflight before registering scheduled task", script)
             self.assertIn("& $PythonPath @WorkerArgs", script)
             self.assertLess(script.index("Worker preflight failed"), script.index("Register-ScheduledTask"))
@@ -5243,6 +5263,7 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertTrue(verification.passed, verification.as_dict())
             self.assertEqual(verification.details["interval_minutes"], 7)
+            self.assertTrue(verification.details["regression_baseline_warn_only"])
             strict = memory.verify_worker_schedule(
                 output=output,
                 scope="test-scope",
@@ -5305,6 +5326,17 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertFalse(missing_preflight.passed)
             self.assertTrue(any("preflight invocation" in item for item in missing_preflight.issues))
+            output.write_text(
+                script.replace("    '--regression-baseline-warn-only',\n", ""),
+                encoding="utf-8",
+            )
+            missing_warn_only = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(missing_warn_only.passed)
+            self.assertTrue(any("--regression-baseline-warn-only" in item for item in missing_warn_only.issues))
 
     def test_worker_schedule_verify_cli_reports_missing_or_valid_scripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

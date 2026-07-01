@@ -79,6 +79,7 @@ def run_memory_worker(
     hot_budget: int = 1200,
     regression_manifest: Path | None = None,
     regression_baseline: Path | None = None,
+    regression_baseline_drift_warn_only: bool = False,
     run_maintenance_step: bool = True,
     vacuum: bool = True,
     report_item_limit: int = 20,
@@ -121,6 +122,7 @@ def run_memory_worker(
                 hot_budget=hot_budget,
                 regression_manifest=regression_manifest,
                 regression_baseline=regression_baseline,
+                regression_baseline_drift_warn_only=regression_baseline_drift_warn_only,
                 run_maintenance_step=run_maintenance_step,
                 vacuum=vacuum,
                 report_item_limit=report_item_limit,
@@ -149,6 +151,7 @@ def run_memory_worker(
         hot_budget=hot_budget,
         regression_manifest=regression_manifest,
         regression_baseline=regression_baseline,
+        regression_baseline_drift_warn_only=regression_baseline_drift_warn_only,
         run_maintenance_step=run_maintenance_step,
         vacuum=vacuum,
         report_item_limit=report_item_limit,
@@ -207,6 +210,7 @@ def _run_locked_worker(
     hot_budget: int,
     regression_manifest: Path | None,
     regression_baseline: Path | None,
+    regression_baseline_drift_warn_only: bool,
     run_maintenance_step: bool,
     vacuum: bool,
     report_item_limit: int,
@@ -285,7 +289,16 @@ def _run_locked_worker(
         cases = load_recall_regression_cases(regression_manifest)
         baseline = load_recall_regression_baseline(regression_baseline)
         regression = memory.recall_regression(cases, baseline=baseline)
-        steps.append(WorkerStep("recall_regression", regression.passed, regression.as_dict()))
+        regression_payload = _regression_worker_payload(
+            regression.as_dict(),
+            baseline_drift_warn_only=regression_baseline_drift_warn_only,
+        )
+        regression_passed = bool(
+            regression_payload["cases_passed"]
+            if regression_baseline_drift_warn_only
+            else regression_payload["passed"]
+        )
+        steps.append(WorkerStep("recall_regression", regression_passed, regression_payload))
 
     if run_maintenance_step:
         maintenance = memory.maintenance(vacuum=vacuum)
@@ -379,8 +392,23 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
         },
         "doctor_passed": bool(doctor.detail.get("passed", False)) if doctor else None,
         "recall_regression_passed": bool(regression.detail.get("passed", False)) if regression else None,
+        "recall_regression_cases_passed": bool(regression.detail.get("cases_passed", False)) if regression else None,
+        "recall_regression_baseline_passed": bool(regression.detail.get("baseline_passed", False)) if regression else None,
+        "recall_regression_baseline_warn_only": (
+            bool(regression.detail.get("baseline_drift_warn_only", False)) if regression else None
+        ),
         "maintenance_integrity": maintenance.detail.get("sqlite_integrity") if maintenance else None,
     }
+
+
+def _regression_worker_payload(payload: dict[str, Any], *, baseline_drift_warn_only: bool) -> dict[str, Any]:
+    annotated = dict(payload)
+    cases = [item for item in annotated.get("cases", []) if isinstance(item, dict)]
+    baseline = [item for item in annotated.get("baseline_comparison", []) if isinstance(item, dict)]
+    annotated["cases_passed"] = all(bool(item.get("passed", False)) for item in cases)
+    annotated["baseline_passed"] = all(bool(item.get("passed", False)) for item in baseline)
+    annotated["baseline_drift_warn_only"] = baseline_drift_warn_only
+    return annotated
 
 
 def _worker_failure_reason(steps: list[WorkerStep]) -> str:

@@ -410,13 +410,16 @@ running `worker-loop --iterations 1` periodically. It also writes matching
 status and uninstall scripts next to the install script, and routes scheduled
 worker output to `.ara-memory/logs/worker-task.log`. The install script runs the
 same worker command once as a preflight and refuses to register the task if the
-worker gates fail. It does not register the task until that script is run;
+worker's recall cases fail. Baseline drift is reported as a warning for the
+scheduled worker because normal capture/drain can legitimately add new relevant
+memories between runs. It does not register the task until that script is run;
 inspect the generated scripts before running them.
 `worker-schedule-verify` checks that the install/status/uninstall scripts exist,
 use structured worker arguments for `worker-loop --iterations 1`, keep
 overlapping runs ignored, include valid recall regression gates, include the
-registration preflight, and stay within the configured interval budget. This is
-script-readiness evidence only: after reviewing the scripts, install with
+registration preflight, keep baseline drift in warn-only mode for scheduled
+runs, and stay within the configured interval budget. This is script-readiness
+evidence only: after reviewing the scripts, install with
 `.ara-memory/scripts/install-worker-task.ps1`,
 inspect with `.ara-memory/scripts/status-worker-task.ps1`, and remove with
 `.ara-memory/scripts/uninstall-worker-task.ps1`.
