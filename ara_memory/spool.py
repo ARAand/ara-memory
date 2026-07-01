@@ -315,21 +315,59 @@ def _spool_key(root: Path, *, create: bool) -> bytes:
         if not create:
             raise ValueError("Local spool seal key is missing.")
         path.parent.mkdir(parents=True, exist_ok=True)
+        _create_spool_key_file(path)
+    return _read_spool_key(path)
+
+
+def _create_spool_key_file(path: Path) -> None:
+    key_hex = os.urandom(32).hex()
+    temp_path = path.with_name(f".seal-key.{os.getpid()}.{time.time_ns()}.tmp")
+    fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(key_hex)
+            handle.flush()
+            os.fsync(handle.fileno())
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            os.link(temp_path, path)
         except FileExistsError:
             pass
-        else:
+        except OSError:
+            if path.exists():
+                return
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+            except FileExistsError:
+                return
             with os.fdopen(fd, "w", encoding="ascii") as handle:
-                handle.write(os.urandom(32).hex())
-    raw = path.read_text(encoding="ascii").strip()
-    try:
-        key = bytes.fromhex(raw)
-    except ValueError as exc:
-        raise ValueError("Local spool seal key is invalid.") from exc
-    if len(key) < 32:
-        raise ValueError("Local spool seal key is too short.")
-    return key
+                handle.write(key_hex)
+                handle.flush()
+                os.fsync(handle.fileno())
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _read_spool_key(path: Path) -> bytes:
+    deadline = time.monotonic() + 1.0
+    last_error: ValueError | None = None
+    while True:
+        try:
+            raw = path.read_text(encoding="ascii").strip()
+            key = bytes.fromhex(raw)
+        except FileNotFoundError:
+            last_error = ValueError("Local spool seal key is missing.")
+        except ValueError:
+            last_error = ValueError("Local spool seal key is invalid.")
+        else:
+            if len(key) >= 32:
+                return key
+            last_error = ValueError("Local spool seal key is too short.")
+        if time.monotonic() >= deadline:
+            raise last_error or ValueError("Local spool seal key is invalid.")
+        time.sleep(0.01)
 
 
 def _canonical_spool_payload(payload: dict[str, Any]) -> bytes:

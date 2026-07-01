@@ -6988,6 +6988,84 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(spool_signal.passed)
             self.assertEqual(spool_signal.severity, "error")
 
+    def test_health_warns_on_recall_baseline_drift_but_fails_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: health baseline drift should be visible without failing healthy recall cases.",
+                source="test",
+                scope="health-regression",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="health-regression", budget=500)
+            memory.backup(output=memory.store.root / "backups" / "health-regression.zip")
+            baseline = {
+                "passed": True,
+                "cases": [
+                    {
+                        "name": "drift_case",
+                        "passed": True,
+                        "details": {
+                            "estimated_tokens": 100,
+                            "selected_capsule_ids": ["cap_nonexistent"],
+                        },
+                    }
+                ],
+            }
+            drift_report = memory.health(
+                scope="health-regression",
+                query="health baseline drift",
+                recall_budget=900,
+                hot_budget=500,
+                regression_cases=[
+                    RecallRegressionCase(
+                        name="drift_case",
+                        query="health baseline drift",
+                        scope="health-regression",
+                        expected_terms=["baseline", "drift"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+                regression_baseline=baseline,
+            )
+            drift_signal = next(signal for signal in drift_report.signals if signal.name == "recall_regression")
+
+            self.assertTrue(drift_report.passed, drift_report.as_dict())
+            self.assertEqual(drift_report.status, "watch")
+            self.assertFalse(drift_signal.passed)
+            self.assertEqual(drift_signal.severity, "warning")
+            self.assertTrue(drift_signal.value["cases_passed"])
+            self.assertFalse(drift_signal.value["baseline_passed"])
+            self.assertTrue(any("baseline drifted" in item for item in drift_report.recommendations))
+
+            failed_report = memory.health(
+                scope="health-regression",
+                query="health baseline drift",
+                recall_budget=900,
+                hot_budget=500,
+                regression_cases=[
+                    RecallRegressionCase(
+                        name="failed_case",
+                        query="health baseline drift",
+                        scope="health-regression",
+                        expected_terms=["phantom"],
+                        budget=900,
+                        include_global=False,
+                    )
+                ],
+            )
+            failed_signal = next(signal for signal in failed_report.signals if signal.name == "recall_regression")
+
+            self.assertFalse(failed_report.passed, failed_report.as_dict())
+            self.assertEqual(failed_report.status, "fail")
+            self.assertFalse(failed_signal.passed)
+            self.assertEqual(failed_signal.severity, "error")
+            self.assertFalse(failed_signal.value["cases_passed"])
+
     def test_health_reports_backup_pressure_with_stewardship_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

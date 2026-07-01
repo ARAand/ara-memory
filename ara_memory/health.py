@@ -119,19 +119,13 @@ def run_health_check(
     ]
     if regression_cases is not None:
         regression = memory.recall_regression(regression_cases, baseline=regression_baseline)
-        signals.append(
-            HealthSignal(
-                name="recall_regression",
-                passed=regression.passed,
-                detail="recall regression passed" if regression.passed else "recall regression failed",
-                value=regression.as_dict(),
-            )
-        )
+        signals.append(_recall_regression_signal(regression.as_dict()))
 
     score = _score(signals)
     hard_fail = any(not signal.passed and signal.severity == "error" for signal in signals)
+    has_warning = any(not signal.passed and signal.severity == "warning" for signal in signals)
     passed = not hard_fail
-    status = "pass" if passed and score >= 90 else "watch" if passed else "fail"
+    status = "pass" if passed and not has_warning and score >= 90 else "watch" if passed else "fail"
     return HealthReport(
         scope=scope,
         passed=passed,
@@ -203,6 +197,39 @@ def _backup_signal(latest: dict[str, Any] | None, *, max_age_hours: float) -> He
     if age > max_age_hours:
         return HealthSignal("backup", False, f"latest verified backup is {age:.1f}h old", severity="warning", value=latest)
     return HealthSignal("backup", True, f"latest verified backup is {age:.1f}h old", value=latest)
+
+
+def _recall_regression_signal(report: dict[str, Any]) -> HealthSignal:
+    cases = [item for item in report.get("cases", []) if isinstance(item, dict)]
+    baseline = [item for item in report.get("baseline_comparison", []) if isinstance(item, dict)]
+    cases_passed = all(bool(item.get("passed", False)) for item in cases)
+    baseline_passed = all(bool(item.get("passed", False)) for item in baseline)
+    value = {
+        **report,
+        "cases_passed": cases_passed,
+        "baseline_passed": baseline_passed,
+    }
+    if cases_passed and baseline_passed:
+        return HealthSignal(
+            "recall_regression",
+            True,
+            "recall regression passed",
+            value=value,
+        )
+    if cases_passed:
+        return HealthSignal(
+            "recall_regression",
+            False,
+            "recall regression cases passed; baseline drift needs review",
+            severity="warning",
+            value=value,
+        )
+    return HealthSignal(
+        "recall_regression",
+        False,
+        "recall regression cases failed",
+        value=value,
+    )
 
 
 def _backup_stewardship_report(
@@ -491,7 +518,13 @@ def _recommend(signals: list[HealthSignal]) -> list[str]:
                     "Backup bytes exceed target but no redundant verified backups are eligible; review the target or protected backup policy."
                 )
         elif signal.name == "recall_regression":
-            recommendations.append("Inspect recall-regression drift before changing ranking, compression, or pruning.")
+            value = signal.value if isinstance(signal.value, dict) else {}
+            if value.get("cases_passed") and not value.get("baseline_passed"):
+                recommendations.append(
+                    "Recall cases still pass but baseline drifted; review selected capsules and refresh the baseline only after confirming the new pack is better."
+                )
+            else:
+                recommendations.append("Recall regression cases failed; inspect recall output before changing ranking, compression, or pruning.")
     if not recommendations:
         recommendations.append("Memory health is within current operating budgets; continue scheduled worker-loop and milestone backups.")
     return recommendations
