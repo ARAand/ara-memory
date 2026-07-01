@@ -374,8 +374,19 @@ class AraMemory:
 
         return run_health_check(self, **kwargs)
 
-    def backup(self, *, output: Path | None = None, include_archive: bool = True) -> BackupResult:
-        return create_backup(self.store, output=output, include_archive=include_archive)
+    def backup(
+        self,
+        *,
+        output: Path | None = None,
+        include_archive: bool = True,
+        archive_mode: str | None = None,
+    ) -> BackupResult:
+        return create_backup(
+            self.store,
+            output=output,
+            include_archive=include_archive,
+            archive_mode=archive_mode,
+        )
 
     def verify_backup(self, path: Path, *, trust_root: Path | None = None) -> dict[str, Any]:
         return verify_backup(path, trust_root=trust_root or self.store.root)

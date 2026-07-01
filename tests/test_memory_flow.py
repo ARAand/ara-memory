@@ -2228,6 +2228,115 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertIn("hot/alpha.md", names)
                 self.assertNotIn(".backup-signing-key", names)
                 self.assertTrue(any(name.startswith("archive/objects/") for name in names))
+            self.assertEqual(result.manifest["archive_mode"], "objects")
+
+    def test_backup_archive_modes_separate_source_objects_from_derived_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.txt"
+            artifact.write_text("raw artifact source object\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: default backups should avoid recursive derived archive bloat.",
+                source="test",
+                scope="alpha",
+            )
+            ingest_file(memory, path=artifact, scope="alpha")
+            memory.consolidate()
+            derived = {
+                "archive/cold/old-cold.zip": b"cold export should stay external",
+                "archive/retention-cycles/old-cycle.json": b"{}",
+                "archive/failed-backups/failed.zip": b"failed backup should not be nested",
+            }
+            for relative, content in derived.items():
+                path = memory.store.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            objects_backup = root / "objects.zip"
+            full_backup = root / "full.zip"
+            none_backup = root / "none.zip"
+            objects = memory.backup(output=objects_backup)
+            full = memory.backup(output=full_backup, archive_mode="full")
+            none = memory.backup(output=none_backup, include_archive=False)
+
+            self.assertEqual(objects.manifest["archive_mode"], "objects")
+            self.assertEqual(full.manifest["archive_mode"], "full")
+            self.assertEqual(none.manifest["archive_mode"], "none")
+
+            with zipfile.ZipFile(objects_backup, "r") as zf:
+                object_names = set(zf.namelist())
+            self.assertTrue(any(name.startswith("archive/objects/") for name in object_names))
+            for relative in derived:
+                self.assertNotIn(relative, object_names)
+
+            with zipfile.ZipFile(full_backup, "r") as zf:
+                full_names = set(zf.namelist())
+            for relative in derived:
+                self.assertIn(relative, full_names)
+
+            with zipfile.ZipFile(none_backup, "r") as zf:
+                none_names = set(zf.namelist())
+            self.assertFalse(any(name.startswith("archive/") for name in none_names))
+            self.assertTrue(memory.verify_backup(objects_backup)["passed"])
+            self.assertTrue(memory.verify_backup(full_backup)["passed"])
+            self.assertTrue(memory.verify_backup(none_backup)["passed"])
+            with self.assertRaises(ValueError):
+                memory.backup(output=root / "invalid.zip", include_archive=False, archive_mode="full")
+
+    def test_backup_cli_archive_mode_defaults_and_conflicts_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: backup CLI archive mode should be explicit and compact by default.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            backup_path = Path(tmp) / "cli-backup.zip"
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "backup",
+                    "--output",
+                    str(backup_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["manifest"]["archive_mode"], "objects")
+
+            conflict = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "backup",
+                    "--output",
+                    str(Path(tmp) / "conflict.zip"),
+                    "--no-archive",
+                    "--archive-mode",
+                    "full",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(conflict.returncode, 2, conflict.stdout + conflict.stderr)
+            self.assertFalse(json.loads(conflict.stdout)["passed"])
 
     def test_verify_backup_rejects_tampered_zip_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2661,6 +2770,19 @@ class MemoryFlowTests(unittest.TestCase):
             failed.write_text("not a valid zip", encoding="utf-8")
             os.utime(failed, (2000, 2000))
 
+            dry = memory.backup_stewardship(
+                keep_latest=1,
+                keep_retention_cycles=0,
+                target_backup_bytes=0,
+                quarantine_failed=True,
+            )
+
+            self.assertTrue(dry.passed, dry.as_dict())
+            self.assertGreater(
+                dry.totals["bytes_after_quarantine_candidates"],
+                dry.totals["bytes_after_candidates"],
+            )
+
             report = memory.backup_stewardship(
                 keep_latest=1,
                 keep_retention_cycles=0,
@@ -2678,6 +2800,7 @@ class MemoryFlowTests(unittest.TestCase):
             quarantined_item = next(item for item in report.items if item.quarantined)
             self.assertTrue(Path(quarantined_item.quarantine_manifest_path).exists())
             self.assertTrue(any("delete confirmation" in item for item in report.recommendations))
+            self.assertFalse(any(item.startswith("Deleted ") for item in report.recommendations))
 
     def test_backup_stewardship_does_not_quarantine_when_no_verified_backup_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3574,6 +3697,20 @@ class MemoryFlowTests(unittest.TestCase):
                 )
                 working.updated_at = f"2026-07-01T00:00:0{index}+00:00"
                 memory.store.upsert_capsule(working)
+            for index in range(6):
+                shallow_goal = Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title=f"Goal memory: recent task target {index}",
+                    body="Ship a near-term implementation task that should stay working memory.",
+                    scope="alpha",
+                    confidence=0.95,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal"],
+                    status=MemoryStatus.STABLE,
+                )
+                shallow_goal.updated_at = f"2026-07-02T00:00:0{index}+00:00"
+                memory.store.upsert_capsule(shallow_goal)
 
             report = memory.lifecycle(scope="alpha", limit=3, examples_per_tier=3)
 
@@ -3981,6 +4118,18 @@ class MemoryFlowTests(unittest.TestCase):
             )
             memory.store.upsert_capsule(stable)
             memory.store.upsert_capsule(cold)
+            artifact_object = memory.store.archive_dir / "objects" / "aa" / "artifact"
+            artifact_object.parent.mkdir(parents=True, exist_ok=True)
+            artifact_object.write_bytes(b"source artifact object")
+            derived_archive_entries = {
+                "archive/cold/old-retention-cold.zip": b"old cold export",
+                "archive/retention-cycles/old-retention-cycle.json": b"{}",
+                "archive/failed-backups/failed-retention-backup.zip": b"failed backup",
+            }
+            for relative, content in derived_archive_entries.items():
+                path = memory.store.root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
 
             report = memory.retention_cycle(
                 scope="alpha",
@@ -3998,6 +4147,12 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.shadow_prune["deletion"]["capsules_removed"], 1)
             self.assertTrue(memory.list_capsules(scope="alpha", status="superseded", limit=5))
             self.assertTrue(Path(report.report_path).exists())
+            self.assertEqual(report.backup["manifest"]["archive_mode"], "objects")
+            with zipfile.ZipFile(root / "cycle-backup.zip", "r") as zf:
+                backup_names = set(zf.namelist())
+            self.assertIn("archive/objects/aa/artifact", backup_names)
+            for relative in derived_archive_entries:
+                self.assertNotIn(relative, backup_names)
 
     def test_retention_cycle_without_shadow_is_not_pruning_readiness_pass(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

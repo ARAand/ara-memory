@@ -102,6 +102,7 @@ class RetentionCycleRunner:
         doctor_query: str = "current memory state",
         shadow: bool = True,
         report_output: Path | None = None,
+        backup_archive_mode: str = "objects",
         use_lock: bool = True,
         lock_stale_seconds: int = 3600,
     ) -> RetentionCycleReport:
@@ -138,6 +139,7 @@ class RetentionCycleRunner:
                     doctor_query=doctor_query,
                     shadow=shadow,
                     report_output=report_output,
+                    backup_archive_mode=backup_archive_mode,
                     lock=lock_result.as_dict(),
                 )
             finally:
@@ -153,6 +155,7 @@ class RetentionCycleRunner:
             doctor_query=doctor_query,
             shadow=shadow,
             report_output=report_output,
+            backup_archive_mode=backup_archive_mode,
             lock=None,
         )
 
@@ -169,10 +172,11 @@ class RetentionCycleRunner:
         doctor_query: str,
         shadow: bool,
         report_output: Path | None,
+        backup_archive_mode: str,
         lock: dict[str, Any] | None,
     ) -> RetentionCycleReport:
 
-        backup = create_backup(self.store, output=backup_output)
+        backup = create_backup(self.store, output=backup_output, archive_mode=backup_archive_mode)
         backup_payload = backup.as_dict()
         backup_verification = verify_backup(backup.path, trust_root=self.store.root)
 

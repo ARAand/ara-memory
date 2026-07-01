@@ -267,7 +267,7 @@ python -m ara_memory review-compact --scope ara-memory
 python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
-python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip
+python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip --backup-archive-mode objects
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
 python -m ara_memory lifecycle --scope ara-memory
 python -m ara_memory cold-export --scope ara-memory --order oldest --output .ara-memory/archive/cold/ara-memory-cold.zip
@@ -472,8 +472,12 @@ any destructive pruning is considered.
 `retention-cycle` is the preferred non-destructive pruning readiness gate. It
 creates a fresh backup, verifies it, exports cold capsules, verifies that export,
 runs prune-plan with representative recall queries, and runs shadow-prune in a
-restored sandbox. It does not modify the live store. By default it takes the
-same worker lock used by scheduled worker-loop runs, so backup/export/shadow
+restored sandbox. It does not modify the live store. The cycle backup defaults
+to `--backup-archive-mode objects`, which preserves raw artifact objects without
+recursively embedding older cold exports, retention-cycle reports, or quarantined
+failed backup ZIPs. Use `--backup-archive-mode full` only when a forensic
+snapshot of the entire archive tree is explicitly required. By default it takes
+the same worker lock used by scheduled worker-loop runs, so backup/export/shadow
 evidence is not generated while the background worker is mutating memory; use
 `--no-lock` only when the store is otherwise quiescent. `--no-shadow` is allowed
 only for partial evidence collection and does not pass pruning readiness. Each
@@ -526,13 +530,21 @@ overlap. JSON details include `capsules_visible`, `visible_capsule_ids`,
 `recall-plan --json` and review `visible_capsules`,
 `query_terms_visible_count`, `fallback_used`, and `quality_score`.
 
-Create a portable snapshot after important milestones:
+Create a routine portable snapshot after important milestones:
 
 ```powershell
-python -m ara_memory backup --output .ara-memory/backups/milestone.zip
+python -m ara_memory backup --output .ara-memory/backups/milestone.zip --archive-mode objects
 python -m ara_memory verify-backup .ara-memory/backups/milestone.zip
 python -m ara_memory restore-drill .ara-memory/backups/milestone.zip --scope ara-memory --query "current memory architecture"
 python -m ara_memory restore-backup .ara-memory/backups/milestone.zip --target-root .ara-memory-restored
+```
+
+Use a full forensic snapshot only when you intentionally want the entire archive
+tree, including older cold exports, retention-cycle reports, and quarantined
+failed backups:
+
+```powershell
+python -m ara_memory backup --output .ara-memory/backups/forensic-full.zip --archive-mode full
 ```
 
 When verifying or restoring an archive copied from another memory root, pass the
@@ -544,19 +556,23 @@ python -m ara_memory verify-cold-export copied/cold.zip --trust-root path/to/sou
 ```
 
 Backups contain a SQLite-consistent `memory.db` snapshot, the append-only ledger,
-hot memory files, archived artifacts, durable spool envelopes, and a manifest
-with schema/stats plus per-entry SHA-256 hashes. Verification checks every
-hashed ZIP entry, the manifest HMAC, SQLite integrity, and foreign-key
+hot memory files, durable spool envelopes, selected archive payload, and a
+manifest with schema/stats plus per-entry SHA-256 hashes. Verification checks
+every hashed ZIP entry, the manifest HMAC, SQLite integrity, and foreign-key
 consistency so entry tampering, manifest rewrites without the local signing key,
 and orphan rows do not pass. Backup and cold-export verification also reject
 unsafe archive names, duplicate entries, oversized members, excessive total
 uncompressed size, suspicious compression ratios, and filesystem-normalized path
 collisions before hashing or parsing large members.
-Default backups include archived artifacts and the full spool directory,
+Default backups use `--archive-mode objects`: they include sha256-addressed raw
+file/image artifacts under `archive/objects` and the full spool directory,
 including pending/done/failed envelopes, snapshots, and `.seal-key`, so sealed
-pending work remains drainable after restore. `backup --no-archive` omits
-archived artifacts/cold evidence; do not use it as pruning-readiness or full
-evidence-restore proof.
+pending work remains drainable after restore without recursively embedding
+derived evidence bundles. They intentionally exclude older `archive/cold`
+exports, `archive/retention-cycles` reports, and `archive/failed-backups` ZIPs.
+Use `backup --archive-mode full` for an explicit forensic snapshot of the entire
+archive tree. `backup --no-archive` or `--archive-mode none` omits archived
+artifacts; do not use it when restored file/image artifacts are required.
 The backup signing key lives at `.ara-memory/.backup-signing-key` and is not
 stored inside backup ZIPs. Preserve it as local trust material if old backups
 must remain cryptographically verifiable on another machine.
@@ -590,6 +606,8 @@ When at least one verified backup exists, `--quarantine-failed` can move
 failed-verification backup ZIPs to `.ara-memory/archive/failed-backups/` after
 exact confirmation, preserving them outside the live backup pool so health
 pressure reflects restorable backups instead of legacy or corrupted evidence.
+Default `objects` backups do not re-embed those quarantined ZIPs; `full` backups
+do, by design.
 Quarantine and deletion confirmations are independent: a mixed run with only
 the quarantine confirmation moves failed backups but leaves redundant verified
 delete candidates untouched. Each quarantined ZIP gets a neighboring

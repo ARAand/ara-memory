@@ -516,14 +516,14 @@ def _mark_quarantine_candidates(items: list[BackupStewardshipItem], *, enabled: 
         item.quarantine_candidate = False
     verified_exists = any(item.verified for item in items)
     if not enabled or not verified_exists:
-        return sum(item.bytes for item in items if not item.delete_candidate)
+        return sum(item.bytes for item in items)
     for item in items:
         if item.verified or item.deleted:
             continue
         if not Path(item.path).name.lower().endswith(".zip"):
             continue
         item.quarantine_candidate = True
-    return sum(item.bytes for item in items if not item.delete_candidate and not item.quarantine_candidate)
+    return sum(item.bytes for item in items if not item.quarantine_candidate)
 
 
 def _backup_item(
@@ -602,7 +602,7 @@ def _referenced_backup_paths(root: Path, *, keep_retention_cycles: int) -> dict[
         return {}
     refs: dict[Path, list[str]] = {}
     seen = 0
-    for path in sorted(cycle_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+    for path in _sorted_existing_json_files(cycle_dir):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -618,6 +618,16 @@ def _referenced_backup_paths(root: Path, *, keep_retention_cycles: int) -> dict[
         if seen >= keep_retention_cycles:
             break
     return refs
+
+
+def _sorted_existing_json_files(directory: Path) -> list[Path]:
+    files: list[tuple[float, Path]] = []
+    for path in directory.glob("*.json"):
+        try:
+            files.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    return [path for _, path in sorted(files, key=lambda item: item[0], reverse=True)]
 
 
 def _active_prune_approval_backup_paths(store: MemoryStore) -> dict[Path, list[str]]:
@@ -820,27 +830,34 @@ def _recommend(
     candidates = [item for item in items if item.delete_candidate]
     quarantine_candidates = [item for item in items if item.quarantine_candidate]
     quarantined = [item for item in items if item.quarantined]
+    deleted = [item for item in items if item.deleted]
     failed = [item for item in items if not item.verified]
     if apply:
-        if quarantined and not candidates:
+        if deleted:
+            recommendations = [
+                f"Deleted {len(deleted)} redundant verified backups.",
+                "Latest backups, retention-cycle-referenced backups, and failed-verification backups were preserved.",
+            ]
+            if target_backup_bytes is not None and bytes_after_candidates > target_backup_bytes:
+                recommendations.append(
+                    "Backup bytes still exceed the target because protected backups alone are above the budget."
+                )
+            return recommendations
+        if quarantined:
             recommendations = [
                 f"Quarantined {len(quarantined)} failed-verification backups under archive/failed-backups.",
                 "Verified backups were preserved in the live backup directory.",
             ]
+            if candidates:
+                recommendations.append(
+                    f"{len(candidates)} redundant verified backups still require delete confirmation."
+                )
             if target_backup_bytes is not None and bytes_after_quarantine > target_backup_bytes:
                 recommendations.append(
                     "Backup bytes still exceed the target after quarantine because protected verified backups are above the budget."
                 )
             return recommendations
-        recommendations = [
-            f"Deleted {len(candidates)} redundant verified backups.",
-            "Latest backups, retention-cycle-referenced backups, and failed-verification backups were preserved.",
-        ]
-        if target_backup_bytes is not None and bytes_after_candidates > target_backup_bytes:
-            recommendations.append(
-                "Backup bytes still exceed the target because protected backups alone are above the budget."
-            )
-        return recommendations
+        return ["No backup files were moved or deleted."]
     if candidates:
         recommendations = [
             f"{len(candidates)} redundant verified backups can be deleted after review.",

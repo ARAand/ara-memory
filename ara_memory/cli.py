@@ -488,6 +488,15 @@ def main(argv: list[str] | None = None) -> int:
     backup = sub.add_parser("backup")
     backup.add_argument("--output", type=Path, default=None)
     backup.add_argument("--no-archive", action="store_true")
+    backup.add_argument(
+        "--archive-mode",
+        choices=["objects", "full", "none"],
+        default=None,
+        help=(
+            "Archive payload to include. objects keeps raw artifact objects without recursive derived "
+            "cold/export/failed-backup bundles; full includes the entire archive tree; none omits archive files."
+        ),
+    )
     backup_stewardship = sub.add_parser(
         "backup-stewardship",
         description=(
@@ -650,6 +659,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     retention_cycle.add_argument("--scope", default=None)
     retention_cycle.add_argument("--backup-output", type=Path, default=None)
+    retention_cycle.add_argument(
+        "--backup-archive-mode",
+        choices=["objects", "full", "none"],
+        default="objects",
+        help="Archive payload for the retention-cycle backup. Defaults to objects to avoid recursive evidence bloat.",
+    )
     retention_cycle.add_argument("--cold-output", type=Path, default=None)
     retention_cycle.add_argument("--report-output", type=Path, default=None)
     retention_cycle.add_argument("--limit", type=int, default=None)
@@ -1345,7 +1360,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
 
     if args.cmd == "backup":
-        result = memory.backup(output=args.output, include_archive=not args.no_archive)
+        if args.no_archive and args.archive_mode not in {None, "none"}:
+            print(
+                json.dumps(
+                    {
+                        "passed": False,
+                        "error": "--no-archive cannot be combined with --archive-mode other than none.",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 2
+        result = memory.backup(
+            output=args.output,
+            include_archive=not args.no_archive,
+            archive_mode=args.archive_mode,
+        )
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 0
 
@@ -1547,6 +1579,7 @@ def main(argv: list[str] | None = None) -> int:
             include_global=not args.no_global,
             doctor_query=args.doctor_query,
             shadow=not args.no_shadow,
+            backup_archive_mode=args.backup_archive_mode,
             use_lock=not args.no_lock,
             lock_stale_seconds=args.lock_stale_seconds,
         )

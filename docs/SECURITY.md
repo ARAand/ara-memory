@@ -47,7 +47,7 @@
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
-- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` first bounds ZIP entry count, entry size, total expansion, compression ratio, and normalized path collisions, then checks entry hashes, manifest signature, SQLite integrity, and foreign keys.
+- Backups include durable spool envelopes, per-entry SHA-256 hashes, and a manifest HMAC signed by the local `.backup-signing-key`; `verify-backup` first bounds ZIP entry count, entry size, total expansion, compression ratio, and normalized path collisions, then checks entry hashes, manifest signature, SQLite integrity, and foreign keys. The default `objects` archive profile backs up raw artifact objects without recursively embedding older cold exports, retention-cycle reports, or quarantined failed-backup ZIPs; `full` is the explicit forensic profile for the whole archive tree.
 - Signed v2 cold exports include per-entry SHA-256 hashes and a manifest HMAC using the same local trust key; `verify-cold-export` bounds archive expansion, streams JSONL with per-file/per-line limits, checks hashes/signature, and rejects exports whose capsules reference source events missing from `events.jsonl`.
 - `restore-backup` copies the source ZIP to a temporary snapshot and verifies/extracts that same byte stream; `--force` only clears recognized memory-root paths and preserves local signing keys.
 - `live-prune` binds approvals to exact capsule IDs plus backup/export SHA-256 identities, rechecks export coverage from the verified cold-export scan, rechecks current cold status at deletion time, and preserves source events.
@@ -69,6 +69,7 @@
 - Treat `spool/snapshots` as part of live queued evidence; do not clean it independently from its pending/done/failed envelope.
 - Treat `.ara-memory/spool/.seal-key` as private local trust material; backups preserve it so pending sealed envelopes remain drainable after restore.
 - Treat `.ara-memory/.backup-signing-key` as private local trust material; it is not stored in backup ZIPs, so copied backups need the corresponding key to remain cryptographically verifiable.
+- Treat `backup --archive-mode full` as an explicit forensic operation. Routine milestone and retention-cycle backups should use the default `objects` profile so signed evidence bundles are not recursively embedded in later backups.
 - Keep project scopes isolated unless the user asks for cross-project recall.
 - Never use memory as a substitute for reading current files when coding.
 - Treat `ARA_MEMORY_ADVISOR_COMMAND` as trusted code, not as data.

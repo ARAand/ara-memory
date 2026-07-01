@@ -178,9 +178,22 @@ def _capsules(store: MemoryStore, *, scope: str | None, limit: int) -> tuple[lis
         clauses.append("scope = ?")
         args.append(scope)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    core_kinds = sorted(CORE_KINDS)
-    core_placeholders = ",".join("?" for _ in core_kinds)
-    args.extend([MemoryStatus.STABLE.value, *core_kinds, 0.70, 0.55, limit + 1])
+    non_goal_core_kinds = sorted(CORE_KINDS - {"goal"})
+    non_goal_placeholders = ",".join("?" for _ in non_goal_core_kinds)
+    purpose_conditions = " OR ".join(
+        "lower(title || char(10) || body) LIKE ?" for _ in LONG_RUNNING_PURPOSE_MARKERS
+    )
+    args.extend(
+        [
+            MemoryStatus.STABLE.value,
+            0.70,
+            0.55,
+            *non_goal_core_kinds,
+            "goal",
+            *(f"%{marker}%" for marker in LONG_RUNNING_PURPOSE_MARKERS),
+            limit + 1,
+        ]
+    )
     with store.session() as conn:
         rows = conn.execute(
             f"""
@@ -189,7 +202,10 @@ def _capsules(store: MemoryStore, *, scope: str | None, limit: int) -> tuple[lis
             {where}
             ORDER BY
               CASE
-                WHEN status = ? AND kind IN ({core_placeholders}) AND confidence >= ? AND salience >= ? THEN 0
+                WHEN status = ? AND confidence >= ? AND salience >= ? AND (
+                  kind IN ({non_goal_placeholders})
+                  OR (kind = ? AND ({purpose_conditions}))
+                ) THEN 0
                 ELSE 1
               END,
               updated_at DESC,

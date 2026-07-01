@@ -138,8 +138,15 @@ sleep()
 
 - `.ara-memory/ledger/events.jsonl`: append-only source of truth.
 - `.ara-memory/memory.db`: SQLite tables, active-capsule FTS indexes, temporal edges.
-- `.ara-memory/archive/`: reserved for cold files, images, and future Memvid-style archives.
-- `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts.
+- `.ara-memory/archive/`: derived evidence area; subdirectories have distinct lifecycle policy.
+- `.ara-memory/archive/objects/`: sha256-addressed raw file and image artifacts needed by routine restores.
+- `.ara-memory/archive/cold/`: signed cold capsule exports used as pruning evidence.
+- `.ara-memory/archive/retention-cycles/`: compact retention-cycle reports.
+- `.ara-memory/archive/failed-backups/`: quarantined failed backup ZIPs kept for manual inspection.
+- Default backups include `archive/objects` but not derived archive bundles such
+  as older cold exports, retention-cycle reports, or quarantined failed-backup
+  ZIPs. Use `backup --archive-mode full` only for an explicit forensic snapshot
+  of the whole archive tree.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
 - `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
 - `.ara-memory/.backup-signing-key`: local HMAC trust key for backup manifests;

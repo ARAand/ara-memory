@@ -30,6 +30,10 @@ BACKUP_SIGNING_KEY_NAME = ".backup-signing-key"
 ENTRY_HASHES_FIELD = "entry_hashes_sha256"
 MANIFEST_SIGNATURE_FIELD = "manifest_hmac_sha256"
 SIGNATURE_ALGORITHM = "hmac-sha256-manifest-v1"
+ARCHIVE_MODE_OBJECTS = "objects"
+ARCHIVE_MODE_FULL = "full"
+ARCHIVE_MODE_NONE = "none"
+ARCHIVE_MODES = {ARCHIVE_MODE_OBJECTS, ARCHIVE_MODE_FULL, ARCHIVE_MODE_NONE}
 
 
 @dataclass(slots=True)
@@ -44,18 +48,26 @@ class BackupResult:
         }
 
 
-def create_backup(store: MemoryStore, *, output: Path | None = None, include_archive: bool = True) -> BackupResult:
+def create_backup(
+    store: MemoryStore,
+    *,
+    output: Path | None = None,
+    include_archive: bool = True,
+    archive_mode: str | None = None,
+) -> BackupResult:
     store.init()
     output_path = (output or _default_backup_path(store.root)).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     excluded_paths = {output_path}
     signing_key = _load_or_create_backup_signing_key(store.root)
+    archive_mode = _resolve_archive_mode(include_archive=include_archive, archive_mode=archive_mode)
 
     manifest = {
         "created_at": utc_now(),
         "schema_version": store.schema_version(),
         "stats": store.stats(),
-        "include_archive": include_archive,
+        "include_archive": archive_mode != ARCHIVE_MODE_NONE,
+        "archive_mode": archive_mode,
         "include_spool": True,
         "format": BACKUP_FORMAT,
         "signature_algorithm": SIGNATURE_ALGORITHM,
@@ -71,8 +83,16 @@ def create_backup(store: MemoryStore, *, output: Path | None = None, include_arc
             _write_tree(zf, store.ledger_dir, "ledger", exclude=excluded_paths, entry_hashes=entry_hashes)
             _write_tree(zf, store.hot_dir, "hot", exclude=excluded_paths, entry_hashes=entry_hashes)
             _write_tree(zf, store.root / "spool", "spool", exclude=excluded_paths, entry_hashes=entry_hashes)
-            if include_archive:
+            if archive_mode == ARCHIVE_MODE_FULL:
                 _write_tree(zf, store.archive_dir, "archive", exclude=excluded_paths, entry_hashes=entry_hashes)
+            elif archive_mode == ARCHIVE_MODE_OBJECTS:
+                _write_tree(
+                    zf,
+                    store.archive_dir / "objects",
+                    "archive/objects",
+                    exclude=excluded_paths,
+                    entry_hashes=entry_hashes,
+                )
             manifest[ENTRY_HASHES_FIELD] = entry_hashes
             manifest["entry_count"] = len(entry_hashes)
             manifest[MANIFEST_SIGNATURE_FIELD] = _manifest_signature(manifest, signing_key)
@@ -278,6 +298,17 @@ def _write_tree(
         if resolved_root not in (resolved_path, *resolved_path.parents):
             raise ValueError(f"Refusing to back up path outside tree: {path}")
         _write_file(zf, path, f"{arc_root}/{path.relative_to(root).as_posix()}", entry_hashes=entry_hashes)
+
+
+def _resolve_archive_mode(*, include_archive: bool, archive_mode: str | None) -> str:
+    if archive_mode is None:
+        return ARCHIVE_MODE_OBJECTS if include_archive else ARCHIVE_MODE_NONE
+    normalized = archive_mode.strip().lower()
+    if normalized not in ARCHIVE_MODES:
+        raise ValueError(f"Unsupported backup archive_mode: {archive_mode!r}")
+    if not include_archive and normalized != ARCHIVE_MODE_NONE:
+        raise ValueError("include_archive=False cannot be combined with an archive_mode other than 'none'")
+    return normalized
 
 
 def _write_file(zf: zipfile.ZipFile, path: Path, arcname: str, *, entry_hashes: dict[str, str]) -> None:
