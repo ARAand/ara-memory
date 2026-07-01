@@ -315,7 +315,13 @@ def _spool_key(root: Path, *, create: bool) -> bytes:
         if not create:
             raise ValueError("Local spool seal key is missing.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(os.urandom(32).hex(), encoding="ascii")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(os.urandom(32).hex())
     raw = path.read_text(encoding="ascii").strip()
     try:
         key = bytes.fromhex(raw)

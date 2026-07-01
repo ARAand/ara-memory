@@ -28,6 +28,7 @@ from ara_memory.quality import QualityReport, QualityScorer, ReviewWorkerReport
 from ara_memory.recall import RecallCandidateResult, RecallCompiler, RecallResult
 from ara_memory.retention import RetentionAnalyzer, RetentionReport
 from ara_memory.retention_cycle import RetentionCycleReport, RetentionCycleRunner
+from ara_memory.promotion import can_promote_capsule
 from ara_memory.risk import MemoryRiskAssessor
 from ara_memory.sleep import SleepConsolidator, SleepReport
 from ara_memory.storage import MemoryStore, row_to_capsule
@@ -133,10 +134,8 @@ class AraMemory:
         if row is None:
             return False
         cap = row_to_capsule(row)
-        if cap["status"] == MemoryStatus.QUARANTINED.value:
-            return False
-        verdict = MemoryRiskAssessor(self.store).assess_capsule(cap)
-        if verdict.should_quarantine:
+        gate = can_promote_capsule(self.store, cap, require_provenance=False)
+        if gate.should_quarantine:
             self.store.update_capsule_status(
                 capsule_id,
                 MemoryStatus.QUARANTINED,
@@ -144,8 +143,16 @@ class AraMemory:
                 reason="blocked unsafe manual promotion",
             )
             return False
-        if verdict.should_exclude_from_hot:
+        if not gate.allowed:
             return False
+        if cap["status"] == MemoryStatus.CANDIDATE.value:
+            return self.store.update_capsule_status_if_current(
+                capsule_id,
+                MemoryStatus.CANDIDATE,
+                MemoryStatus.STABLE,
+                actor=actor,
+                reason=reason,
+            )
         return self.store.update_capsule_status(capsule_id, MemoryStatus.STABLE, actor=actor, reason=reason)
 
     def reject(self, capsule_id: str, *, actor: str = "manual", reason: str = "") -> bool:

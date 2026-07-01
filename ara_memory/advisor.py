@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Protocol
 
+from ara_memory.promotion import can_promote_capsule, promotion_block_reason
 from ara_memory.risk import MemoryRiskAssessor, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
 
@@ -38,6 +39,7 @@ class MemoryAdvisor(Protocol):
 
 class DeterministicMemoryAdvisor:
     def __init__(self, store: MemoryStore) -> None:
+        self.store = store
         self.risk = MemoryRiskAssessor(store)
 
     def review(self, candidates: list[dict]) -> list[MemoryRecommendation]:
@@ -67,6 +69,18 @@ class DeterministicMemoryAdvisor:
                 )
                 continue
             if _should_promote(cap):
+                gate = can_promote_capsule(self.store, cap, require_provenance=True, risk_verdict=verdict)
+                if not gate.allowed:
+                    recommendations.append(
+                        MemoryRecommendation(
+                            capsule_id=cap["id"],
+                            action="keep",
+                            actor="memory-auditor",
+                            reason=promotion_block_reason(gate),
+                            risk_score=verdict.score,
+                        )
+                    )
+                    continue
                 recommendations.append(
                     MemoryRecommendation(
                         capsule_id=cap["id"],
@@ -94,10 +108,12 @@ class ExternalCommandMemoryAdvisor:
         self,
         *,
         command: str,
+        store: MemoryStore,
         fallback: MemoryAdvisor,
         timeout_seconds: float = 20.0,
     ) -> None:
         self.command = command
+        self.store = store
         self.fallback = fallback
         self.timeout_seconds = timeout_seconds
 
@@ -125,7 +141,12 @@ class ExternalCommandMemoryAdvisor:
         except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
             return list(fallback_recs.values())
 
-        recommendations = _parse_external_recommendations(parsed, fallback_recs)
+        recommendations = _parse_external_recommendations(
+            parsed,
+            fallback_recs,
+            store=self.store,
+            candidates={cap["id"]: cap for cap in candidates},
+        )
         ordered_ids = [cap["id"] for cap in candidates]
         return [recommendations[capsule_id] for capsule_id in ordered_ids]
 
@@ -154,6 +175,7 @@ def build_memory_advisor(store: MemoryStore) -> MemoryAdvisor:
         timeout_ms = _env_int("ARA_MEMORY_ADVISOR_TIMEOUT_MS", default=20000)
         return ExternalCommandMemoryAdvisor(
             command=command,
+            store=store,
             fallback=deterministic,
             timeout_seconds=max(1.0, timeout_ms / 1000),
         )
@@ -196,6 +218,9 @@ def _candidate_payload(cap: dict, fallback: MemoryRecommendation | None = None) 
 def _parse_external_recommendations(
     parsed: object,
     fallback_recs: dict[str, MemoryRecommendation],
+    *,
+    store: MemoryStore | None = None,
+    candidates: dict[str, dict] | None = None,
 ) -> dict[str, MemoryRecommendation]:
     if not isinstance(parsed, dict):
         return fallback_recs
@@ -218,6 +243,10 @@ def _parse_external_recommendations(
             continue
         if action == "promote" and _is_deterministically_blocked(fallback):
             continue
+        if action == "promote" and store is not None and candidates is not None:
+            gate = can_promote_capsule(store, candidates[capsule_id], require_provenance=True)
+            if not gate.allowed:
+                continue
         reason = raw.get("reason")
         if not isinstance(reason, str) or not reason.strip():
             reason = f"external advisor recommended {action}"
@@ -235,8 +264,10 @@ def _parse_external_recommendations(
 
 
 def _is_deterministically_blocked(fallback: MemoryRecommendation) -> bool:
-    return fallback.action == "quarantine" or fallback.reason.startswith(
-        "excluded from hot memory by deterministic risk policy"
+    return (
+        fallback.action == "quarantine"
+        or fallback.reason.startswith("excluded from hot memory by deterministic risk policy")
+        or fallback.reason.startswith("promotion gate blocked")
     )
 
 

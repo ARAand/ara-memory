@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ara_memory.compressors import semantic_consolidation_text
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus
+from ara_memory.promotion import can_promote_capsule, promotion_block_reason
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -167,6 +168,7 @@ class CandidateSummaryGroup:
     source_capsule_ids: list[str]
     example_titles: list[str]
     applied_summary_id: str | None = None
+    blocked_reason: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -176,6 +178,7 @@ class CandidateSummaryGroup:
             "source_capsule_ids": self.source_capsule_ids,
             "example_titles": self.example_titles,
             "applied_summary_id": self.applied_summary_id,
+            "blocked_reason": self.blocked_reason,
         }
 
 
@@ -248,6 +251,8 @@ class CandidateSummaryConsolidator:
         if not dry_run:
             for group, candidates in grouped_candidates:
                 summary = self._apply_group(group, candidates, scope=scope)
+                if summary is None:
+                    continue
                 group.applied_summary_id = summary.id
                 summaries_created += 1
                 superseded += group.count
@@ -314,7 +319,7 @@ class CandidateSummaryConsolidator:
         candidates: list[dict[str, Any]],
         *,
         scope: str | None,
-    ) -> Capsule:
+    ) -> Capsule | None:
         source_ids: list[str] = []
         tags = set(PATTERNS[group.pattern]["tags"])
         for cap in candidates:
@@ -331,6 +336,15 @@ class CandidateSummaryConsolidator:
             tags=sorted(tags),
             status=MemoryStatus.STABLE,
         )
+        gate = can_promote_capsule(
+            self.store,
+            asdict(summary),
+            require_provenance=True,
+            source_capsule_count=group.count,
+        )
+        if not gate.allowed:
+            group.blocked_reason = promotion_block_reason(gate)
+            return None
         self.store.upsert_capsule(summary)
         for cap in candidates:
             self.store.update_capsule_status(

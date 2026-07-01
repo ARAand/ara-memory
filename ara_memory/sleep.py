@@ -5,9 +5,10 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 
-from ara_memory.advisor import MemoryAdvisor, MemoryReviewEngine
+from ara_memory.advisor import MemoryAdvisor, MemoryRecommendation, MemoryReviewEngine
 from ara_memory.compressors import compact_text, semantic_consolidation_text
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, new_id
+from ara_memory.promotion import can_promote_capsule
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -58,8 +59,9 @@ class SleepConsolidator:
         ]
         report = SleepReport(run_id=new_id("sleep"), scope=scope, candidates_seen=len(candidates))
         recommendations = self.review.advisor.review(candidates)
+        candidates_by_id = {cap["id"]: cap for cap in candidates}
         quarantined_ids: set[str] = set()
-        promote_ids: set[str] = set()
+        promote_recs: dict[str, MemoryRecommendation] = {}
 
         for rec in recommendations:
             if rec.action == "quarantine":
@@ -73,7 +75,9 @@ class SleepConsolidator:
                         reason=rec.reason,
                     )
             elif rec.action == "promote":
-                promote_ids.add(rec.capsule_id)
+                cap = candidates_by_id.get(rec.capsule_id)
+                if cap is not None and can_promote_capsule(self.store, cap, require_provenance=True).allowed:
+                    promote_recs[rec.capsule_id] = rec
 
         candidates = [cap for cap in candidates if cap["id"] not in quarantined_ids]
 
@@ -123,15 +127,20 @@ class SleepConsolidator:
         for cap in candidates:
             if cap["id"] in merged_ids:
                 continue
-            if cap["id"] in promote_ids:
-                report.promoted += 1
-                if not dry_run:
-                    self.store.update_capsule_status(
+            if cap["id"] in promote_recs:
+                rec = promote_recs[cap["id"]]
+                if dry_run:
+                    report.promoted += 1
+                else:
+                    promoted = self.store.update_capsule_status_if_current(
                         cap["id"],
+                        MemoryStatus.CANDIDATE,
                         MemoryStatus.STABLE,
-                        actor="memory-curator",
-                        reason="advisor recommended promotion",
+                        actor=rec.actor,
+                        reason=rec.reason,
                     )
+                    if promoted:
+                        report.promoted += 1
 
         conflicts = [
             (left, right)

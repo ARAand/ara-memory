@@ -10,6 +10,10 @@ The working-memory model is associative: recall combines explicit purpose,
 scope, temporal edges, graph neighbors, FTS/BM25 matches, and budget selection
 instead of treating memory as one flat similarity search space.
 
+Natural memory means Ara recalls the desired purpose, identity, and task
+context without rereading raw history or turning every stored event into
+always-on instruction.
+
 ## Memory Flow
 
 ```text
@@ -193,6 +197,28 @@ structured one-shot worker-loop arguments, prevent overlapping scheduled
 instances, keep valid recall regression gates attached, and stay inside the
 configured interval budget. This is script-readiness evidence, not proof that
 the task is installed or recently succeeded.
+
+## Promotion Boundary
+
+`stable` is the first memory state that can directly steer future behavior, so
+candidate promotion is a boundary, not just a score threshold.
+
+```text
+promotion recommendation
+  -> reload capsule and source events
+  -> deterministic risk gate
+  -> automatic provenance gate
+  -> candidate-only compare-and-set write
+  -> memory_actions actor/reason log + hot invalidation
+```
+
+Manual promotion uses the shared deterministic risk gate but remains an
+explicit operator decision. Automatic promotion from sleep, review-worker apply,
+or an external advisor additionally requires either two existing source events
+two consolidated source capsules for summary creation, or one explicit
+decision/manual source. Source IDs that do not resolve to event rows block
+automatic promotion, so provenance cannot be forged by editing a capsule
+payload.
 
 ## Memory Organs
 

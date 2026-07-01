@@ -216,6 +216,18 @@ def _run_locked_worker(
 
     drain = memory.drain_spool(limit=spool_limit, scope=scope, processing_stale_seconds=processing_stale_seconds)
     steps.append(WorkerStep("drain_spool", drain.passed, drain.as_dict()))
+    if not drain.passed:
+        steps.append(
+            WorkerStep(
+                "worker_guard",
+                False,
+                {
+                    "reason": "drain_spool failed; skipped behavior-changing worker steps",
+                    "apply_review": apply_review,
+                },
+            )
+        )
+        return WorkerReport(scope=scope, passed=False, steps=steps)
 
     if episode_summary:
         episode_payload = {

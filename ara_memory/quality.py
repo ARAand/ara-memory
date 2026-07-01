@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ara_memory.models import MemoryStatus, new_id, utc_now
+from ara_memory.promotion import can_promote_capsule, promotion_block_reason
 from ara_memory.risk import MemoryRiskAssessor
 from ara_memory.storage import MemoryStore, row_to_capsule
 
@@ -462,11 +463,29 @@ class QualityScorer:
         changed = False
         reason = "; ".join(current.reasons[:4]) or row["reason"]
         if row["action"] == "promote" and capsule["status"] == MemoryStatus.CANDIDATE.value:
-            applied = "promote"
-            changed = True
+            gate = can_promote_capsule(self.store, capsule, require_provenance=True)
+            if not gate.allowed:
+                applied = "keep-open"
+                changed = False
+                reason = promotion_block_reason(gate)
+            else:
+                applied = "promote"
+                changed = True
             if not dry_run:
-                self.store.update_capsule_status(capsule["id"], MemoryStatus.STABLE, actor="review-worker", reason=reason)
-                self.resolve_queue_item(row["id"])
+                if changed:
+                    updated = self.store.update_capsule_status_if_current(
+                        capsule["id"],
+                        MemoryStatus.CANDIDATE,
+                        MemoryStatus.STABLE,
+                        actor="review-worker",
+                        reason=reason,
+                    )
+                    changed = updated
+                    if updated:
+                        self.resolve_queue_item(row["id"])
+                    else:
+                        applied = "keep-open"
+                        reason = "promotion skipped because capsule status changed before apply"
         elif row["action"] == "quarantine" and capsule["status"] != MemoryStatus.QUARANTINED.value:
             applied = "quarantine"
             changed = True
@@ -542,6 +561,11 @@ class QualityScorer:
             action, reasons = "review", ["excluded from hot memory by deterministic risk policy"]
         else:
             action, reasons = _action_for(cap, quality=quality, decay=decay)
+            if action == "promote":
+                gate = can_promote_capsule(self.store, cap, require_provenance=True, risk_verdict=risk)
+                if not gate.allowed:
+                    action = "review"
+                    reasons = [promotion_block_reason(gate)]
         reasons.extend(risk.reasons[:3])
         priority = _priority(action, quality=quality, decay=decay, risk_score=risk.score)
         return QualityItem(

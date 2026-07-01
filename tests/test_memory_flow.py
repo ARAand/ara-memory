@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 import hashlib
@@ -17,6 +18,7 @@ import ara_memory.backup_stewardship as backup_stewardship_module
 import ara_memory.retention as retention_module
 import ara_memory.prune as prune_module
 import ara_memory.storage as storage_module
+import ara_memory.spool as spool_module
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
 from ara_memory.compressors import estimate_tokens, extract_keywords
@@ -4501,6 +4503,15 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(failed_payload["turn"]["turn_id"], "turn_spooled_fail")
             self.assertIn("error", failed_payload)
 
+    def test_spool_seal_key_first_create_is_atomic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                keys = list(pool.map(lambda _: spool_module._spool_key(root, create=True), range(16)))
+
+            self.assertEqual({key for key in keys}, {keys[0]})
+            self.assertEqual(len(keys[0]), 32)
+
     def test_drain_spool_rejects_unsealed_pending_envelope_before_retention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -4730,6 +4741,78 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(report.steps[7].detail["passed"])
             self.assertIn("items_truncated", report.steps[4].detail)
             self.assertIn("items_truncated", report.steps[5].detail)
+
+    def test_memory_worker_apply_review_stops_after_drain_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            missing = root / "missing.md"
+            memory.spool_turn(
+                {
+                    "turn_id": "turn_worker_failed_drain",
+                    "prompt": "Failed worker drain should not be followed by apply-review.",
+                    "files": [{"path": str(missing), "caption": "missing file"}],
+                },
+                scope="worker-failure",
+            )
+            left = memory.retain(
+                kind="note",
+                text="Worker failure candidate source left.",
+                source="test-left",
+                scope="worker-failure",
+            )
+            right = memory.retain(
+                kind="note",
+                text="Worker failure candidate source right.",
+                source="test-right",
+                scope="worker-failure",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="worker drain failure candidate",
+                body="Worker must not promote after drain failure.",
+                scope="worker-failure",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[left.id, right.id],
+                tags=["worker", "failure"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+            with memory.store.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO memory_review_queue(
+                      id, capsule_id, scope, action, priority, reason, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "review_worker_failed_drain",
+                        candidate.id,
+                        "worker-failure",
+                        "promote",
+                        0.99,
+                        "queued before drain failure",
+                        "open",
+                        utc_now(),
+                    ),
+                )
+
+            report = memory.worker(
+                scope="worker-failure",
+                spool_limit=10,
+                apply_review=True,
+                use_lock=False,
+                run_maintenance_step=False,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            step_names = [step.name for step in report.steps]
+            self.assertEqual(step_names, ["drain_spool", "worker_guard"])
+            self.assertIn("skipped behavior-changing", report.steps[1].detail["reason"])
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(memory.review_queue(scope="worker-failure")[0]["status"], "open")
 
     def test_memory_worker_drains_only_its_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5928,6 +6011,142 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(memory.resolve_review(queue_id))
             self.assertFalse(any(row["id"] == queue_id for row in memory.review_queue(scope="quality-scope")))
 
+    def test_automatic_promotion_requires_explicit_or_independent_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            weak_event = memory.retain(
+                kind="prompt",
+                text="Maybe project alpha should use single-source memory promotion.",
+                source="test",
+                scope="promotion-gate",
+            )
+            weak = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="single source promotion candidate",
+                body="Project alpha should use single-source memory promotion.",
+                scope="promotion-gate",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[weak_event.id],
+                tags=["promotion", "gate"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(weak)
+
+            review = memory.review(scope="promotion-gate")
+            weak_rec = next(item for item in review if item["capsule_id"] == weak.id)
+            self.assertEqual(weak_rec["action"], "keep")
+            self.assertIn("promotion gate blocked", weak_rec["reason"])
+
+            quality = memory.quality(scope="promotion-gate", persist=True)
+            weak_quality = next(item for item in quality.items if item.capsule_id == weak.id)
+            self.assertEqual(weak_quality.action, "review")
+            self.assertFalse(any(row["action"] == "promote" for row in memory.review_queue(scope="promotion-gate")))
+
+            report = memory.sleep(scope="promotion-gate")
+            self.assertEqual(report.promoted, 0)
+            self.assertEqual(memory.store.get_capsule(weak.id)["status"], MemoryStatus.CANDIDATE.value)
+
+            second_event = memory.retain(
+                kind="note",
+                text="Independent note: project alpha should use corroborated promotion.",
+                source="test-2",
+                scope="promotion-gate-pass",
+            )
+            third_event = memory.retain(
+                kind="prompt",
+                text="Project alpha should use corroborated promotion.",
+                source="test-3",
+                scope="promotion-gate-pass",
+            )
+            strong = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="independent source promotion candidate",
+                body="Project alpha should use corroborated promotion.",
+                scope="promotion-gate-pass",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[second_event.id, third_event.id],
+                tags=["promotion", "gate"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(strong)
+
+            report = memory.sleep(scope="promotion-gate-pass")
+            self.assertEqual(report.promoted, 1)
+            self.assertEqual(memory.store.get_capsule(strong.id)["status"], MemoryStatus.STABLE.value)
+
+    def test_automatic_promotion_rejects_missing_source_event_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            orphan = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="orphan promotion candidate",
+                body="Use orphan source ids as if they were verified provenance.",
+                scope="promotion-missing-source",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=["evt_missing"],
+                tags=["promotion", "orphan"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(orphan)
+
+            review = memory.review(scope="promotion-missing-source")
+            rec = next(item for item in review if item["capsule_id"] == orphan.id)
+            self.assertEqual(rec["action"], "keep")
+            self.assertIn("missing source event rows", rec["reason"])
+
+            report = memory.sleep(scope="promotion-missing-source")
+            self.assertEqual(report.promoted, 0)
+            self.assertEqual(memory.store.get_capsule(orphan.id)["status"], MemoryStatus.CANDIDATE.value)
+
+    def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: impact feedback should remain a bounded recall signal.",
+                source="test",
+                scope="impact-gate",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="impact feedback candidate",
+                body="Impact feedback should remain a bounded recall signal.",
+                scope="impact-gate",
+                confidence=0.69,
+                salience=0.69,
+                source_event_ids=[event.id],
+                tags=["impact", "feedback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+            for index in range(3):
+                memory.record_memory_impact(
+                    scope="impact-gate",
+                    cue=f"impact feedback recall cue {index}",
+                    capsule_ids=[candidate.id],
+                    outcome="helped current working-memory projection",
+                    helped=True,
+                )
+
+            review = memory.review(scope="impact-gate")
+            rec = next(item for item in review if item["capsule_id"] == candidate.id)
+            self.assertEqual(rec["action"], "keep")
+
+            quality = memory.quality(scope="impact-gate", persist=True)
+            item = next(item for item in quality.items if item.capsule_id == candidate.id)
+            self.assertNotEqual(item.action, "promote")
+            self.assertFalse(any(row["action"] == "promote" for row in memory.review_queue(scope="impact-gate")))
+
+            report = memory.sleep(scope="impact-gate")
+            self.assertEqual(report.promoted, 0)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
+
     def test_quality_scoring_does_not_requeue_already_quarantined_capsules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -6039,6 +6258,57 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(risky.id, quarantined_ids)
             self.assertEqual(memory.review_queue(scope="worker-scope"), [])
 
+    def test_review_worker_apply_cannot_promote_stale_blocked_queue_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="prompt",
+                text="Project alpha should not let stale promotion queues bypass provenance.",
+                source="test",
+                scope="worker-gate",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="stale queue promotion candidate",
+                body="Project alpha should not let stale promotion queues bypass provenance.",
+                scope="worker-gate",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[event.id],
+                tags=["worker", "promotion"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+            now = utc_now()
+            with memory.store.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO memory_review_queue(
+                      id, capsule_id, scope, action, priority, reason, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "review_stale_promote",
+                        candidate.id,
+                        "worker-gate",
+                        "promote",
+                        0.99,
+                        "stale queued promotion",
+                        "open",
+                        now,
+                    ),
+                )
+
+            applied = memory.review_worker(scope="worker-gate", dry_run=False)
+
+            self.assertEqual(applied.changed, 1, applied.as_dict())
+            item = applied.items[0]
+            self.assertEqual(item.applied_action, "resolve")
+            self.assertIn("current action is review", item.reason)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
+
     def test_external_command_advisor_can_keep_safe_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -6080,6 +6350,65 @@ class MemoryFlowTests(unittest.TestCase):
                 self.assertTrue(all(item["action"] == "keep" for item in review))
                 report = memory.sleep(scope="external-review")
                 self.assertEqual(report.promoted, 0)
+            finally:
+                _restore_env("ARA_MEMORY_ADVISOR", old_provider)
+                _restore_env("ARA_MEMORY_ADVISOR_COMMAND", old_command)
+
+    def test_external_command_advisor_cannot_promote_below_shared_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            advisor_script = root / "advisor.py"
+            advisor_script.write_text(
+                "\n".join(
+                    [
+                        "import json, sys",
+                        "payload = json.loads(sys.stdin.read())",
+                        "print(json.dumps({'recommendations': [",
+                        "    {",
+                        "        'capsule_id': cap['id'],",
+                        "        'action': 'promote',",
+                        "        'reason': 'external advisor wants promotion',",
+                        "        'risk_score': 0.0,",
+                        "    } for cap in payload['candidates']",
+                        "]}))",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            old_provider = os.environ.get("ARA_MEMORY_ADVISOR")
+            old_command = os.environ.get("ARA_MEMORY_ADVISOR_COMMAND")
+            try:
+                os.environ["ARA_MEMORY_ADVISOR"] = "external-command"
+                os.environ["ARA_MEMORY_ADVISOR_COMMAND"] = f'"{sys.executable}" "{advisor_script}"'
+                memory = AraMemory(root / "memory")
+                memory.init()
+                event = memory.retain(
+                    kind="prompt",
+                    text="Project alpha should not let external advisors invent promotion authority.",
+                    source="test",
+                    scope="external-gate",
+                )
+                candidate = Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="external gate candidate",
+                    body="Project alpha should not let external advisors invent promotion authority.",
+                    scope="external-gate",
+                    confidence=0.95,
+                    salience=0.95,
+                    source_event_ids=[event.id],
+                    tags=["external", "promotion"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+                memory.store.upsert_capsule(candidate)
+
+                review = memory.review(scope="external-gate")
+                self.assertTrue(review)
+                rec = next(item for item in review if item["capsule_id"] == candidate.id)
+                self.assertEqual(rec["action"], "keep")
+                self.assertIn("promotion gate blocked", rec["reason"])
+                report = memory.sleep(scope="external-gate")
+                self.assertEqual(report.promoted, 0)
+                self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
             finally:
                 _restore_env("ARA_MEMORY_ADVISOR", old_provider)
                 _restore_env("ARA_MEMORY_ADVISOR_COMMAND", old_command)

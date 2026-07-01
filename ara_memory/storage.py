@@ -652,6 +652,40 @@ class MemoryStore:
             _invalidate_hot_scope(self.hot_dir, row["scope"])
             return cur.rowcount > 0
 
+    def update_capsule_status_if_current(
+        self,
+        capsule_id: str,
+        current_status: MemoryStatus,
+        status: MemoryStatus,
+        *,
+        actor: str = "manual",
+        reason: str = "",
+    ) -> bool:
+        self.init()
+        with self.session() as conn:
+            row = conn.execute("SELECT scope, status FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if row is None or row["status"] != current_status.value:
+                return False
+            now = utc_now()
+            cur = conn.execute(
+                "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (status.value, now, capsule_id, current_status.value),
+            )
+            if cur.rowcount <= 0:
+                return False
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if updated is not None:
+                _sync_capsule_fts_row(conn, updated)
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (status.value, capsule_id, row["scope"], reason, actor, utc_now()),
+            )
+            _invalidate_hot_scope(self.hot_dir, row["scope"])
+            return True
+
     def get_capsule(self, capsule_id: str) -> sqlite3.Row | None:
         self.init()
         with self.session() as conn:

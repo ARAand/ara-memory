@@ -13,6 +13,10 @@ memory residency: core memories can stay hot, working memories must be selected
 by the query, guarded memories require review, and cold evidence stays
 preserved but inactive.
 
+Natural memory means Ara recalls the desired purpose, identity, and task
+context without rereading raw history or turning every stored event into
+always-on instruction.
+
 ## Purpose
 
 - Continuity: Ara should not restart from zero every session.
@@ -583,6 +587,25 @@ python -m ara_memory quarantine cap_xxxxxxxxxxxxxxxx --reason "untrusted behavio
 ```
 
 This is the first protection against memory poisoning and preference overfitting.
+
+### Shared Promotion Gate
+
+Changing a capsule to `stable` can change future behavior. Manual promotion,
+sleep consolidation, review-worker apply mode, and external advisor results
+therefore share the same final gate before a stable write. The gate reruns the
+deterministic risk boundary and automatic promotion also requires either two
+real source events, two consolidated source capsules, or one explicit
+decision/manual source. Missing source rows,
+quarantined/rejected/superseded capsules, instruction-like text, secrets,
+self-serving claims, and keyword stuffing block behavior-changing promotion.
+Evidence summaries may still become stable when keyword repetition is the only
+risk signal; hot/recall risk filters continue to keep them out of always-on
+context.
+
+Automatic promotion writes are conditional: a capsule must still be
+`candidate` at write time. If another worker or operator quarantines, rejects,
+or supersedes it after review but before write, the stale promotion cannot
+resurrect it as stable.
 
 Inspect candidate memories before promoting:
 
