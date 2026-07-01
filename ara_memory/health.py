@@ -246,6 +246,7 @@ def _backup_stewardship_report(
     return memory.backup_stewardship(
         target_backup_bytes=target_backup_bytes,
         quarantine_failed=True,
+        write_cache=False,
     ).as_dict()
 
 

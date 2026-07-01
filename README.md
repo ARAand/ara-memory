@@ -291,8 +291,9 @@ CLI; schedulers and CI that should alert on watch conditions must parse
 drifted retention-cycle as watch evidence and points back to
 `cold-stewardship`/`retention-cycle` before any live cleanup. When verified
 backup bytes exceed the stewardship target, health reports a `backup_pressure`
-watch signal using a dry-run `backup-stewardship` candidate set; deletion still
-requires a separate reviewed `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"`,
+watch signal using a read-only dry-run `backup-stewardship` candidate set that
+does not update the verification cache; deletion still requires a separate
+reviewed `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"`,
 and failed-backup quarantine requires
 `--quarantine-confirm "QUARANTINE FAILED BACKUPS"`.
 `purpose-check` is the goal-alignment report. It verifies that stable goal
@@ -589,6 +590,7 @@ memory:
 
 ```powershell
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --no-cache-write
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed --apply --quarantine-confirm "QUARANTINE FAILED BACKUPS"
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --apply --confirm "DELETE OLD BACKUPS"
@@ -596,7 +598,10 @@ python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 
 
 The command is dry-run by default. The default CLI target is 64 MiB of backup
 bytes, and candidate selection deletes only enough old redundant backups to move
-toward that budget. Apply mode takes the same worker lock used by scheduled
+toward that budget. Dry-runs update the backup verification cache by default so
+repeated manual reviews are cheap; use `--no-cache-write` for read-only
+diagnostic runs where the inspection itself must not mutate the store. Apply
+mode takes the same worker lock used by scheduled
 worker-loop and retention-cycle before it moves or deletes any backup file; use
 `--no-lock` only when the store is otherwise quiescent. Apply mode deletes only verified backups that are neither
 among the latest kept backups, nor referenced by recent passing retention-cycle

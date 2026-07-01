@@ -2975,6 +2975,30 @@ class MemoryFlowTests(unittest.TestCase):
             kept = next(item for item in report.items if Path(item.path).resolve() == approved.resolve())
             self.assertIn("referenced-by-active-prune-approval", kept.keep_reasons)
 
+    def test_backup_stewardship_can_skip_verification_cache_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(kind="decision", text="Decision: diagnostic backup review must be read-only.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            for index in range(2):
+                path = backup_dir / f"readonly-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (6000 + index, 6000 + index))
+            cache_path = backup_stewardship_module._cache_path(memory.store.root)
+
+            report = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0, write_cache=False)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertFalse(cache_path.exists())
+            self.assertFalse(report.totals["verification_cache_write_enabled"])
+            self.assertEqual(report.totals["verification_cache_entries"], 2)
+
+            cached = memory.backup_stewardship(keep_latest=1, keep_retention_cycles=0)
+            self.assertTrue(cached.passed, cached.as_dict())
+            self.assertTrue(cache_path.exists())
+            self.assertTrue(cached.totals["verification_cache_write_enabled"])
+
     def test_backup_stewardship_caches_unchanged_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3032,6 +3056,46 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertFalse(payload["passed"], payload)
             self.assertIn("Refusing deletion", payload["recommendations"][0])
+
+    def test_backup_stewardship_cli_no_cache_write_keeps_dry_run_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(kind="decision", text="Decision: CLI dry-run can avoid cache writes.", scope="alpha")
+            memory.consolidate()
+            backup_dir = memory.store.root / "backups"
+            for index in range(2):
+                path = backup_dir / f"cli-readonly-{index}.zip"
+                memory.backup(output=path)
+                os.utime(path, (7100 + index, 7100 + index))
+            cache_path = backup_stewardship_module._cache_path(memory.store.root)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory.store.root),
+                    "backup-stewardship",
+                    "--keep-latest",
+                    "1",
+                    "--keep-retention-cycles",
+                    "0",
+                    "--target-backup-bytes",
+                    "0",
+                    "--no-cache-write",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["passed"], payload)
+            self.assertFalse(payload["totals"]["verification_cache_write_enabled"])
+            self.assertFalse(cache_path.exists())
 
     def test_cold_export_preserves_prunable_capsules_and_source_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8004,6 +8068,7 @@ class MemoryFlowTests(unittest.TestCase):
                 path = backup_dir / f"health-pressure-{index}.zip"
                 memory.backup(output=path)
                 os.utime(path, (8000 + index, 8000 + index))
+            cache_path = backup_stewardship_module._cache_path(memory.store.root)
 
             report = memory.health(
                 scope="alpha",
@@ -8019,6 +8084,8 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(pressure.severity, "warning")
             self.assertIn("redundant verified backups", pressure.detail)
             self.assertGreater(report.stats["backup_stewardship"]["totals"]["delete_candidates"], 0)
+            self.assertFalse(report.stats["backup_stewardship"]["totals"]["verification_cache_write_enabled"])
+            self.assertFalse(cache_path.exists())
 
             disabled = memory.health(
                 scope="alpha",

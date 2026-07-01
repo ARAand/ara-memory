@@ -139,12 +139,15 @@ def run_backup_stewardship(
     quarantine_confirm: str = "",
     use_lock: bool = True,
     lock_stale_seconds: int = 3600,
+    write_cache: bool = True,
 ) -> BackupStewardshipReport:
     _validate_stewardship_args(
         keep_latest=keep_latest,
         keep_retention_cycles=keep_retention_cycles,
         target_backup_bytes=target_backup_bytes,
     )
+    if apply and not write_cache:
+        raise ValueError("write_cache=False is only supported for dry-run backup stewardship")
     store.init()
     root = store.root
     if apply and use_lock:
@@ -160,6 +163,7 @@ def run_backup_stewardship(
                     keep_latest=keep_latest,
                     keep_retention_cycles=keep_retention_cycles,
                     target_backup_bytes=target_backup_bytes,
+                    write_cache=write_cache,
                 ),
                 items=[],
                 recommendations=[
@@ -179,6 +183,7 @@ def run_backup_stewardship(
                 confirm=confirm,
                 quarantine_confirm=quarantine_confirm,
                 lock=lock_payload,
+                write_cache=write_cache,
             )
         finally:
             lock.release()
@@ -192,6 +197,7 @@ def run_backup_stewardship(
         confirm=confirm,
         quarantine_confirm=quarantine_confirm,
         lock=None,
+        write_cache=write_cache,
     )
 
 
@@ -206,6 +212,7 @@ def _run_backup_stewardship_unlocked(
     confirm: str = "",
     quarantine_confirm: str = "",
     lock: dict[str, Any] | None = None,
+    write_cache: bool = True,
 ) -> BackupStewardshipReport:
     if keep_latest < 1:
         raise ValueError("keep_latest must be at least 1")
@@ -222,6 +229,7 @@ def _run_backup_stewardship_unlocked(
             keep_latest=keep_latest,
             keep_retention_cycles=keep_retention_cycles,
             target_backup_bytes=target_backup_bytes,
+            write_cache=write_cache,
         )
         return BackupStewardshipReport(
             root=str(root),
@@ -458,12 +466,15 @@ def _run_backup_stewardship_unlocked(
         "delete_errors": deletion_errors,
         "keep_latest": keep_latest,
         "keep_retention_cycles": keep_retention_cycles,
+        "verification_cache_write_enabled": write_cache,
+        "verification_cache_entries": len(current_cache),
     }
-    _save_verification_cache(
-        root,
-        current_cache,
-        deleted_paths={_item_cache_key(item) for item in items if item.deleted or item.quarantined},
-    )
+    if write_cache:
+        _save_verification_cache(
+            root,
+            current_cache,
+            deleted_paths={_item_cache_key(item) for item in items if item.deleted or item.quarantined},
+        )
     return BackupStewardshipReport(
         root=str(root),
         dry_run=not apply,
@@ -743,6 +754,7 @@ def _empty_totals(
     keep_latest: int,
     keep_retention_cycles: int,
     target_backup_bytes: int | None,
+    write_cache: bool = True,
 ) -> dict[str, Any]:
     return {
         "backups": 0,
@@ -767,6 +779,8 @@ def _empty_totals(
         "delete_errors": 0,
         "keep_latest": keep_latest,
         "keep_retention_cycles": keep_retention_cycles,
+        "verification_cache_write_enabled": write_cache,
+        "verification_cache_entries": 0,
     }
 
 

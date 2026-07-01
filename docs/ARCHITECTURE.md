@@ -97,7 +97,7 @@ recall_regression(manifest, baseline)
 health(scope)
   -> doctor + spool + review pressure
   -> candidate/cold retention ratios
-  -> latest backup age + backup stewardship dry-run pressure
+  -> latest backup age + read-only backup stewardship dry-run pressure
   -> cold_stewardship when cold pressure is high
   -> retention-cycle freshness and live cold-total drift checks
   -> optional recall_regression

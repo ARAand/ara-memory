@@ -537,6 +537,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Do not take the worker lock in apply mode. Use only when the store is otherwise quiescent.",
     )
+    backup_stewardship.add_argument(
+        "--no-cache-write",
+        action="store_true",
+        help="Do not update the backup verification cache during dry-run review.",
+    )
     backup_stewardship.add_argument("--lock-stale-seconds", type=int, default=3600)
     backup_stewardship.add_argument("--json", action="store_true")
     verify_backup = sub.add_parser("verify-backup")
@@ -1382,6 +1387,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "backup-stewardship":
+        if args.apply and args.no_cache_write:
+            message = "--no-cache-write is only valid for dry-run backup-stewardship."
+            if args.json:
+                print(json.dumps({"passed": False, "error": message}, ensure_ascii=False, indent=2, sort_keys=True))
+            else:
+                print(message, file=sys.stderr)
+            return 2
         result = memory.backup_stewardship(
             keep_latest=args.keep_latest,
             keep_retention_cycles=args.keep_retention_cycles,
@@ -1392,6 +1404,7 @@ def main(argv: list[str] | None = None) -> int:
             quarantine_confirm=args.quarantine_confirm,
             use_lock=not args.no_lock,
             lock_stale_seconds=args.lock_stale_seconds,
+            write_cache=not args.no_cache_write,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
