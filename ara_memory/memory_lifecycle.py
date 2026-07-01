@@ -178,14 +178,23 @@ def _capsules(store: MemoryStore, *, scope: str | None, limit: int) -> tuple[lis
         clauses.append("scope = ?")
         args.append(scope)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    args.append(limit + 1)
+    core_kinds = sorted(CORE_KINDS)
+    core_placeholders = ",".join("?" for _ in core_kinds)
+    args.extend([MemoryStatus.STABLE.value, *core_kinds, 0.70, 0.55, limit + 1])
     with store.session() as conn:
         rows = conn.execute(
             f"""
             SELECT *
             FROM capsules
             {where}
-            ORDER BY updated_at DESC, salience DESC, id ASC
+            ORDER BY
+              CASE
+                WHEN status = ? AND kind IN ({core_placeholders}) AND confidence >= ? AND salience >= ? THEN 0
+                ELSE 1
+              END,
+              updated_at DESC,
+              salience DESC,
+              id ASC
             LIMIT ?
             """,
             args,

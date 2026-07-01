@@ -3537,6 +3537,52 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Ara Memory Lifecycle", text)
             self.assertIn("core-only", text)
 
+    def test_lifecycle_limit_keeps_old_core_anchors_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: lifecycle limits must not hide old long-running purpose anchors.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: old natural memory anchor",
+                body="Build natural memory that recalls purpose without reading everything.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal"],
+                status=MemoryStatus.STABLE,
+            )
+            goal.updated_at = "2026-01-01T00:00:00+00:00"
+            memory.store.upsert_capsule(goal)
+            for index in range(6):
+                working = Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title=f"Project memory: newest working detail {index}",
+                    body="Recent working memory should not crowd core anchors out of a bounded lifecycle sample.",
+                    scope="alpha",
+                    confidence=0.8,
+                    salience=0.8,
+                    source_event_ids=[event.id],
+                    tags=["working"],
+                    status=MemoryStatus.CANDIDATE,
+                )
+                working.updated_at = f"2026-07-01T00:00:0{index}+00:00"
+                memory.store.upsert_capsule(working)
+
+            report = memory.lifecycle(scope="alpha", limit=3, examples_per_tier=3)
+
+            self.assertEqual(report.status, "pass", report.as_dict())
+            self.assertEqual(report.totals["core_capsules"], 1)
+            self.assertTrue(report.totals["rows_limited"])
+            core_ids = [item.capsule_id for tier in report.tiers if tier.name == "core" for item in tier.examples]
+            self.assertEqual(core_ids, [goal.id])
+
     def test_lifecycle_cli_outputs_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
