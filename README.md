@@ -531,7 +531,11 @@ backup age, backup byte pressure, retention-cycle freshness/current-match
 checks, and optional recall regression into a pass/watch/fail status with
 concrete next actions. `watch` is intentionally non-fatal and exits 0 from the
 CLI; schedulers and CI that should alert on watch conditions must parse
-`health --json` and inspect `status`, not only the process exit code. When cold pressure is high, health treats a stale or
+`health --json` and inspect `status`, not only the process exit code. Use
+`health --compact` or `health --compact --json` for worker logs and status
+handoffs; it preserves pass/watch/fail, compact stats, failed/warning signals,
+and next actions without dumping nested doctor, stewardship, and retention
+payloads into the prompt. When cold pressure is high, health treats a stale or
 drifted retention-cycle as watch evidence and points back to
 `cold-stewardship`/`retention-cycle` before any live cleanup. A passing
 `cold-stewardship` report can cover high cold ratios only when shadow events are

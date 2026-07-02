@@ -951,6 +951,7 @@ def main(argv: list[str] | None = None) -> int:
     health.add_argument("--retention-cycle-max-age-hours", type=float, default=72.0)
     health.add_argument("--regression-manifest", type=Path, default=None)
     health.add_argument("--regression-baseline", type=Path, default=None)
+    health.add_argument("--compact", action="store_true")
     health.add_argument("--json", action="store_true")
     backup = sub.add_parser("backup")
     backup.add_argument("--output", type=Path, default=None)
@@ -2450,7 +2451,10 @@ def main(argv: list[str] | None = None) -> int:
             regression_baseline=baseline,
         )
         if args.json:
-            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            payload = report.as_compact_dict() if args.compact else report.as_dict()
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        elif args.compact:
+            print(report.to_compact_text())
         else:
             print(report.to_text())
         return 0 if report.passed else 1

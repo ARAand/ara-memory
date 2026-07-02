@@ -265,6 +265,7 @@ health(scope)
   -> cold_stewardship when cold pressure is high
   -> retention-cycle freshness and live cold-total drift checks
   -> optional recall_regression
+  -> compact projection for worker logs and low-token status handoffs
 
 worker(scope)
   -> acquire .ara-memory/locks/worker.lock

@@ -51,6 +51,27 @@ class HealthReport:
             "recommendations": self.recommendations,
         }
 
+    def as_compact_dict(self) -> dict[str, Any]:
+        failed = [signal for signal in self.signals if not signal.passed]
+        warning_count = sum(1 for signal in failed if signal.severity == "warning")
+        error_count = sum(1 for signal in failed if signal.severity == "error")
+        return {
+            "scope": self.scope,
+            "passed": self.passed,
+            "status": self.status,
+            "score": self.score,
+            "stats": _compact_health_stats(self.stats),
+            "signals": {
+                "total": len(self.signals),
+                "passed": sum(1 for signal in self.signals if signal.passed),
+                "warnings": warning_count,
+                "errors": error_count,
+                "attention": [_compact_signal(signal) for signal in failed],
+            },
+            "recommendations": list(self.recommendations[:5]),
+            "recommendations_truncated": max(0, len(self.recommendations) - 5),
+        }
+
     def to_text(self) -> str:
         lines = [f"# Ara Memory Health: {self.scope}", f"status: {self.status}", f"score: {self.score}/100"]
         lines.append("## Signals")
@@ -59,6 +80,33 @@ class HealthReport:
             lines.append(f"- [{marker}] {signal.name}: {signal.detail}")
         lines.append("## Recommendations")
         for recommendation in self.recommendations:
+            lines.append(f"- {recommendation}")
+        return "\n".join(lines)
+
+    def to_compact_text(self) -> str:
+        payload = self.as_compact_dict()
+        lines = [
+            f"# Ara Memory Health Compact: {self.scope}",
+            f"status: {self.status}",
+            f"score: {self.score}/100",
+            (
+                "signals: "
+                f"{payload['signals']['passed']}/{payload['signals']['total']} ok, "
+                f"{payload['signals']['warnings']} warning, {payload['signals']['errors']} error"
+            ),
+        ]
+        stats = payload["stats"]
+        if stats:
+            lines.append("## Stats")
+            for key, value in stats.items():
+                lines.append(f"- {key}: {value}")
+        attention = payload["signals"]["attention"]
+        if attention:
+            lines.append("## Needs Attention")
+            for signal in attention:
+                lines.append(f"- [{signal['severity'].upper()}] {signal['name']}: {signal['detail']}")
+        lines.append("## Recommendations")
+        for recommendation in payload["recommendations"]:
             lines.append(f"- {recommendation}")
         return "\n".join(lines)
 
@@ -151,6 +199,140 @@ def run_health_check(
         signals=signals,
         recommendations=_recommend(signals),
     )
+
+
+def _compact_health_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    latest_backup = stats.get("latest_backup") or {}
+    backup_stewardship = stats.get("backup_stewardship") or {}
+    latest_retention_cycle = stats.get("latest_retention_cycle") or {}
+    cold_stewardship = stats.get("cold_stewardship") or {}
+    retention = stats.get("retention") or {}
+    compact: dict[str, Any] = {
+        "schema_version": stats.get("schema_version"),
+        "events": stats.get("events"),
+        "capsules": stats.get("capsules"),
+        "stable_capsules": stats.get("stable_capsules"),
+        "source_event_links": stats.get("source_event_links"),
+        "storage_bytes": stats.get("storage_bytes"),
+        "backup_bytes": stats.get("backup_bytes"),
+        "spool": stats.get("spool"),
+        "review_open": stats.get("review_open"),
+    }
+    if retention:
+        compact["retention"] = _drop_none(
+            {
+                "candidate_stable_ratio": _safe_ratio(
+                    retention.get("candidate_capsules"),
+                    retention.get("stable_capsules"),
+                ),
+                "cold_ratio": retention.get("cold_ratio"),
+                "cold_capsules": retention.get("cold_capsules"),
+                "protected_source_events": retention.get("protected_source_events"),
+                "prunable_source_events": retention.get("prunable_source_events"),
+            }
+        )
+    if latest_backup:
+        compact["latest_backup"] = _drop_none(
+            {
+                "path": latest_backup.get("path"),
+                "age_hours": latest_backup.get("age_hours"),
+                "verified": latest_backup.get("verified"),
+            }
+        )
+    if backup_stewardship:
+        totals = backup_stewardship.get("totals") or {}
+        compact["backup_stewardship"] = _drop_none(
+            {
+                "delete_candidates": totals.get("delete_candidates"),
+                "bytes": totals.get("bytes"),
+                "bytes_after_candidates": totals.get("bytes_after_candidates"),
+                "target_backup_bytes": totals.get("target_backup_bytes"),
+                "target_reached": totals.get("target_reached"),
+            }
+        )
+    if latest_retention_cycle:
+        compact["latest_retention_cycle"] = _drop_none(
+            {
+                "path": latest_retention_cycle.get("path"),
+                "age_hours": latest_retention_cycle.get("age_hours"),
+                "passed": latest_retention_cycle.get("passed"),
+                "plan_totals": latest_retention_cycle.get("plan_totals"),
+            }
+        )
+    if cold_stewardship:
+        cycle_evidence = cold_stewardship.get("cycle_evidence") or {}
+        totals = cold_stewardship.get("totals") or {}
+        compact["cold_stewardship"] = _drop_none(
+            {
+                "status": cold_stewardship.get("status"),
+                "cold_capsules": totals.get("cold_capsules"),
+                "protected_source_events": totals.get("protected_source_events"),
+                "prunable_source_events": totals.get("prunable_source_events"),
+                "cycle_evidence": _drop_none(
+                    {
+                        "fresh": cycle_evidence.get("fresh"),
+                        "matches_current": cycle_evidence.get("matches_current"),
+                        "protected_only_drift": cycle_evidence.get("protected_only_drift"),
+                        "prunable_identity_match": cycle_evidence.get("prunable_identity_match"),
+                    }
+                ),
+            }
+        )
+    return {key: value for key, value in compact.items() if value is not None}
+
+
+def _compact_signal(signal: HealthSignal) -> dict[str, Any]:
+    value = signal.value
+    compact_value: Any = None
+    if isinstance(value, dict):
+        compact_value = {
+            key: value.get(key)
+            for key in (
+                "status",
+                "passed",
+                "total_open",
+                "fail_count",
+                "watch_count",
+                "blockers",
+                "path",
+                "age_hours",
+                "verified",
+            )
+            if key in value
+        }
+        totals = value.get("totals")
+        if isinstance(totals, dict):
+            compact_value["totals"] = {
+                key: totals.get(key)
+                for key in (
+                    "bytes",
+                    "bytes_after_candidates",
+                    "delete_candidates",
+                    "target_backup_bytes",
+                    "target_reached",
+                )
+                if key in totals
+            }
+    elif value is not None:
+        compact_value = value
+    result = {
+        "name": signal.name,
+        "severity": signal.severity,
+        "detail": signal.detail,
+    }
+    if compact_value not in (None, {}):
+        result["value"] = compact_value
+    return result
+
+
+def _safe_ratio(numerator: Any, denominator: Any) -> float | None:
+    if numerator is None or denominator in (None, 0):
+        return None
+    return round(float(numerator) / float(denominator), 4)
+
+
+def _drop_none(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: item for key, item in value.items() if item is not None and item != {}}
 
 
 def _spool_signal(spool: dict[str, int]) -> HealthSignal:

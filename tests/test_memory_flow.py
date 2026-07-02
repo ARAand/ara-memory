@@ -14820,6 +14820,63 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(spool_signal.passed)
             self.assertEqual(spool_signal.severity, "error")
 
+    def test_health_compact_json_omits_verbose_signal_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: compact health should report operating status without verbose nested diagnostics.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.sleep(scope="alpha")
+            memory.build_hot(scope="alpha", budget=600)
+            memory.backup(output=memory.store.root / "backups" / "compact-health.zip")
+
+            report = memory.health(scope="alpha", query="compact health status", recall_budget=900, hot_budget=600)
+            compact = report.as_compact_dict()
+
+            self.assertTrue(compact["passed"], compact)
+            self.assertEqual(compact["signals"]["total"], len(report.signals))
+            self.assertIsInstance(compact["signals"]["attention"], list)
+            self.assertIn("latest_backup", compact["stats"])
+            self.assertNotIn("items", compact["stats"].get("backup_stewardship", {}))
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "health",
+                    "--scope",
+                    "alpha",
+                    "--query",
+                    "compact health status",
+                    "--recall-budget",
+                    "900",
+                    "--hot-budget",
+                    "600",
+                    "--compact",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], compact["status"])
+            self.assertIsInstance(payload["signals"], dict)
+            self.assertIn("attention", payload["signals"])
+            self.assertNotIn("signals", payload["stats"].get("latest_backup", {}))
+
     def test_health_fails_on_failed_relation_merge_review_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
