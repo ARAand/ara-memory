@@ -54,6 +54,7 @@
 - `live-prune` binds approvals to exact capsule IDs plus backup/export SHA-256 identities, rechecks export coverage from the verified cold-export scan, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
 - `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, proved source-event preservation, separates active-linked evidence from archive candidates and audit-only rejects, and identifies active memories that pin cold source events.
+- `provenance-compact` is dry-run by default and applies only with `--apply --confirm "COMPACT PROVENANCE"`. Apply mode rewrites active source-event links in one transaction with compare-and-set checks on capsule status, expected source IDs, and retained event existence; any stale or malformed item aborts the whole batch. Successful writes leave `memory_actions` rows with `action=compact-provenance` and `actor=provenance-compaction`.
 - `lifecycle` is analysis-only: it separates core, working, guarded, evidence, archive, and reject memory without changing capsule status or deleting provenance.
 - Repository ignore rules block local memory roots, SQLite databases, backups, archives, logs, restored memory roots, and Codex-local folders from ordinary `git add .` publishing paths.
 
@@ -79,6 +80,7 @@
 - Treat `ARA_MEMORY_ADVISOR_COMMAND` as trusted code, not as data.
 - Inspect `.ara-memory/spool/failed/` before deleting or replaying failed envelopes.
 - Treat `worker --apply-review` as a behavior-changing operation and inspect the dry-run report first.
+- Treat `provenance-compact --apply` as behavior-changing maintenance, even though it does not delete memory text or source events. Review the dry-run, use `--include-non-summary` only after inspecting affected capsules, and rerun `cold-stewardship`, `health`, and `recall-regression` before any retention-cycle, prune-plan, or live-prune decision.
 - Treat stale lock removal as an operational recovery step; lower `--lock-stale-seconds` only for known-crashed workers.
 - Lower `--processing-stale-seconds` only when you know no worker is still processing those envelopes.
 - Run `worker-loop` with `--iterations 1` under external schedulers unless a foreground operator is watching the loop output.
@@ -100,3 +102,5 @@
 - Signed or allow-listed advisor providers.
 - A pre-push privacy gate that rejects tracked memory roots, databases, archives, absolute user paths, and secret-like patterns.
 - Encrypted backups and cold exports, with raw source events opt-in for portable archives.
+- Retention-cycle and cold-stewardship identity fingerprints over capsule/event ID sets, not only aggregate counts, so same-count drift cannot masquerade as current evidence.
+- Quality-aware provenance compaction that scores retained source events by recall contribution, not only deterministic time spacing, and can block apply on recall-regression drift.

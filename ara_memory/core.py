@@ -464,6 +464,13 @@ class AraMemory:
 
         return ColdStewardshipAnalyzer(self.store).run(**kwargs)
 
+    def provenance_compaction(self, **kwargs: Any) -> Any:
+        from ara_memory.provenance_compaction import ProvenanceCompactor
+
+        kwargs = dict(kwargs)
+        kwargs["scope"] = _canonical_scope(kwargs.get("scope"))
+        return ProvenanceCompactor(self.store).run(**kwargs)
+
     def lifecycle(self, **kwargs: Any) -> MemoryLifecycleReport:
         from ara_memory.memory_lifecycle import MemoryLifecycleAnalyzer
 

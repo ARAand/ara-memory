@@ -169,7 +169,8 @@ sleep()
   archive objects carry an encrypted escrow in `manifest.json` so verified
   restores can recover artifact bytes with the source trust root.
 - Large provenance event lookups are de-duplicated and chunked so cold export,
-  risk review, and restore/prune preparation do not hit SQLite variable limits.
+  risk review, provenance compaction, and restore/prune preparation do not hit
+  SQLite variable limits.
 
 ## Ingress Boundary
 
@@ -293,13 +294,14 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 17. Rotate redundant verified backups with `backup-stewardship` against a target backup-byte budget before touching live memory or cold evidence; keep latest backups, retention-cycle evidence, failed-verification backups, and active live-prune approval backups.
 18. Use purpose-aware lifecycle tiers before recall or pruning: long-running purpose, identity, and preference anchors may enter hot memory, working memories require query selection, guarded memories require review, and cold evidence requires export/prune gates.
 19. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
-20. Treat temporal recall as explicit: only temporal words or phrases should
+20. Compact active summary provenance before expecting cold pressure to fall, but only from a reviewed dry-run. Apply uses one transaction with compare-and-set checks on capsule status, source links, and event existence, so a stale or malformed plan rolls back without partial link rewrites. This operation changes active provenance links, not memory text or promotion status, and must be followed by cold-stewardship, health, and recall-regression before retention-cycle or pruning decisions.
+21. Treat temporal recall as explicit: only temporal words or phrases should
     trigger recency boosts, while ordinary substrings such as `knowledge` or
     `blast` must stay lexical.
-21. Treat working memory as a cue-led action pack, not another cache: it should
+22. Treat working memory as a cue-led action pack, not another cache: it should
     change the next step, record whether it helped, and stay empty when recall
     has no visible evidence.
-22. Treat feedback as bounded evidence, not reward maximization: impact rows may
+23. Treat feedback as bounded evidence, not reward maximization: impact rows may
     nudge ranking only when their cue overlaps the current query, and the boost
     or penalty is capped.
 

@@ -331,6 +331,9 @@ python -m ara_memory review-compact --scope ara-memory
 python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
+python -m ara_memory cold-stewardship --scope ara-memory
+python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20
+python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20 --apply --confirm "COMPACT PROVENANCE"
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip --backup-archive-mode objects
 python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
 python -m ara_memory lifecycle --scope ara-memory
@@ -388,6 +391,19 @@ stay as audit-only safety evidence. Its active provenance pin report shows which
 candidate or stable memories are keeping cold source events protected. High cold
 pressure can pass stewardship only when that evidence is current; otherwise it
 remains a watch item.
+`provenance-compact` is the guarded follow-up when active summary capsules pin
+too many cold source events. It is dry-run by default, ranks eligible active
+summaries by releasable cold provenance, and keeps a bounded time-sampled source
+event set instead of letting one summary cite every raw episode forever. Apply
+mode requires `--apply --confirm "COMPACT PROVENANCE"` and uses atomic
+compare-and-set checks on capsule status and source links, so a stale plan does
+not silently overwrite newer provenance. The default scope is summaries only;
+use `--include-non-summary` only after reviewing the dry-run. After applying,
+rerun `cold-stewardship`, `health`, and `recall-regression` before any
+retention-cycle or prune decision. The retained source sample is deterministic
+and time-spaced, not semantic-quality weighted yet, so important scopes should
+keep a reviewed recall-regression manifest until a future quality-aware sampler
+can score retained evidence directly.
 `lifecycle` classifies every selected capsule into `core`, `working`,
 `guarded`, `evidence`, `archive`, or `reject` tiers. This is the deterministic
 policy layer between purpose and storage: hot memory should come from reviewed

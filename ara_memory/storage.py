@@ -43,6 +43,18 @@ EVIDENCE_STORAGE_KEYS = {
 }
 
 
+class _SourceEventUpdateConflict(Exception):
+    pass
+
+
+def _status_value(status: str | MemoryStatus) -> str:
+    return status.value if isinstance(status, MemoryStatus) else str(status)
+
+
+def _unique_source_event_ids(source_event_ids: Iterable[Any] | None) -> list[str]:
+    return list(dict.fromkeys(str(event_id) for event_id in source_event_ids or [] if str(event_id)))
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -126,6 +138,8 @@ CREATE TABLE IF NOT EXISTS temporal_edges (
 CREATE INDEX IF NOT EXISTS idx_events_scope_time ON events(scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_kind ON capsules(scope, kind, status);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_status ON capsules(scope, status);
+CREATE INDEX IF NOT EXISTS idx_capsules_status_updated ON capsules(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_capsules_scope_status_updated ON capsules(scope, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_capsule_source_events_event ON capsule_source_events(event_id, capsule_id);
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
@@ -685,6 +699,134 @@ class MemoryStore:
             )
             _invalidate_hot_scope(self.hot_dir, row["scope"])
             return True
+
+    def update_capsule_source_events(
+        self,
+        capsule_id: str,
+        source_event_ids: list[str],
+        *,
+        expected_source_event_ids: list[str] | None = None,
+        expected_statuses: Iterable[str | MemoryStatus] | None = None,
+        actor: str = "manual",
+        reason: str = "",
+        action: str = "update-source-events",
+    ) -> bool:
+        return self.update_capsule_source_events_batch(
+            [
+                {
+                    "capsule_id": capsule_id,
+                    "source_event_ids": source_event_ids,
+                    "expected_source_event_ids": expected_source_event_ids,
+                    "expected_statuses": expected_statuses,
+                    "reason": reason,
+                }
+            ],
+            actor=actor,
+            action=action,
+        )
+
+    def update_capsule_source_events_batch(
+        self,
+        updates: list[dict[str, Any]],
+        *,
+        actor: str = "manual",
+        action: str = "update-source-events",
+    ) -> bool:
+        self.init()
+        if not updates:
+            return True
+        scopes: set[str] = set()
+        try:
+            with self.session() as conn:
+                for update in updates:
+                    scope = self._update_capsule_source_events_in_conn(
+                        conn,
+                        capsule_id=str(update["capsule_id"]),
+                        source_event_ids=update["source_event_ids"],
+                        expected_source_event_ids=update.get("expected_source_event_ids"),
+                        expected_statuses=update.get("expected_statuses"),
+                        actor=actor,
+                        reason=str(update.get("reason") or ""),
+                        action=action,
+                    )
+                    if scope is None:
+                        raise _SourceEventUpdateConflict()
+                    scopes.add(scope)
+        except _SourceEventUpdateConflict:
+            return False
+        for scope in scopes:
+            _invalidate_hot_scope(self.hot_dir, scope)
+        return True
+
+    def _update_capsule_source_events_in_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        capsule_id: str,
+        source_event_ids: list[str],
+        expected_source_event_ids: list[str] | None,
+        expected_statuses: Iterable[str | MemoryStatus] | None,
+        actor: str,
+        reason: str,
+        action: str,
+    ) -> str | None:
+        unique_ids = _unique_source_event_ids(source_event_ids)
+        expected_ids = _unique_source_event_ids(expected_source_event_ids) if expected_source_event_ids is not None else None
+        statuses = {_status_value(status) for status in expected_statuses or []}
+        row = conn.execute(
+            "SELECT scope, status, source_event_ids_json FROM capsules WHERE id = ?",
+            (capsule_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if statuses and row["status"] not in statuses:
+            return None
+        if expected_ids is not None:
+            current_ids = _unique_source_event_ids(json.loads(row["source_event_ids_json"]))
+            if current_ids != expected_ids:
+                return None
+        if unique_ids:
+            existing: set[str] = set()
+            for chunk in _chunks(unique_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                existing.update(
+                    event_row["id"]
+                    for event_row in conn.execute(
+                        f"SELECT id FROM events WHERE id IN ({placeholders})",
+                        chunk,
+                    )
+                )
+            if existing != set(unique_ids):
+                return None
+        now = utc_now()
+        clauses = ["id = ?"]
+        args: list[Any] = [capsule_id]
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            clauses.append(f"status IN ({placeholders})")
+            args.extend(sorted(statuses))
+        if expected_ids is not None:
+            clauses.append("source_event_ids_json = ?")
+            args.append(row["source_event_ids_json"])
+        cur = conn.execute(
+            f"UPDATE capsules SET source_event_ids_json = ?, updated_at = ? WHERE {' AND '.join(clauses)}",
+            (json.dumps(unique_ids, ensure_ascii=False), now, *args),
+        )
+        if cur.rowcount <= 0:
+            return None
+        conn.execute("DELETE FROM capsule_source_events WHERE capsule_id = ?", (capsule_id,))
+        conn.executemany(
+            "INSERT OR IGNORE INTO capsule_source_events(capsule_id, event_id) VALUES (?, ?)",
+            [(capsule_id, event_id) for event_id in unique_ids],
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (action, capsule_id, row["scope"], reason, actor, utc_now()),
+        )
+        return str(row["scope"])
 
     def get_capsule(self, capsule_id: str) -> sqlite3.Row | None:
         self.init()

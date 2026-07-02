@@ -656,6 +656,18 @@ def main(argv: list[str] | None = None) -> int:
     cold_stewardship.add_argument("--examples-per-group", type=int, default=2)
     cold_stewardship.add_argument("--max-cycle-age-hours", type=float, default=72.0)
     cold_stewardship.add_argument("--json", action="store_true")
+    provenance_compact = sub.add_parser(
+        "provenance-compact",
+        help="Plan or apply guarded compaction of active capsule source-event links.",
+    )
+    provenance_compact.add_argument("--scope", default=None)
+    provenance_compact.add_argument("--keep-events", type=int, default=8)
+    provenance_compact.add_argument("--min-pinned-events", type=int, default=20)
+    provenance_compact.add_argument("--limit", type=int, default=20)
+    provenance_compact.add_argument("--include-non-summary", action="store_true")
+    provenance_compact.add_argument("--apply", action="store_true")
+    provenance_compact.add_argument("--confirm", default="")
+    provenance_compact.add_argument("--json", action="store_true")
     lifecycle = sub.add_parser(
         "lifecycle",
         help="Classify memory into purpose-aware lifecycle tiers for hot, working, guarded, and cold recall policy.",
@@ -1573,6 +1585,29 @@ def main(argv: list[str] | None = None) -> int:
             examples_per_group=args.examples_per_group,
             max_cycle_age_hours=args.max_cycle_age_hours,
         )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "provenance-compact":
+        try:
+            result = memory.provenance_compaction(
+                scope=args.scope,
+                keep_events=args.keep_events,
+                min_pinned_events=args.min_pinned_events,
+                limit=args.limit,
+                summary_only=not args.include_non_summary,
+                dry_run=not args.apply,
+                confirm=args.confirm,
+            )
+        except ValueError as exc:
+            if args.json:
+                print(json.dumps({"passed": False, "error": str(exc)}, ensure_ascii=False, indent=2, sort_keys=True))
+            else:
+                print(f"error: {exc}")
+            return 1
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:
