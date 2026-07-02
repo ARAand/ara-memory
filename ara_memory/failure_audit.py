@@ -113,23 +113,30 @@ def _target_kind(body: str) -> tuple[CapsuleKind | None, str]:
     lower = text.lower()
     if text.startswith("Decision:"):
         return CapsuleKind.DECISION, "decision text misfiled as failure"
-    if text.startswith("Command:") and any(marker in lower for marker in ["-> pass", "-> passed", "status: pass"]):
+    if text.startswith("Command:") and _has_success_marker(lower) and not _has_concrete_failure_evidence(lower):
         return CapsuleKind.EPISODE, "successful command evidence misfiled as failure"
+    if _looks_like_successful_turn_episode(lower):
+        return CapsuleKind.PROJECT, "successful turn episode misfiled as failure"
     if _looks_like_successful_turn_progress(text, lower):
         return CapsuleKind.PROJECT, "successful turn progress update misfiled as failure"
+    if text.startswith("Verification:") and _has_success_marker(lower) and not _has_concrete_failure_evidence(lower):
+        return CapsuleKind.PROJECT, "successful verification evidence misfiled as failure"
     project_prefixes = (
         "Added ",
         "After capture, ",
+        "Applied ",
         "Changed ",
         "Completed verification",
+        "Committed ",
         "Continue Ara Memory OS",
         "Continue building Ara Memory OS",
         "Fixed ",
         "Implemented ",
+        "Installed ",
         "Narrowed ",
         "Wired ",
     )
-    if text.startswith(project_prefixes):
+    if text.startswith(project_prefixes) and not _has_concrete_failure_evidence(lower):
         return CapsuleKind.PROJECT, "operational progress update misfiled as failure"
     if lower.startswith("git diff for ") or lower.startswith("git status for ") or lower.startswith("git diff stat for "):
         return CapsuleKind.PROJECT, "worktree evidence misfiled as failure"
@@ -155,6 +162,44 @@ def _looks_like_successful_turn_progress(text: str, lower: str) -> bool:
     return any(marker in lower for marker in (" passed", " pass,", " ok", " succeeded", " pushed "))
 
 
+def _looks_like_successful_turn_episode(lower: str) -> bool:
+    if "turn episode:" not in lower or "assistant outcome:" not in lower:
+        return False
+    outcome_actions = (
+        "assistant outcome: add",
+        "assistant outcome: added",
+        "assistant outcome: change",
+        "assistant outcome: changed",
+        "assistant outcome: complete",
+        "assistant outcome: completed",
+        "assistant outcome: fix",
+        "assistant outcome: fixed",
+        "assistant outcome: implement",
+        "assistant outcome: implemented",
+        "assistant outcome: wire",
+        "assistant outcome: wired",
+    )
+    if not any(action in lower for action in outcome_actions):
+        return False
+    if _has_concrete_failure_evidence(lower):
+        return False
+    success_markers = (
+        "command outcomes:",
+        "=> pass",
+        "=> passed",
+        "-> pass",
+        "-> passed",
+        " ok",
+        " succeeded",
+        " pushed",
+        "status: pass",
+        "changed=0",
+        "fail=0",
+        "failures=0",
+    )
+    return any(marker in lower for marker in success_markers)
+
+
 def _has_concrete_failure_evidence(lower: str) -> bool:
     if re.search(r"\b(exit code|exit_code)\s*[:=]\s*[1-9]\d*\b", lower):
         return True
@@ -163,6 +208,25 @@ def _has_concrete_failure_evidence(lower: str) -> bool:
     if re.search(r"\b(still fail|still fails|failed|failing|unresolved failure|not refreshed|not fixed)\b", lower):
         return True
     return False
+
+
+def _has_success_marker(lower: str) -> bool:
+    markers = (
+        "=> pass",
+        "=> passed",
+        "-> pass",
+        "-> passed",
+        "status: pass",
+        " ok",
+        " passed",
+        " succeeded",
+        " pushed",
+        "changed=0",
+        "fail=0",
+        "failures=0",
+        "raw=0",
+    )
+    return any(marker in lower for marker in markers)
 
 
 def _update_kind(store: MemoryStore, row: Any, kind: CapsuleKind, *, reason: str) -> None:

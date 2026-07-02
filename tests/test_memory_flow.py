@@ -4154,6 +4154,126 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(len(projects), 1)
             self.assertNotIn("failure", projects[0]["tags"])
 
+    def test_failure_kind_audit_reclassifies_successful_turn_episode_after_prompt_cue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            body = (
+                "Turn episode: Prompt cue: status HTML request with mojibake-like console title. "
+                "Assistant outcome: Implemented and pushed reconsolidation-strong-preflight. "
+                "Decisions: Decision: stronger reconsolidation remains blocked until rollback gates pass. "
+                "Command outcomes: python -m ara_memory failure-kind-audit --json => changed=0; "
+                "python -m ara_memory goal-roadmap => status: pass; git push origin branch -> succeeded."
+            )
+            event = memory.retain(kind="assistant", text=body, source="test", scope="alpha")
+            cap = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Turn episode: Prompt cue: status HTML request",
+                body=body,
+                scope="alpha",
+                status=MemoryStatus.CANDIDATE,
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["failure", "turn"],
+            )
+            memory.store.upsert_capsule(cap)
+
+            dry = memory.failure_kind_audit(scope="alpha")
+            self.assertEqual(dry.changed, 1)
+            self.assertEqual(dry.items[0]["to_kind"], "project")
+            self.assertEqual(dry.items[0]["reason"], "successful turn episode misfiled as failure")
+
+            applied = memory.failure_kind_audit(scope="alpha", dry_run=False)
+            self.assertEqual(applied.changed, 1)
+            failures = memory.list_capsules(scope="alpha", kind="failure")
+            projects = memory.list_capsules(scope="alpha", kind="project")
+            self.assertEqual(failures, [])
+            self.assertEqual(len(projects), 1)
+            self.assertNotIn("failure", projects[0]["tags"])
+
+    def test_curator_does_not_create_failure_for_successful_turn_episode_after_prompt_cue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="assistant",
+                text=(
+                    "Turn episode: Prompt cue: status HTML request with console encoding artifacts. "
+                    "Assistant outcome: Implemented and pushed reconsolidation-strong-preflight. "
+                    "Decisions: Decision: stronger reconsolidation remains blocked until rollback gates pass. "
+                    "Command outcomes: python -m ara_memory failure-kind-audit --json => changed=0; "
+                    "python -m ara_memory goal-roadmap => status: pass; git push origin branch -> succeeded."
+                ),
+                source="test",
+                scope="alpha",
+            )
+
+            memory.consolidate(limit=10)
+
+            self.assertEqual(memory.list_capsules(scope="alpha", kind="failure"), [])
+            self.assertTrue(memory.list_capsules(scope="alpha", kind="episode"))
+
+    def test_failure_kind_audit_reclassifies_successful_verification_and_arrow_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="note",
+                text="Verification: full unittest suite passed, failure-kind-audit changed=0, archive raw=0.",
+                source="test",
+                scope="alpha",
+            )
+            command_event = memory.retain(
+                kind="command",
+                text="Command: python -m ara_memory recall-regression => passed",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.FAILURE,
+                    title="Failure memory: Verification: full unittest suite passed",
+                    body="Verification: full unittest suite passed, failure-kind-audit changed=0, archive raw=0.",
+                    scope="alpha",
+                    status=MemoryStatus.CANDIDATE,
+                    confidence=0.8,
+                    salience=0.8,
+                    source_event_ids=[event.id],
+                    tags=["failure", "verification"],
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.FAILURE,
+                    title="Failure memory: Command: python -m ara_memory recall-regression => passed",
+                    body="Command: python -m ara_memory recall-regression => passed",
+                    scope="alpha",
+                    status=MemoryStatus.CANDIDATE,
+                    confidence=0.8,
+                    salience=0.8,
+                    source_event_ids=[command_event.id],
+                    tags=["failure", "command"],
+                )
+            )
+
+            dry = memory.failure_kind_audit(scope="alpha")
+
+            self.assertEqual(dry.changed, 2)
+            self.assertEqual({item["to_kind"] for item in dry.items if item["changed"]}, {"episode", "project"})
+
+    def test_curator_does_not_create_failure_for_successful_arrow_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="command",
+                text="Command: python -m ara_memory recall-regression => passed",
+                source="test",
+                scope="alpha",
+            )
+
+            memory.consolidate(limit=10)
+
+            self.assertEqual(memory.list_capsules(scope="alpha", kind="failure"), [])
+            self.assertTrue(memory.list_capsules(scope="alpha", kind="episode"))
+
     def test_self_kind_audit_reclassifies_false_self_memories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

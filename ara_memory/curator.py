@@ -229,6 +229,8 @@ def _is_failure_memory(text: str, *, lowered: str, operational: bool) -> bool:
         return False
     if text.lstrip().startswith("Decision:"):
         return False
+    if _looks_like_successful_turn_episode(lowered):
+        return False
     if _looks_like_progress_update(lowered):
         return False
     if operational and _looks_like_successful_command(text, lowered=lowered):
@@ -253,9 +255,57 @@ def _looks_like_successful_command(text: str, *, lowered: str) -> bool:
         return False
     if re.search(r"\b(exit code|exit_code)\s*[:=]\s*0\b", lowered):
         return True
-    if re.search(r"\s->\s*(pass|passed|ok|success|succeeded)\b", lowered):
+    if re.search(r"\s(?:->|=>)\s*(pass|passed|ok|success|succeeded)\b", lowered):
         return True
     return bool(re.search(r"(^|\n)\s*(ok|passed)\s*$", lowered))
+
+
+def _looks_like_successful_turn_episode(lowered: str) -> bool:
+    if "turn episode:" not in lowered or "assistant outcome:" not in lowered:
+        return False
+    outcome_actions = (
+        "assistant outcome: add",
+        "assistant outcome: added",
+        "assistant outcome: change",
+        "assistant outcome: changed",
+        "assistant outcome: complete",
+        "assistant outcome: completed",
+        "assistant outcome: fix",
+        "assistant outcome: fixed",
+        "assistant outcome: implement",
+        "assistant outcome: implemented",
+        "assistant outcome: wire",
+        "assistant outcome: wired",
+    )
+    if not any(action in lowered for action in outcome_actions):
+        return False
+    if _has_concrete_failure_evidence(lowered):
+        return False
+    success_markers = (
+        "command outcomes:",
+        "=> pass",
+        "=> passed",
+        "-> pass",
+        "-> passed",
+        " ok",
+        " succeeded",
+        " pushed",
+        "status: pass",
+        "changed=0",
+        "fail=0",
+        "failures=0",
+    )
+    return any(marker in lowered for marker in success_markers)
+
+
+def _has_concrete_failure_evidence(lowered: str) -> bool:
+    if re.search(r"\b(exit code|exit_code)\s*[:=]\s*[1-9]\d*\b", lowered):
+        return True
+    if re.search(r"\b(traceback|exception|assertionerror)\b", lowered):
+        return True
+    if re.search(r"\b(still fail|still fails|failed|failing|unresolved failure|not refreshed|not fixed)\b", lowered):
+        return True
+    return False
 
 
 def _command_lacks_failure_outcome_evidence(lowered: str) -> bool:
@@ -363,13 +413,16 @@ def _looks_like_progress_update(lowered: str) -> bool:
         "turn episode: assistant outcome: wired ",
         "add ",
         "added ",
+        "applied ",
         "implemented ",
         "changed ",
+        "committed ",
         "completed verification ",
         "fixed ",
+        "installed ",
         "wired ",
     )
-    return stripped.startswith(prefixes)
+    return stripped.startswith(prefixes) and not _has_concrete_failure_evidence(lowered)
 
 
 def _looks_like_candidate_taxonomy_discussion(lowered: str) -> bool:

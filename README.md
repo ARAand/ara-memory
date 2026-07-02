@@ -643,9 +643,11 @@ Explicit `Decision:` captures are not duplicated into `failure` memories merely
 because they mention blocked gates, recall regression, or failure taxonomy;
 actual failing commands still require concrete failure evidence such as nonzero
 exit codes or error output.
-Wrapped turn episodes such as `Turn episode: Assistant outcome: Implemented...`
-are treated as progress evidence, not failure memory, when command outcomes are
-successful and no concrete failure evidence is present.
+Wrapped turn episodes such as `Turn episode: Prompt cue: ... Assistant outcome:
+Implemented...` are treated as progress evidence, not failure memory, when
+command outcomes are successful and no concrete failure evidence is present.
+Successful command evidence includes `-> passed`, `=> passed`, `status: pass`,
+`changed=0`, `fail=0`, and similar explicit success markers.
 `self-kind-audit` finds technical identity strings, worktree evidence, and
 commands that were misfiled as Ara `self` memory. It is dry-run by default; use
 `--apply` only after reviewing the proposed reclassifications.
