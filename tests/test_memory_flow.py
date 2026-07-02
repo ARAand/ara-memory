@@ -2223,6 +2223,88 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("forgetting boundary", text)
             self.assertIn("read-only", " ".join(report.recommendations).lower())
 
+    def test_reconsolidation_prepare_apply_and_review_create_candidate_witness_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs an auditable reconsolidation apply path before stronger memory mutation.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: auditable reconsolidation",
+                body="Ara needs reconsolidation that preserves purpose and keeps apply actions reviewable.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal", "reconsolidation"],
+                status=MemoryStatus.STABLE,
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: apply starts candidate-only",
+                body="Reconsolidation apply should first create a candidate summary with witness review.",
+                scope="alpha",
+                confidence=0.84,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["decision", "apply"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(decision)
+            memory.build_hot(scope="alpha", budget=900)
+
+            approval = memory.prepare_reconsolidation(
+                "reconsolidation apply path should preserve purpose decision and review evidence",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+
+            self.assertTrue(approval.prepared, approval.as_dict())
+            self.assertIsNotNone(approval.token)
+            self.assertEqual(memory.store.get_capsule(goal.id)["status"], MemoryStatus.STABLE.value)
+
+            blocked = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="WRONG",
+            )
+            self.assertFalse(blocked.passed)
+            self.assertIsNone(blocked.capsule_id)
+
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertIsNotNone(applied.capsule_id)
+            self.assertIsNotNone(applied.witness_id)
+            created = memory.store.get_capsule(applied.capsule_id or "")
+            self.assertIsNotNone(created)
+            self.assertEqual(created["kind"], CapsuleKind.SUMMARY.value)
+            self.assertEqual(created["status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(memory.store.get_capsule(goal.id)["status"], MemoryStatus.STABLE.value)
+            self.assertEqual(memory.store.get_capsule(decision.id)["status"], MemoryStatus.STABLE.value)
+
+            reused = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertFalse(reused.passed)
+            self.assertIn("not prepared", " ".join(reused.recommendations))
+
+            review = memory.review_reconsolidation(scope="alpha")
+            self.assertTrue(review.passed, review.as_dict())
+            self.assertEqual(review.reviewed, 1)
+            self.assertEqual(review.pass_count, 1)
+            self.assertEqual(review.items[0].capsule_id, applied.capsule_id)
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3418,6 +3500,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "global spreading sandbox",
                     "privacy pre-push gate",
                     "reconsolidation frame",
+                    "reconsolidation apply safety",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -3442,6 +3525,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("frames=", reconsolidation.evidence)
             self.assertIn("working_items=", reconsolidation.evidence)
             self.assertIn("false_failures=0", reconsolidation.evidence)
+            recon_review = next(item for item in roadmap.items if item.name == "reconsolidation apply safety")
+            self.assertIn("reviewed=", recon_review.evidence)
+            self.assertIn("fail=", recon_review.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)

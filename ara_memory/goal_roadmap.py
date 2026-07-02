@@ -85,6 +85,7 @@ def build_goal_roadmap(
         working_budget=900,
         recall_budget=1600,
     )
+    reconsolidation_review = memory.review_reconsolidation(scope=scope, limit=10)
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -190,6 +191,12 @@ def build_goal_roadmap(
             "fail" if reconsolidation.status == "fail" else "watch" if reconsolidation.status == "watch" else "pass",
             _reconsolidation_evidence(reconsolidation),
             "Build a read-only frame that keeps purpose, identity, decisions, failures, and forgetting boundaries visible before applying memory rewrites.",
+        ),
+        RoadmapItem(
+            "reconsolidation apply safety",
+            "pass" if reconsolidation_review.passed and reconsolidation_review.pass_count > 0 else "watch",
+            _reconsolidation_review_evidence(reconsolidation_review),
+            "Run reconsolidation-prepare, reconsolidation-apply, and reconsolidation-review so candidate-only frame snapshots have passing witnesses.",
         ),
         RoadmapItem(
             "cold-memory stewardship",
@@ -310,6 +317,13 @@ def _reconsolidation_evidence(report: Any) -> str:
         f"core={diagnostics['core_capsules']}, guarded={diagnostics['guarded_capsules']}, "
         f"false_failures={diagnostics['false_failure_candidates']}, "
         f"false_self={diagnostics['false_self_candidates']}"
+    )
+
+
+def _reconsolidation_review_evidence(report: Any) -> str:
+    return (
+        f"reviewed={report.reviewed}, pass={report.pass_count}, "
+        f"watch={report.watch_count}, fail={report.fail_count}"
     )
 
 

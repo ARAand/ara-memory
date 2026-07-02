@@ -27,10 +27,13 @@ items can now be persisted to a relation-specific review queue so later workers
 do not need to infer relation risk from capsule review rows. A read-only global
 spreading sandbox now probes cross-scope graph activation for bounded fanout,
 supplementation, depth, visible evidence, quality, and risk-filter pressure
-before broader global spreading is trusted. A read-only reconsolidation frame
-now recontextualizes a query into purpose/identity anchors, settled decisions,
-failure/conflict checks, working context, and forgetting boundaries before any
-future apply path is allowed to rewrite memory.
+before broader global spreading is trusted. A reconsolidation frame now
+recontextualizes a query into purpose/identity anchors, settled decisions,
+failure/conflict checks, working context, and forgetting boundaries. The first
+apply path is candidate-only: prepare freezes a reviewed frame behind a
+fingerprint and short-lived token, apply consumes it once, writes one summary
+candidate, and records a witness for review before any stronger memory rewrite
+exists.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -459,17 +462,20 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     activation is a watch signal, but fanout, supplementation, or depth beyond
     configured limits is a failure because cross-scope recall can otherwise turn
     old memories into accidental always-on context.
-32. Treat reconsolidation as read-only until apply safety exists. A
-    `reconsolidation-frame` may gather purpose, identity, decisions, failures,
-    working context, and forgetting boundaries, but it must not promote,
-    supersede, rewrite, or delete capsules. Any future apply path must prove
-    recall-regression stability and preserve source-event provenance.
+32. Treat reconsolidation apply as candidate-only until stronger apply safety
+    exists. `reconsolidation-frame` and `reconsolidation-prepare` are read-only.
+    `reconsolidation-apply` may create only one candidate summary capsule and a
+    witness after matching the approved fingerprint. It must not promote,
+    supersede, rewrite, delete, or cool existing capsules. Any future stronger
+    apply path must prove recall-regression stability and preserve source-event
+    provenance.
 
 ## Future Extension Points
 
 - Global spreading policy beyond the read-only sandbox and ESPA-aware path
   weighting.
-- Reviewed reconsolidation apply path after read-only frames prove useful.
+- Stronger reviewed reconsolidation apply paths after candidate-only witnesses
+  prove useful.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

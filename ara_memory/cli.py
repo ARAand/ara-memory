@@ -24,6 +24,7 @@ from ara_memory.relation_merge import (
     review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
+from ara_memory.reconsolidation import RECONSOLIDATION_APPLY_CONFIRMATION
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -228,6 +229,38 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_frame.add_argument("--no-global", action="store_true")
     reconsolidation_frame.add_argument("--no-hot", action="store_true")
     reconsolidation_frame.add_argument("--json", action="store_true")
+
+    reconsolidation_prepare = sub.add_parser(
+        "reconsolidation-prepare",
+        help="Prepare a short-lived approval token for a reviewed reconsolidation frame snapshot.",
+    )
+    reconsolidation_prepare.add_argument("query", nargs="?", default=None)
+    reconsolidation_prepare.add_argument("--scope", default="global")
+    reconsolidation_prepare.add_argument("--budgets", default="800,1600,2500")
+    reconsolidation_prepare.add_argument("--working-budget", type=int, default=900)
+    reconsolidation_prepare.add_argument("--recall-budget", type=int, default=1600)
+    reconsolidation_prepare.add_argument("--no-global", action="store_true")
+    reconsolidation_prepare.add_argument("--no-hot", action="store_true")
+    reconsolidation_prepare.add_argument("--ttl-minutes", type=int, default=60)
+    reconsolidation_prepare.add_argument("--json", action="store_true")
+    reconsolidation_apply = sub.add_parser(
+        "reconsolidation-apply",
+        help=(
+            "Apply a prepared reconsolidation frame once as a candidate summary. "
+            f"Requires exact confirmation: {RECONSOLIDATION_APPLY_CONFIRMATION!r}."
+        ),
+    )
+    reconsolidation_apply.add_argument("--approval-token", required=True)
+    reconsolidation_apply.add_argument("--confirm", required=True)
+    reconsolidation_apply.add_argument("--json", action="store_true")
+    reconsolidation_review = sub.add_parser(
+        "reconsolidation-review",
+        help="Review applied reconsolidation witnesses before stronger memory mutation is trusted.",
+    )
+    reconsolidation_review.add_argument("--scope", default=None)
+    reconsolidation_review.add_argument("--approval-id", default=None)
+    reconsolidation_review.add_argument("--limit", type=int, default=50)
+    reconsolidation_review.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
@@ -1193,6 +1226,47 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.status in {"pass", "watch"} else 1
+
+    if args.cmd == "reconsolidation-prepare":
+        query = args.query if args.query is not None else sys.stdin.read().strip()
+        result = memory.prepare_reconsolidation(
+            query,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            ttl_minutes=args.ttl_minutes,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.prepared or result.frame.status in {"pass", "watch"} else 1
+
+    if args.cmd == "reconsolidation-apply":
+        result = memory.apply_reconsolidation(
+            approval_token=args.approval_token,
+            confirmation=args.confirm,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-review":
+        result = memory.review_reconsolidation(
+            scope=args.scope,
+            approval_id=args.approval_id,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "recall-policy-impact":
         helped = None if args.helped == "unknown" else args.helped == "true"

@@ -347,6 +347,21 @@ class AraMemory:
 
         return build_reconsolidation_frame(self, query, **kwargs)
 
+    def prepare_reconsolidation(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import prepare_reconsolidation_approval
+
+        return prepare_reconsolidation_approval(self, query, **kwargs)
+
+    def apply_reconsolidation(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import apply_reconsolidation_approval
+
+        return apply_reconsolidation_approval(self, **kwargs)
+
+    def review_reconsolidation(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import review_reconsolidation_witnesses
+
+        return review_reconsolidation_witnesses(self, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

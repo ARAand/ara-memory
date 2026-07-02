@@ -553,12 +553,15 @@ warnings so regression tests can keep adversarial examples without blocking a
 reviewed public push.
 
 `reconsolidation-frame` is the read-only recontextualization layer before any
-future memory rewrite. For a query, it combines recall-policy, working-memory,
+memory rewrite. For a query, it combines recall-policy, working-memory,
 lifecycle tiers, and failure/self audits into five frames: purpose and identity,
 settled decisions, failure and conflict, working context, and forgetting
-boundary. It does not mutate memory; it shows what should be anchored,
-preserved, inspected, retrieved, or kept out of model context before a reviewed
-apply path exists.
+boundary. `reconsolidation-prepare` freezes that frame behind a short-lived
+approval token and fingerprint. `reconsolidation-apply` consumes the token once
+and may create only one candidate summary capsule plus a witness; it cannot
+promote, supersede, rewrite, delete, or cool existing capsules. Run
+`reconsolidation-review` before trusting the candidate as evidence for any
+stronger future apply path.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
