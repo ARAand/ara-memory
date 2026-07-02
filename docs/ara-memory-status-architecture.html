@@ -181,7 +181,7 @@
       <ul>
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
         <li>rollback witness는 preview와 review queue까지 왔지만, 실제 live rollback 실행기는 아직 없다.</li>
-        <li>worker가 reconsolidation queue를 자동 기록하는 단계는 아직 붙지 않았다.</li>
+        <li>worker는 reconsolidation review queue를 자동 기록한다. 다만 강한 live mutation 실행 권한은 아직 열지 않았다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
         <li>보상해킹 방지는 시작됐지만, recall-policy feedback을 자동 정책 변경으로 연결하지 않는 제한이 유지되어야 한다.</li>
       </ul>
@@ -207,8 +207,8 @@
       <div class="stack">
         <div class="row">
           <strong>worker 연동</strong>
-          <p>정기 worker가 reconsolidation witness review를 재실행하고 <code>--record-queue</code>와 같은 큐 기록을 수행하게 한다.</p>
-          <span class="badge watch">2-3h</span>
+          <p>완료: 정기 worker가 reconsolidation witness review를 재실행하고 fail/watch 항목을 queue에 기록한다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>live rollback executor</strong>
@@ -237,8 +237,8 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 worker가 blocker queue를 주기적으로 갱신하게 만드는 것이다.</li>
-        <li>그 다음 rollback executor를 shadow-first로 구현해야 한다.</li>
+        <li>다음 1순위는 rollback executor를 shadow-first로 구현하는 것이다.</li>
+        <li>그 다음 exception witness를 붙여 의도된 증거 변경과 위험한 drift를 분리해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
       </ul>
@@ -246,7 +246,7 @@
   </section>
 
   <footer>
-    Updated for schema v17 reconsolidation rollback review queue. Open this file locally:
+    Updated for schema v17 reconsolidation rollback review queue and worker recording. Open this file locally:
     <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>

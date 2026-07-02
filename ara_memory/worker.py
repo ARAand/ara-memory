@@ -12,6 +12,10 @@ from ara_memory.relation_merge import (
     record_relation_merge_review_queue,
     review_relation_merge_witnesses,
 )
+from ara_memory.reconsolidation import (
+    list_reconsolidation_review_queue,
+    record_reconsolidation_review_queue,
+)
 
 
 @dataclass(slots=True)
@@ -312,6 +316,37 @@ def _run_locked_worker(
         )
     )
 
+    reconsolidation_review_payload = _reconsolidation_review_worker_payload(
+        memory,
+        scope=scope,
+        review_limit=review_limit,
+        regression_manifest=regression_manifest,
+        regression_baseline=regression_baseline,
+        regression_baseline_drift_warn_only=regression_baseline_drift_warn_only,
+        report_item_limit=report_item_limit,
+    )
+    steps.append(
+        WorkerStep(
+            "reconsolidation_review",
+            bool(reconsolidation_review_payload["passed"]),
+            reconsolidation_review_payload,
+        )
+    )
+
+    reconsolidation_queue = list_reconsolidation_review_queue(memory, scope=scope, status="open", limit=triage_limit)
+    reconsolidation_queue_payload = _reconsolidation_review_queue_worker_payload(
+        reconsolidation_queue.as_dict(),
+        limit=report_item_limit,
+    )
+    steps.append(
+        WorkerStep(
+            "reconsolidation_review_queue",
+            int(reconsolidation_queue_payload["fail_count"]) == 0
+            and int(reconsolidation_queue_payload["blockers"]) == 0,
+            reconsolidation_queue_payload,
+        )
+    )
+
     doctor = memory.doctor(
         scope=scope,
         recall_query=doctor_query,
@@ -401,6 +436,8 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
     triage = by_name.get("review_triage")
     relation_review = by_name.get("relation_merge_review")
     relation_queue = by_name.get("relation_review_queue")
+    reconsolidation_review = by_name.get("reconsolidation_review")
+    reconsolidation_queue = by_name.get("reconsolidation_review_queue")
     doctor = by_name.get("doctor")
     regression = by_name.get("recall_regression")
     maintenance = by_name.get("maintenance")
@@ -436,6 +473,21 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
             "fail_count": _detail_value(relation_queue, "fail_count", 0),
             "watch_count": _detail_value(relation_queue, "watch_count", 0),
             "open_items_truncated": _detail_value(relation_queue, "open_items_truncated", 0),
+        },
+        "reconsolidation_review": {
+            "passed": bool(reconsolidation_review.detail.get("passed", False)) if reconsolidation_review else None,
+            "reviewed": _detail_value(reconsolidation_review, "reviewed", 0),
+            "fail_count": _detail_value(reconsolidation_review, "fail_count", 0),
+            "watch_count": _detail_value(reconsolidation_review, "watch_count", 0),
+            "recorded": _detail_value(reconsolidation_review, "queue_recorded", 0),
+            "resolved": _detail_value(reconsolidation_review, "queue_resolved", 0),
+        },
+        "reconsolidation_review_queue": {
+            "open": _detail_value(reconsolidation_queue, "total_open", 0),
+            "fail_count": _detail_value(reconsolidation_queue, "fail_count", 0),
+            "watch_count": _detail_value(reconsolidation_queue, "watch_count", 0),
+            "blockers": _detail_value(reconsolidation_queue, "blockers", 0),
+            "open_items_truncated": _detail_value(reconsolidation_queue, "open_items_truncated", 0),
         },
         "episode_summary": {
             "summaries_created": _detail_value(episode, "summaries_created", 0),
@@ -519,10 +571,69 @@ def _relation_review_queue_worker_payload(payload: dict[str, Any], *, limit: int
     return compact
 
 
+def _reconsolidation_review_worker_payload(
+    memory: Any,
+    *,
+    scope: str,
+    review_limit: int,
+    regression_manifest: Path | None,
+    regression_baseline: Path | None,
+    regression_baseline_drift_warn_only: bool,
+    report_item_limit: int,
+) -> dict[str, Any]:
+    review = memory.review_reconsolidation(scope=scope, limit=review_limit)
+    payload = _limit_items(review.as_dict(), "items", limit=report_item_limit)
+    regression_payload: dict[str, Any] | None = None
+    reconsolidation_regression_passed = True
+    if regression_manifest is not None:
+        cases = load_recall_regression_cases(regression_manifest)
+        baseline = load_recall_regression_baseline(regression_baseline)
+        regression = memory.recall_regression(cases, baseline=baseline)
+        regression_payload = _regression_worker_payload(
+            regression.as_dict(),
+            baseline_drift_warn_only=regression_baseline_drift_warn_only,
+        )
+        reconsolidation_regression_passed = bool(
+            regression_payload["cases_passed"]
+            if regression_baseline_drift_warn_only
+            else regression_payload["passed"]
+        )
+        queue_regression_payload = dict(regression_payload)
+        queue_regression_payload["passed"] = reconsolidation_regression_passed
+        review.regression = queue_regression_payload
+
+    queue = record_reconsolidation_review_queue(
+        memory,
+        review,
+        limit=review_limit,
+    )
+    payload["regression"] = regression_payload
+    payload["reconsolidation_regression_passed"] = reconsolidation_regression_passed
+    payload["queue_recorded"] = queue.recorded
+    payload["queue_resolved"] = queue.resolved
+    payload["queue_open"] = len(queue.open_items)
+    payload["queue"] = _reconsolidation_review_queue_worker_payload(queue.as_dict(), limit=report_item_limit)
+    payload["passed"] = bool(review.passed and reconsolidation_regression_passed)
+    return payload
+
+
+def _reconsolidation_review_queue_worker_payload(payload: dict[str, Any], *, limit: int) -> dict[str, Any]:
+    compact = _limit_items(payload, "open_items", limit=limit)
+    items = list(payload.get("open_items", []))
+    compact["total_open"] = len(items)
+    compact["fail_count"] = sum(1 for item in items if item.get("review_status") == "fail")
+    compact["watch_count"] = sum(1 for item in items if item.get("review_status") == "watch")
+    compact["blockers"] = sum(
+        1 for item in items if str(item.get("action", "")).startswith("block-strong-reconsolidation")
+    )
+    return compact
+
+
 def _worker_failure_reason(steps: list[WorkerStep]) -> str:
     failed = [step for step in steps if not step.passed]
     if not failed:
         return ""
+    failed.sort(key=lambda step: 0 if step.name == "recall_regression" else 1)
     parts: list[str] = []
     for step in failed[:3]:
         detail = _step_failure_detail(step.detail)

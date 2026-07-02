@@ -727,17 +727,20 @@ memories and leaves decay items for explicit policy review.
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,
 runs the review worker in dry-run mode by
-default, summarizes the review queue through triage, reruns relation-merge
-witness review with queue recording, reports open relation-review and
-reconsolidation-review pressure, runs
+default, summarizes the review queue through triage, reruns relation-merge and
+reconsolidation witness review with queue recording, reports open
+relation-review and reconsolidation-review pressure, runs
 doctor, optionally runs recall regression, and finishes with lossless
 maintenance. Its default is conservative, not read-only: it does not
 apply review-worker promotions/quarantines unless `--apply-review` is set, but
 it still drains queued turns, writes lossless summaries, persists quality scores,
 records relation-review queue rows for failed/watched merge witnesses or relation
-regression failures, and runs storage maintenance. Failed open relation-review
-queue rows make the worker fail so scheduled logs cannot silently pass a broken
-graph merge. Use an OS scheduler to run it periodically; keep `--apply-review`
+regression failures, records reconsolidation-review queue rows for failed/watched
+candidate-frame witnesses or reconsolidation regression failures, and runs
+storage maintenance. Failed open relation-review queue rows make the worker fail
+so scheduled logs cannot silently pass a broken graph merge; failed open
+reconsolidation blocker rows likewise fail the worker before stronger memory
+mutation is trusted. Use an OS scheduler to run it periodically; keep `--apply-review`
 off unless the dry-run output has already been reviewed. The worker takes
 `.ara-memory/locks/worker.lock` by default, so overlapping scheduled runs skip
 safely instead of draining the same queue twice. Use

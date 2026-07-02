@@ -10544,6 +10544,8 @@ class MemoryFlowTests(unittest.TestCase):
                     "review_triage",
                     "relation_merge_review",
                     "relation_review_queue",
+                    "reconsolidation_review",
+                    "reconsolidation_review_queue",
                     "doctor",
                     "maintenance",
                 ],
@@ -10559,7 +10561,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("groups_truncated", report.steps[6].detail)
             self.assertEqual(report.steps[7].detail["reviewed"], 0)
             self.assertEqual(report.steps[8].detail["total_open"], 0)
-            self.assertTrue(report.steps[9].detail["passed"])
+            self.assertEqual(report.steps[9].detail["reviewed"], 0)
+            self.assertEqual(report.steps[10].detail["total_open"], 0)
+            self.assertTrue(report.steps[11].detail["passed"])
             self.assertIn("items_truncated", report.steps[4].detail)
             self.assertIn("items_truncated", report.steps[5].detail)
 
@@ -10645,6 +10649,90 @@ class MemoryFlowTests(unittest.TestCase):
             open_queue = list_relation_merge_review_queue(memory.store, scope="worker-rel", status="open")
             self.assertEqual(len(open_queue.open_items), 1)
             self.assertEqual(open_queue.open_items[0]["review_status"], "fail")
+
+    def test_memory_worker_records_failed_reconsolidation_review_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: long-running purpose requires worker reconsolidation review queue blockers before strong mutation.",
+                source="test",
+                scope="worker-recon",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: worker reconsolidation queue",
+                    body="Long-running purpose requires worker reconsolidation review queue blockers before strong mutation.",
+                    scope="worker-recon",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "reconsolidation", "worker"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: worker records reconsolidation blockers",
+                    body="The background worker should persist failed reconsolidation witness blockers.",
+                    scope="worker-recon",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "reconsolidation"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="worker-recon", budget=700)
+            approval = memory.prepare_reconsolidation(
+                "worker reconsolidation review queue block strong mutation",
+                scope="worker-recon",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM reconsolidation_witnesses WHERE id = ?",
+                    (applied.witness_id,),
+                ).fetchone()
+                before = json.loads(row["before_json"])
+                before["frame_fingerprint"] = "tampered"
+                conn.execute(
+                    "UPDATE reconsolidation_witnesses SET before_json = ? WHERE id = ?",
+                    (json.dumps(before, ensure_ascii=False, sort_keys=True), applied.witness_id),
+                )
+
+            report = memory.worker(
+                scope="worker-recon",
+                episode_summary=False,
+                candidate_summary=False,
+                run_maintenance_step=False,
+                doctor_query="worker reconsolidation review",
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            recon_review = next(step for step in report.steps if step.name == "reconsolidation_review")
+            recon_queue = next(step for step in report.steps if step.name == "reconsolidation_review_queue")
+            self.assertFalse(recon_review.passed)
+            self.assertEqual(recon_review.detail["fail_count"], 1)
+            self.assertEqual(recon_review.detail["queue_recorded"], 1)
+            self.assertFalse(recon_queue.passed)
+            self.assertEqual(recon_queue.detail["fail_count"], 1)
+            self.assertEqual(recon_queue.detail["blockers"], 1)
+            open_queue = list_reconsolidation_review_queue(memory, scope="worker-recon", status="open")
+            self.assertEqual(len(open_queue.open_items), 1)
+            self.assertEqual(open_queue.open_items[0]["action"], "block-strong-reconsolidation")
 
     def test_memory_worker_apply_review_stops_after_drain_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -10918,6 +11006,8 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.reports[0]["drain"]["succeeded"], 1)
             self.assertEqual(report.reports[1]["drain"]["processed"], 0)
             self.assertIn("episode_summary", report.reports[0])
+            self.assertIn("reconsolidation_review", report.reports[0])
+            self.assertIn("reconsolidation_review_queue", report.reports[0])
             self.assertEqual(memory.spool_stats()["pending"], 0)
             self.assertEqual(memory.spool_stats()["done"], 1)
             self.assertTrue(report.reports[0]["doctor_passed"])
