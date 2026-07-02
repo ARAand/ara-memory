@@ -13,7 +13,7 @@ from ara_memory.compressors import extract_keywords, is_search_term
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, utc_now
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -284,6 +284,25 @@ CREATE TABLE IF NOT EXISTS working_memory_impacts (
 
 CREATE INDEX IF NOT EXISTS idx_wmi_capsule_scope ON working_memory_impacts(capsule_id, scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_wmi_scope_time ON working_memory_impacts(scope, created_at);
+
+CREATE TABLE IF NOT EXISTS recall_policy_impacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  query TEXT NOT NULL,
+  query_terms_json TEXT NOT NULL,
+  intent TEXT NOT NULL,
+  strategy TEXT NOT NULL,
+  action_name TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  helped INTEGER,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(event_id) REFERENCES events(id),
+  UNIQUE(event_id, action_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rpi_scope_time ON recall_policy_impacts(scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_rpi_intent_action ON recall_policy_impacts(scope, intent, action_name, created_at);
 """
 
 
@@ -309,6 +328,8 @@ class MemoryStore:
                 _sync_capsules_fts(conn)
             if old_version < 6:
                 _sync_working_memory_impacts(conn)
+            if old_version < 9:
+                _sync_recall_policy_impacts(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -381,12 +402,18 @@ class MemoryStore:
                 (fingerprint, event.id, utc_now()),
             )
             _sync_working_memory_impact_event(conn, event)
+            _sync_recall_policy_impact_event(conn, event)
             return event
 
     def record_working_memory_impact(self, event: Event) -> None:
         self.init()
         with self.session() as conn:
             _sync_working_memory_impact_event(conn, event)
+
+    def record_recall_policy_impact(self, event: Event) -> None:
+        self.init()
+        with self.session() as conn:
+            _sync_recall_policy_impact_event(conn, event)
 
     def upsert_capsule(self, capsule: Capsule) -> None:
         self.init()
@@ -1214,6 +1241,49 @@ class MemoryStore:
             out.append(item)
         return out
 
+    def list_recall_policy_impacts(
+        self,
+        *,
+        scope: str,
+        include_global: bool = True,
+        intent: str | None = None,
+        action_names: list[str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        self.init()
+        if limit <= 0:
+            return []
+        clauses = ["(scope = ? OR scope = 'global')" if include_global and scope != "global" else "scope = ?"]
+        params: list[Any] = [scope]
+        if intent:
+            clauses.append("intent = ?")
+            params.append(intent)
+        unique_actions = list(dict.fromkeys(str(item) for item in action_names or [] if str(item).strip()))
+        if unique_actions:
+            placeholders = ",".join("?" for _ in unique_actions)
+            clauses.append(f"action_name IN ({placeholders})")
+            params.extend(unique_actions)
+        params.append(limit)
+        with self.session() as conn:
+            rows = list(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM recall_policy_impacts
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY created_at DESC, id ASC
+                    LIMIT ?
+                    """,
+                    params,
+                )
+            )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["query_terms"] = json.loads(item.pop("query_terms_json"))
+            out.append(item)
+        return out
+
     def record_consolidation_run(
         self,
         *,
@@ -1321,6 +1391,73 @@ def _working_memory_impact_rows(event: Event, payload: dict[str, Any]) -> list[t
                 cue,
                 cue_terms_json,
                 capsule_id,
+                outcome,
+                helped,
+                event.created_at,
+            )
+        )
+    return rows
+
+
+def _sync_recall_policy_impacts(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        WHERE source = 'recall-policy-impact'
+           OR metadata_json LIKE '%recall_policy_impact%'
+        ORDER BY created_at ASC
+        """
+    )
+    for row in rows:
+        _sync_recall_policy_impact_event(conn, row_to_event(row))
+
+
+def _sync_recall_policy_impact_event(conn: sqlite3.Connection, event: Event) -> None:
+    payload = event.metadata.get("recall_policy_impact")
+    if not isinstance(payload, dict):
+        return
+    rows = _recall_policy_impact_rows(event, payload)
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO recall_policy_impacts(
+          event_id, scope, query, query_terms_json, intent, strategy, action_name, outcome, helped, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+
+def _recall_policy_impact_rows(event: Event, payload: dict[str, Any]) -> list[tuple[Any, ...]]:
+    query = str(payload.get("query") or "").strip()
+    outcome = str(payload.get("outcome") or "").strip()
+    intent = str(payload.get("intent") or "").strip() or "unknown"
+    strategy = str(payload.get("strategy") or "").strip() or "unknown"
+    action_names = [
+        str(action).strip()
+        for action in payload.get("action_names", [])
+        if str(action).strip()
+    ]
+    if not action_names:
+        return []
+    helped_raw = payload.get("helped")
+    helped = 1 if helped_raw is True else 0 if helped_raw is False else None
+    query_terms = extract_keywords(query or outcome, limit=24)
+    query_terms_json = json.dumps(query_terms, ensure_ascii=False)
+    rows = []
+    for action_name in dict.fromkeys(action_names):
+        rows.append(
+            (
+                event.id,
+                event.scope,
+                query,
+                query_terms_json,
+                intent,
+                strategy,
+                action_name,
                 outcome,
                 helped,
                 event.created_at,

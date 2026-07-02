@@ -342,6 +342,16 @@ class AraMemory:
 
         return build_recall_policy(self, query, **kwargs)
 
+    def record_recall_policy_impact(self, **kwargs: Any) -> Event:
+        from ara_memory.recall_policy import record_recall_policy_impact
+
+        return record_recall_policy_impact(self, **kwargs)
+
+    def evaluate_recall_policy(self, **kwargs: Any) -> Any:
+        from ara_memory.recall_policy import evaluate_recall_policy
+
+        return evaluate_recall_policy(self, **kwargs)
+
     def working_memory(self, **kwargs: Any) -> Any:
         from ara_memory.working_memory import build_working_memory
 

@@ -91,6 +91,7 @@ def build_goal_roadmap(
         cold_budget=700,
         cold_group_limit=3,
     )
+    recall_policy_eval = memory.evaluate_recall_policy(scope=scope, include_global=False, min_evaluated=3)
     worker_schedule = memory.verify_worker_schedule(
         output=memory.store.root / "scripts" / "install-worker-task.ps1",
         scope=scope,
@@ -169,6 +170,12 @@ def build_goal_roadmap(
             "fail" if recall_policy.status == "fail" else "watch" if recall_policy.status == "watch" else "pass",
             _recall_policy_evidence(recall_policy),
             "Run recall-policy and fix intent routing, hot-memory visibility, or cold-map evidence before relying on autonomous recall.",
+        ),
+        RoadmapItem(
+            "recall-policy feedback loop",
+            "fail" if recall_policy_eval.status == "fail" else "watch" if recall_policy_eval.status == "watch" else "pass",
+            _recall_policy_eval_evidence(recall_policy_eval),
+            "Record recall-policy-impact after real turns so recall routing can be audited without reward hacking.",
         ),
         RoadmapItem(
             "scheduled worker script readiness",
@@ -260,6 +267,15 @@ def _recall_policy_evidence(recall_policy: Any) -> str:
         f"budget={plan.recommended_budget}, tokens={plan.estimated_tokens}, "
         f"visible={plan.diagnostics.get('visible_capsules', 0)}, "
         f"cold_avoided={tokens.get('avoided_cold_raw_tokens', 0)}"
+    )
+
+
+def _recall_policy_eval_evidence(recall_policy_eval: Any) -> str:
+    totals = recall_policy_eval.totals
+    return (
+        f"{recall_policy_eval.status}, impacts={totals['impacts']}, "
+        f"evaluated={totals['evaluated']}, helpful={totals['helpful']}, "
+        f"harmful={totals['harmful']}, unknown={totals['unknown']}"
     )
 
 

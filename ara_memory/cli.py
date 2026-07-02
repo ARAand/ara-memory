@@ -207,6 +207,29 @@ def main(argv: list[str] | None = None) -> int:
     recall_policy.add_argument("--output-usd-per-million", type=float, default=0.0)
     recall_policy.add_argument("--json", action="store_true")
 
+    recall_policy_impact = sub.add_parser(
+        "recall-policy-impact",
+        help="Record whether a recall-policy route helped a real outcome.",
+    )
+    recall_policy_impact.add_argument("--scope", default="global")
+    recall_policy_impact.add_argument("--query", required=True)
+    recall_policy_impact.add_argument("--intent", required=True)
+    recall_policy_impact.add_argument("--strategy", required=True)
+    recall_policy_impact.add_argument("--action-name", action="append", required=True)
+    recall_policy_impact.add_argument("--outcome", required=True)
+    recall_policy_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
+    recall_policy_impact.add_argument("--json", action="store_true")
+
+    recall_policy_eval = sub.add_parser(
+        "recall-policy-eval",
+        help="Evaluate recorded recall-policy outcomes by intent and action.",
+    )
+    recall_policy_eval.add_argument("--scope", default="global")
+    recall_policy_eval.add_argument("--limit", type=int, default=500)
+    recall_policy_eval.add_argument("--min-evaluated", type=int, default=3)
+    recall_policy_eval.add_argument("--no-global", action="store_true")
+    recall_policy_eval.add_argument("--json", action="store_true")
+
     working_memory = sub.add_parser(
         "working-memory",
         help="Build a tiny cue-led working memory pack for the current situation.",
@@ -1025,6 +1048,53 @@ def main(argv: list[str] | None = None) -> int:
             output_tokens=args.output_tokens,
             input_usd_per_million=args.input_usd_per_million,
             output_usd_per_million=args.output_usd_per_million,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "recall-policy-impact":
+        helped = None if args.helped == "unknown" else args.helped == "true"
+        intent = args.intent.strip()
+        strategy = args.strategy.strip()
+        action_names = [str(action).strip() for action in args.action_name if str(action).strip()]
+        if not intent or not strategy or not action_names:
+            print(
+                "recall-policy-impact requires non-empty --intent, --strategy, and --action-name from the policy actually used.",
+                file=sys.stderr,
+            )
+            return 2
+        event = memory.record_recall_policy_impact(
+            scope=args.scope,
+            query=args.query,
+            intent=intent,
+            strategy=strategy,
+            action_names=action_names,
+            outcome=args.outcome,
+            helped=helped,
+        )
+        payload = {
+            "event_id": event.id,
+            "scope": event.scope,
+            "query": args.query,
+            "intent": intent,
+            "action_names": list(dict.fromkeys(action_names)),
+            "helped": helped,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(json.dumps(payload, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "recall-policy-eval":
+        result = memory.evaluate_recall_policy(
+            scope=args.scope,
+            include_global=not args.no_global,
+            limit=args.limit,
+            min_evaluated=args.min_evaluated,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

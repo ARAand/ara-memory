@@ -235,7 +235,9 @@ budgeted cold pack:
 python -m ara_memory recall-plan "current project memory" --scope project --budgets 800,1600,2500
 python -m ara_memory recall-candidates "current project memory" --scope project --budget 1600
 python -m ara_memory recall-context "current project memory" --scope project --budgets 800,1600,2500
-python -m ara_memory recall-policy "old deployment archive evidence" --scope project
+python -m ara_memory recall-policy "old deployment archive evidence" --scope project --json
+python -m ara_memory recall-policy-impact --scope project --query "old deployment archive evidence" --intent distant-memory --strategy "cold-map first" --action-name cold-map --action-name recall-context --outcome "cold-map found the right archive group" --helped true
+python -m ara_memory recall-policy-eval --scope project
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
 ```
@@ -261,6 +263,15 @@ safety, or balanced recall, then recommends the cheapest safe path: hot/core
 anchors, working-memory projection, recall-context, cold-map, or retention-cycle
 gates. It does not render cold bodies; distant-memory queries receive redacted
 map evidence and source digests before any active recall pack is considered.
+`recall-policy-impact` records whether the chosen policy actions helped a real
+turn outcome, and `recall-policy-eval` groups those outcomes by intent and
+action. Pass the `intent`, `strategy`, and `action-name` values from the
+`recall-policy --json` result that was actually used for the turn; impact
+recording does not recompute the policy later because that would corrupt audit
+evidence. This is audit feedback, not reward optimization: unknown outcomes do
+not change trust, harmful outcomes produce review recommendations, roadmap
+feedback gates use scope-local evidence, and no policy route is mutated
+automatically from the score.
 Recall budgets are ceilings, not targets. When hot memory is included and the
 pack already has enough visible evidence, recall applies a smaller soft budget
 instead of spending the whole allowance. Hot-memory items also avoid repeating
@@ -298,6 +309,7 @@ python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" r
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-plan "current task" --scope ara-memory --budgets 800,1600,2500
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-context "current task" --scope ara-memory --budgets 800,1600,2500
 python -m ara_memory recall-policy "current task" --scope ara-memory
+python -m ara_memory recall-policy-eval --scope ara-memory
 python -m ara_memory working-memory "current task" --scope ara-memory --active-file ara_memory/working_memory.py
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" purpose-check --scope ara-memory --repair-hot
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" identity-check --scope ara-memory --repair-hot
@@ -390,7 +402,7 @@ then create a verified backup.
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
 stewardship, distant-memory navigation, purpose-aware lifecycle policy, and
-purpose-aware recall control. It is deliberately local and
+purpose-aware recall control plus its feedback loop. It is deliberately local and
 deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

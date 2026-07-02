@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
 from ara_memory.compressors import compact_text, extract_keywords
+from ara_memory.models import Event
 
 
 PURPOSE_MARKERS = {
@@ -15,12 +17,12 @@ PURPOSE_MARKERS = {
     "free will",
     "natural memory",
     "why",
-    "목적",
-    "목표",
-    "의도",
-    "정체성",
-    "자유의지",
-    "왜",
+    "\ubaa9\uc801",
+    "\ubaa9\ud45c",
+    "\uc758\ub3c4",
+    "\uc815\uccb4\uc131",
+    "\uc790\uc720\uc758\uc9c0",
+    "\uc65c",
 }
 COLD_MARKERS = {
     "cold",
@@ -33,12 +35,12 @@ COLD_MARKERS = {
     "previous",
     "retention",
     "evidence",
-    "오래",
-    "예전",
-    "과거",
-    "기록",
-    "아카이브",
-    "증거",
+    "\uc624\ub798",
+    "\uc608\uc804",
+    "\uacfc\uac70",
+    "\uae30\ub85d",
+    "\uc544\uce74\uc774\ube0c",
+    "\uc99d\uac70",
 }
 RETENTION_MARKERS = {
     "prune",
@@ -50,11 +52,11 @@ RETENTION_MARKERS = {
     "quarantine",
     "reject",
     "irreversible",
-    "삭제",
-    "정리",
-    "백업",
-    "복구",
-    "격리",
+    "\uc0ad\uc81c",
+    "\uc815\ub9ac",
+    "\ubc31\uc5c5",
+    "\ubcf5\uad6c",
+    "\uaca9\ub9ac",
 }
 WORKING_MARKERS = {
     "current",
@@ -67,15 +69,15 @@ WORKING_MARKERS = {
     "error",
     "test",
     "command",
-    "현재",
-    "지금",
-    "오늘",
-    "파일",
-    "코드",
-    "구현",
-    "오류",
-    "테스트",
-    "명령",
+    "\ud604\uc7ac",
+    "\uc9c0\uae08",
+    "\uc624\ub298",
+    "\ud30c\uc77c",
+    "\ucf54\ub4dc",
+    "\uad6c\ud604",
+    "\uc624\ub958",
+    "\ud14c\uc2a4\ud2b8",
+    "\uba85\ub839",
 }
 
 
@@ -190,6 +192,77 @@ class RecallPolicyReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RecallPolicyImpactGroup:
+    key: str
+    total: int
+    helpful: int
+    harmful: int
+    unknown: int
+
+    @property
+    def evaluated(self) -> int:
+        return self.helpful + self.harmful
+
+    @property
+    def helpful_rate(self) -> float | None:
+        if self.evaluated == 0:
+            return None
+        return self.helpful / self.evaluated
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "total": self.total,
+            "evaluated": self.evaluated,
+            "helpful": self.helpful,
+            "harmful": self.harmful,
+            "unknown": self.unknown,
+            "helpful_rate": self.helpful_rate,
+        }
+
+
+@dataclass(slots=True)
+class RecallPolicyEvalReport:
+    scope: str
+    status: str
+    totals: dict[str, Any]
+    intents: list[RecallPolicyImpactGroup]
+    actions: list[RecallPolicyImpactGroup]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "status": self.status,
+            "totals": self.totals,
+            "intents": [item.as_dict() for item in self.intents],
+            "actions": [item.as_dict() for item in self.actions],
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Recall Policy Eval: {self.scope}",
+            f"status: {self.status}",
+            "totals: "
+            f"impacts={self.totals['impacts']}, evaluated={self.totals['evaluated']}, "
+            f"helpful={self.totals['helpful']}, harmful={self.totals['harmful']}, "
+            f"unknown={self.totals['unknown']}",
+            "## By Intent",
+        ]
+        lines.extend(_group_lines(self.intents))
+        lines.append("## By Action")
+        lines.extend(_group_lines(self.actions))
+        lines.append("## Recommendations")
+        lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def build_recall_policy(
     memory: Any,
     query: str,
@@ -275,6 +348,73 @@ def build_recall_policy(
     )
 
 
+def record_recall_policy_impact(
+    memory: Any,
+    *,
+    scope: str,
+    query: str,
+    intent: str,
+    strategy: str,
+    action_names: list[str],
+    outcome: str,
+    helped: bool | None = None,
+    source: str = "recall-policy-impact",
+) -> Event:
+    unique_actions = list(dict.fromkeys(str(action).strip() for action in action_names if str(action).strip()))
+    payload = {
+        "query": query,
+        "intent": intent,
+        "strategy": strategy,
+        "action_names": unique_actions,
+        "outcome": outcome,
+        "helped": helped,
+    }
+    text = (
+        "Recall policy impact:\n"
+        f"Query: {compact_text(query, limit=260)}\n"
+        f"Intent: {intent}\n"
+        f"Actions: {', '.join(unique_actions) or 'none'}\n"
+        f"Outcome: {compact_text(outcome, limit=500)}\n"
+        f"Helped: {helped if helped is not None else 'unknown'}"
+    )
+    event = memory.retain(
+        kind="note",
+        text=text,
+        source=source,
+        scope=scope,
+        metadata={"recall_policy_impact": payload},
+    )
+    memory.store.record_recall_policy_impact(event)
+    return event
+
+
+def evaluate_recall_policy(
+    memory: Any,
+    *,
+    scope: str = "global",
+    include_global: bool = True,
+    limit: int = 500,
+    min_evaluated: int = 3,
+) -> RecallPolicyEvalReport:
+    rows = memory.store.list_recall_policy_impacts(
+        scope=scope,
+        include_global=include_global,
+        limit=limit,
+    )
+    totals = _impact_totals(rows)
+    intents = _impact_groups(rows, key="intent")
+    actions = _impact_groups(rows, key="action_name")
+    status = _eval_status(totals, min_evaluated=min_evaluated)
+    return RecallPolicyEvalReport(
+        scope=scope,
+        status=status,
+        totals=totals,
+        intents=intents,
+        actions=actions,
+        recommendations=_eval_recommendations(totals, actions, min_evaluated=min_evaluated),
+    )
+
+
 def classify_recall_intent(query: str) -> tuple[str, dict[str, int]]:
     lowered = str(query).lower()
     scores = {
@@ -283,7 +423,7 @@ def classify_recall_intent(query: str) -> tuple[str, dict[str, int]]:
         "retention": _marker_score(lowered, RETENTION_MARKERS),
         "working": _marker_score(lowered, WORKING_MARKERS),
     }
-    if scores["retention"] and (scores["cold"] or "memory" in lowered or "기억" in lowered):
+    if scores["retention"] and (scores["cold"] or "memory" in lowered or "\uae30\uc5b5" in lowered):
         return "retention-safety", scores
     if scores["purpose"] >= max(scores["cold"], scores["working"], 1):
         return "purpose-continuity", scores
@@ -486,3 +626,95 @@ def _actions(
 
 def _shell_hint(value: str) -> str:
     return str(value).replace('"', "'")[:180]
+
+
+def _impact_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    helpful = sum(1 for row in rows if row.get("helped") == 1)
+    harmful = sum(1 for row in rows if row.get("helped") == 0)
+    unknown = sum(1 for row in rows if row.get("helped") is None)
+    evaluated = helpful + harmful
+    return {
+        "impacts": len(rows),
+        "evaluated": evaluated,
+        "helpful": helpful,
+        "harmful": harmful,
+        "unknown": unknown,
+        "helpful_rate": helpful / evaluated if evaluated else None,
+        "intents": len({row.get("intent") for row in rows}),
+        "actions": len({row.get("action_name") for row in rows}),
+    }
+
+
+def _impact_groups(rows: list[dict[str, Any]], *, key: str) -> list[RecallPolicyImpactGroup]:
+    grouped: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        name = str(row.get(key) or "unknown")
+        helped = row.get("helped")
+        if helped == 1:
+            grouped[name]["helpful"] += 1
+        elif helped == 0:
+            grouped[name]["harmful"] += 1
+        else:
+            grouped[name]["unknown"] += 1
+        grouped[name]["total"] += 1
+    items = [
+        RecallPolicyImpactGroup(
+            key=name,
+            total=int(counts["total"]),
+            helpful=int(counts["helpful"]),
+            harmful=int(counts["harmful"]),
+            unknown=int(counts["unknown"]),
+        )
+        for name, counts in grouped.items()
+    ]
+    return sorted(items, key=lambda item: (-item.total, -item.helpful, item.key))
+
+
+def _eval_status(totals: dict[str, Any], *, min_evaluated: int) -> str:
+    if totals["impacts"] == 0:
+        return "watch"
+    if totals["evaluated"] < min_evaluated:
+        return "watch"
+    if totals["harmful"] > totals["helpful"]:
+        return "fail"
+    return "pass"
+
+
+def _eval_recommendations(
+    totals: dict[str, Any],
+    actions: list[RecallPolicyImpactGroup],
+    *,
+    min_evaluated: int,
+) -> list[str]:
+    if totals["impacts"] == 0:
+        return ["Record recall-policy-impact after using policy actions so routing quality becomes auditable."]
+    recommendations: list[str] = []
+    if totals["evaluated"] < min_evaluated:
+        recommendations.append(
+            f"Collect at least {min_evaluated} reviewed policy outcomes before trusting aggregate routing quality."
+        )
+    weak_actions = [
+        item
+        for item in actions
+        if item.evaluated > 0 and item.harmful >= item.helpful
+    ]
+    for item in weak_actions[:3]:
+        recommendations.append(
+            f"Review action '{item.key}' because helpful={item.helpful}, harmful={item.harmful}."
+        )
+    if not recommendations:
+        recommendations.append("Recall-policy feedback is bounded evidence only; keep reviewing outcomes before changing policy.")
+    return recommendations
+
+
+def _group_lines(groups: list[RecallPolicyImpactGroup]) -> list[str]:
+    if not groups:
+        return ["- None"]
+    lines = []
+    for item in groups[:8]:
+        rate = "n/a" if item.helpful_rate is None else f"{item.helpful_rate:.2f}"
+        lines.append(
+            f"- {item.key}: total={item.total}, evaluated={item.evaluated}, "
+            f"helpful={item.helpful}, harmful={item.harmful}, unknown={item.unknown}, helpful_rate={rate}"
+        )
+    return lines

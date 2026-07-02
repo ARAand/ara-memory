@@ -1096,6 +1096,101 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("retention gates", report.strategy)
             self.assertNotIn("Retention pruning raw body should stay outside", text)
 
+    def test_recall_policy_impact_records_append_only_event_and_eval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            event = memory.record_recall_policy_impact(
+                scope="alpha",
+                query="old deploy archive evidence",
+                intent="distant-memory",
+                strategy="cold-map first",
+                action_names=["cold-map", "recall-context", "cold-map"],
+                outcome="Cold-map located the right archive group without rendering raw bodies.",
+                helped=True,
+            )
+            unknown = memory.record_recall_policy_impact(
+                scope="alpha",
+                query="purpose continuity",
+                intent="purpose-continuity",
+                strategy="hot core first",
+                action_names=["purpose-check"],
+                outcome="Outcome not reviewed yet.",
+                helped=None,
+            )
+
+            rows = memory.store.get_events([event.id, unknown.id])
+            metadata = [json.loads(row["metadata_json"]) for row in rows]
+            self.assertEqual(event.kind.value, "note")
+            self.assertEqual(event.source, "recall-policy-impact")
+            self.assertIn("recall_policy_impact", metadata[0])
+            impacts = memory.store.list_recall_policy_impacts(scope="alpha", include_global=False)
+            impact_tuples = sorted((row["intent"], row["action_name"], row["helped"]) for row in impacts)
+            self.assertEqual(
+                impact_tuples,
+                [
+                    ("distant-memory", "cold-map", 1),
+                    ("distant-memory", "recall-context", 1),
+                    ("purpose-continuity", "purpose-check", None),
+                ],
+            )
+
+            report = memory.evaluate_recall_policy(scope="alpha", include_global=False, min_evaluated=2)
+            self.assertEqual(report.status, "pass", report.as_dict())
+            self.assertEqual(report.totals["impacts"], 3)
+            self.assertEqual(report.totals["evaluated"], 2)
+            self.assertEqual(report.totals["helpful"], 2)
+            self.assertEqual(report.totals["unknown"], 1)
+            self.assertIn("distant-memory", {item.key for item in report.intents})
+            self.assertIn("cold-map", {item.key for item in report.actions})
+
+    def test_recall_policy_eval_warns_without_reviewed_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            empty = memory.evaluate_recall_policy(scope="alpha", include_global=False, min_evaluated=1)
+            self.assertEqual(empty.status, "watch")
+            self.assertIn("Record recall-policy-impact", " ".join(empty.recommendations))
+
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="purpose continuity",
+                intent="purpose-continuity",
+                strategy="hot core first",
+                action_names=["purpose-check"],
+                outcome="Outcome not reviewed.",
+                helped=None,
+            )
+            unknown = memory.evaluate_recall_policy(scope="alpha", include_global=False, min_evaluated=1)
+            self.assertEqual(unknown.status, "watch")
+            self.assertEqual(unknown.totals["unknown"], 1)
+            self.assertEqual(unknown.totals["evaluated"], 0)
+
+    def test_recall_policy_eval_fails_when_harmful_outcomes_dominate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            for outcome in ("Wrong archive group was surfaced.", "Cold raw context displaced the useful anchor."):
+                memory.record_recall_policy_impact(
+                    scope="alpha",
+                    query="old archive evidence",
+                    intent="distant-memory",
+                    strategy="cold-map first",
+                    action_names=["cold-map"],
+                    outcome=outcome,
+                    helped=False,
+                )
+
+            report = memory.evaluate_recall_policy(scope="alpha", include_global=False, min_evaluated=2)
+
+            self.assertEqual(report.status, "fail", report.as_dict())
+            self.assertEqual(report.totals["evaluated"], 2)
+            self.assertEqual(report.totals["harmful"], 2)
+            self.assertIn("Review action 'cold-map'", " ".join(report.recommendations))
+
     def test_recall_with_hot_uses_soft_budget_after_enough_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1836,6 +1931,25 @@ class MemoryFlowTests(unittest.TestCase):
                     status=MemoryStatus.SUPERSEDED,
                 )
             )
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="next natural memory architecture work purpose-aware recall controller",
+                intent="purpose-continuity",
+                strategy="hot core anchors first",
+                action_names=["purpose-check", "recall-context", "working-memory"],
+                outcome="Purpose and bounded recall stayed visible in the roadmap.",
+                helped=True,
+            )
+            for index in range(4):
+                memory.record_recall_policy_impact(
+                    scope="global",
+                    query=f"unrelated global recall noise {index}",
+                    intent="distant-memory",
+                    strategy="cold-map first",
+                    action_names=["cold-map"],
+                    outcome="Global feedback should not drive the alpha roadmap.",
+                    helped=False,
+                )
             memory.build_hot(scope="alpha", budget=700)
             memory.backup(output=Path(tmp) / "backup.zip")
 
@@ -1857,6 +1971,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
                     "purpose-aware recall controller",
+                    "recall-policy feedback loop",
                     "scheduled worker script readiness",
                 },
             )
@@ -1870,7 +1985,67 @@ class MemoryFlowTests(unittest.TestCase):
             recall_policy = next(item for item in roadmap.items if item.name == "purpose-aware recall controller")
             self.assertIn("intent=", recall_policy.evidence)
             self.assertIn("budget=", recall_policy.evidence)
+            feedback = next(item for item in roadmap.items if item.name == "recall-policy feedback loop")
+            self.assertIn("impacts=", feedback.evidence)
+            self.assertIn("helpful=3", feedback.evidence)
+            self.assertIn("harmful=0", feedback.evidence)
             self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
+
+    def test_goal_roadmap_recall_policy_feedback_requires_scope_local_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            for index in range(4):
+                memory.record_recall_policy_impact(
+                    scope="global",
+                    query=f"unrelated global recall failure {index}",
+                    intent="distant-memory",
+                    strategy="cold-map first",
+                    action_names=["cold-map"],
+                    outcome="Global feedback should stay out of the scoped roadmap gate.",
+                    helped=False,
+                )
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="purpose continuity",
+                intent="purpose-continuity",
+                strategy="hot core first",
+                action_names=["purpose-check", "recall-context"],
+                outcome="Two local action outcomes are not enough for a gate.",
+                helped=True,
+            )
+
+            roadmap = memory.goal_roadmap(scope="alpha")
+
+            feedback = next(item for item in roadmap.items if item.name == "recall-policy feedback loop")
+            self.assertEqual(feedback.status, "watch", feedback)
+            self.assertIn("impacts=2", feedback.evidence)
+            self.assertIn("helpful=2", feedback.evidence)
+            self.assertIn("harmful=0", feedback.evidence)
+
+    def test_goal_roadmap_fails_when_recall_policy_feedback_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            for index in range(3):
+                memory.record_recall_policy_impact(
+                    scope="alpha",
+                    query=f"old archive evidence {index}",
+                    intent="distant-memory",
+                    strategy="cold-map first",
+                    action_names=["cold-map"],
+                    outcome="Recall route selected the wrong evidence.",
+                    helped=False,
+                )
+
+            roadmap = memory.goal_roadmap(scope="alpha")
+
+            feedback = next(item for item in roadmap.items if item.name == "recall-policy feedback loop")
+            self.assertEqual(feedback.status, "fail", feedback)
+            self.assertEqual(roadmap.status, "fail")
+            self.assertIn("harmful=3", feedback.evidence)
 
     def test_goal_roadmap_fails_when_semantic_hygiene_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5133,6 +5308,103 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["cold_map_summary"]["matched_capsules"], 1)
             self.assertGreater(payload["token_policy"]["avoided_cold_raw_tokens"], 0)
             self.assertNotIn("CLI distant raw body should not be rendered", completed.stdout)
+
+    def test_recall_policy_impact_and_eval_cli_output_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+
+            impact = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-policy-impact",
+                    "--scope",
+                    "alpha",
+                    "--query",
+                    "old deploy archive evidence",
+                    "--intent",
+                    "distant-memory",
+                    "--strategy",
+                    "cold-map first",
+                    "--action-name",
+                    "cold-map",
+                    "--outcome",
+                    "Cold-map found the right evidence.",
+                    "--helped",
+                    "true",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(impact.returncode, 0, impact.stderr)
+            impact_payload = json.loads(impact.stdout)
+            self.assertEqual(impact_payload["intent"], "distant-memory")
+            self.assertEqual(impact_payload["action_names"], ["cold-map"])
+            self.assertTrue(impact_payload["helped"])
+
+            evaluation = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-policy-eval",
+                    "--scope",
+                    "alpha",
+                    "--min-evaluated",
+                    "1",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(evaluation.returncode, 0, evaluation.stderr)
+            payload = json.loads(evaluation.stdout)
+            self.assertEqual(payload["status"], "pass")
+            self.assertEqual(payload["totals"]["impacts"], 1)
+            self.assertEqual(payload["totals"]["helpful"], 1)
+            self.assertEqual(payload["actions"][0]["key"], "cold-map")
+
+    def test_recall_policy_impact_cli_requires_explicit_policy_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            AraMemory(memory_root).init()
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-policy-impact",
+                    "--scope",
+                    "alpha",
+                    "--query",
+                    "old deploy archive evidence",
+                    "--outcome",
+                    "Outcome should not be attached to a recomputed policy.",
+                    "--helped",
+                    "true",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("--intent", completed.stderr)
+            self.assertIn("--strategy", completed.stderr)
+            self.assertIn("--action-name", completed.stderr)
 
     def test_lifecycle_maps_memory_into_purpose_aware_tiers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
