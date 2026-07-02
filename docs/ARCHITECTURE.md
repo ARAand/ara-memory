@@ -123,6 +123,8 @@ recall_policy(query, scope)
   -> inspect purpose-aware lifecycle tiers for hot/core availability
   -> run cold-map only for distant or retention-safety intents
   -> emit actions such as purpose-check, working-memory, recall-context, cold-map, or retention-cycle
+  -> attach prior recall-policy-impact rows as Policy Feedback for the proposed actions
+     (helpful explains confidence, harmful lowers the route to watch, unknown remains diagnostic)
   -> never render cold capsule bodies
 
 recall_policy_impact(query, intent, actions, outcome)
@@ -130,7 +132,8 @@ recall_policy_impact(query, intent, actions, outcome)
   -> append a note event with recall_policy_impact metadata
   -> project one row per action into recall_policy_impacts
   -> evaluate scope-local outcomes by intent and action
-  -> produce review recommendations without automatically mutating policy routing
+  -> produce review recommendations without automatically mutating policy commands,
+     hot eligibility, pruning gates, or intent classification
 
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints

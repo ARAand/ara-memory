@@ -325,7 +325,11 @@ recording does not recompute the policy later because that would corrupt audit
 evidence. This is audit feedback, not reward optimization: unknown outcomes do
 not change trust, harmful outcomes produce review recommendations, roadmap
 feedback gates use scope-local evidence, and no policy route is mutated
-automatically from the score.
+automatically from the score. `recall-policy` now also reads matching prior
+impact rows for its proposed actions and surfaces them as Policy Feedback:
+helpful history explains confidence, harmful history lowers the route to watch,
+and unknown history stays diagnostic. This keeps routing memory local and
+auditable without turning feedback into a self-reinforcing reward.
 Recall budgets are ceilings, not targets. When hot memory is included and the
 pack already has enough visible evidence, recall applies a smaller soft budget
 instead of spending the whole allowance. Hot-memory items also avoid repeating

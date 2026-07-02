@@ -2484,6 +2484,64 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.totals["harmful"], 2)
             self.assertIn("Review action 'cold-map'", " ".join(report.recommendations))
 
+    def test_recall_policy_uses_prior_impact_as_watch_signal_not_reward(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="current implementation context",
+                intent="working-context",
+                strategy="working-memory projection first",
+                action_names=["working-memory"],
+                outcome="Working-memory missed the active file and delayed the fix.",
+                helped=False,
+            )
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="current implementation context",
+                intent="working-context",
+                strategy="working-memory projection first",
+                action_names=["recall-context"],
+                outcome="Recall-context found the needed decision evidence.",
+                helped=True,
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROCEDURE,
+                    title="Procedure: current implementation context",
+                    body="Use current files and tests as authority when implementation context is requested.",
+                    scope="alpha",
+                    confidence=0.86,
+                    salience=0.84,
+                    source_event_ids=[],
+                    tags=["current", "implementation", "context"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            report = memory.recall_policy(
+                "current implementation context",
+                scope="alpha",
+                budgets=[700, 1200],
+                include_global=False,
+                include_hot=False,
+            )
+            payload = report.as_dict()
+            text = report.to_text()
+            working = next(action for action in report.actions if action.name == "working-memory")
+            recall = next(action for action in report.actions if action.name == "recall-context")
+
+            self.assertEqual(report.intent, "working-context")
+            self.assertEqual(report.status, "watch")
+            self.assertEqual(working.status, "watch")
+            self.assertIn("policy_feedback=harmful-history", working.reason)
+            self.assertEqual(recall.status, "use")
+            self.assertIn("policy_feedback=helpful-history", recall.reason)
+            self.assertEqual(payload["diagnostics"]["policy_feedback"]["harmful_actions"], ["working-memory"])
+            self.assertIn("Policy Feedback", text)
+            self.assertIn("working-memory: evaluated=1, helpful=0, harmful=1", text)
+
     def test_recall_with_hot_uses_soft_budget_after_enough_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

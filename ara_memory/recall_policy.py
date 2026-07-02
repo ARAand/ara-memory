@@ -179,6 +179,16 @@ class RecallPolicyReport:
                 f"raw_tokens={self.cold_map_summary.get('matched_raw_tokens', 0)}, "
                 f"reduction={self.cold_map_summary.get('token_reduction_ratio', 0.0):.1f}x"
             )
+        feedback = self.diagnostics.get("policy_feedback", {})
+        if feedback.get("actions"):
+            lines.append("## Policy Feedback")
+            lines.extend(
+                "- "
+                f"{item['action']}: evaluated={item['evaluated']}, helpful={item['helpful']}, "
+                f"harmful={item['harmful']}, unknown={item['unknown']}, "
+                f"verdict={item['verdict']}"
+                for item in feedback["actions"]
+            )
         lines.append("## Token Policy")
         lines.append(
             "- local_only=True "
@@ -306,14 +316,6 @@ def build_recall_policy(
     lifecycle_summary = _lifecycle_summary(lifecycle)
     cold_summary = _cold_summary(cold_map) if cold_map is not None else None
     token_policy = _token_policy(plan, cold_summary)
-    risks = _risks(
-        intent=intent,
-        include_hot=include_hot,
-        plan=plan,
-        lifecycle_summary=lifecycle_summary,
-        cold_map_summary=cold_summary,
-    )
-    status = _status(intent, plan, lifecycle_summary, cold_summary)
     actions = _actions(
         query=query,
         scope=scope,
@@ -324,6 +326,23 @@ def build_recall_policy(
         plan=plan,
         cold_map_summary=cold_summary,
     )
+    policy_feedback = _policy_feedback(
+        memory,
+        scope=scope,
+        include_global=include_global,
+        intent=intent,
+        actions=actions,
+    )
+    actions = _actions_with_feedback(actions, policy_feedback)
+    risks = _risks(
+        intent=intent,
+        include_hot=include_hot,
+        plan=plan,
+        lifecycle_summary=lifecycle_summary,
+        cold_map_summary=cold_summary,
+        policy_feedback=policy_feedback,
+    )
+    status = _status_with_feedback(_status(intent, plan, lifecycle_summary, cold_summary), policy_feedback)
     return RecallPolicyReport(
         query=query,
         scope=scope,
@@ -344,6 +363,7 @@ def build_recall_policy(
             "risks": risks,
             "cold_map_used": cold_map is not None,
             "no_raw_cold_body_rendering": True,
+            "policy_feedback": policy_feedback,
         },
     )
 
@@ -508,6 +528,7 @@ def _risks(
     plan: Any,
     lifecycle_summary: dict[str, Any],
     cold_map_summary: dict[str, Any] | None,
+    policy_feedback: dict[str, Any] | None = None,
 ) -> list[str]:
     risks: list[str] = []
     if not include_hot and intent in {"purpose-continuity", "balanced-recall"}:
@@ -523,6 +544,17 @@ def _risks(
     if intent in {"distant-memory", "retention-safety"} and cold_map_summary is not None:
         if int(cold_map_summary.get("matched_capsules", 0)) == 0:
             risks.append("watch: distant memory did not match; avoid broad cold rereads")
+    feedback = policy_feedback or {}
+    if feedback.get("harmful_actions"):
+        risks.append(
+            "watch: prior recall-policy feedback was harmful for "
+            + ", ".join(feedback["harmful_actions"][:3])
+        )
+    if feedback.get("unreviewed_actions"):
+        risks.append(
+            "watch: recall-policy route has unreviewed outcome history for "
+            + ", ".join(feedback["unreviewed_actions"][:3])
+        )
     return risks
 
 
@@ -542,6 +574,14 @@ def _status(
     if visible == 0 and bool(plan.diagnostics.get("low_evidence_fallback_suppressed", False)):
         return "watch"
     return "pass"
+
+
+def _status_with_feedback(status: str, policy_feedback: dict[str, Any]) -> str:
+    if status == "fail":
+        return status
+    if policy_feedback.get("harmful_actions"):
+        return "watch"
+    return status
 
 
 def _actions(
@@ -622,6 +662,112 @@ def _actions(
             )
         )
     return actions
+
+
+def _policy_feedback(
+    memory: Any,
+    *,
+    scope: str,
+    include_global: bool,
+    intent: str,
+    actions: list[RecallPolicyAction],
+    limit: int = 200,
+) -> dict[str, Any]:
+    action_names = [action.name for action in actions]
+    rows = memory.store.list_recall_policy_impacts(
+        scope=scope,
+        include_global=include_global,
+        intent=intent,
+        action_names=action_names,
+        limit=limit,
+    )
+    by_action: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        name = str(row.get("action_name") or "")
+        if not name:
+            continue
+        helped = row.get("helped")
+        if helped == 1:
+            by_action[name]["helpful"] += 1
+        elif helped == 0:
+            by_action[name]["harmful"] += 1
+        else:
+            by_action[name]["unknown"] += 1
+        by_action[name]["total"] += 1
+    feedback_actions: list[dict[str, Any]] = []
+    harmful_actions: list[str] = []
+    unreviewed_actions: list[str] = []
+    for name in action_names:
+        counts = by_action.get(name, Counter())
+        helpful = int(counts["helpful"])
+        harmful = int(counts["harmful"])
+        unknown = int(counts["unknown"])
+        evaluated = helpful + harmful
+        if evaluated > 0 and harmful >= helpful:
+            verdict = "harmful-history"
+            harmful_actions.append(name)
+        elif evaluated > 0 and helpful > harmful:
+            verdict = "helpful-history"
+        elif unknown > 0:
+            verdict = "unreviewed-history"
+            unreviewed_actions.append(name)
+        else:
+            verdict = "no-history"
+        feedback_actions.append(
+            {
+                "action": name,
+                "total": int(counts["total"]),
+                "evaluated": evaluated,
+                "helpful": helpful,
+                "harmful": harmful,
+                "unknown": unknown,
+                "verdict": verdict,
+            }
+        )
+    return {
+        "scope": scope,
+        "include_global": include_global,
+        "intent": intent,
+        "rows": len(rows),
+        "actions": feedback_actions,
+        "harmful_actions": harmful_actions,
+        "unreviewed_actions": unreviewed_actions,
+        "local_planning_requires_api": False,
+    }
+
+
+def _actions_with_feedback(
+    actions: list[RecallPolicyAction],
+    policy_feedback: dict[str, Any],
+) -> list[RecallPolicyAction]:
+    feedback_by_action = {
+        item["action"]: item
+        for item in policy_feedback.get("actions", [])
+        if isinstance(item, dict) and item.get("action")
+    }
+    out: list[RecallPolicyAction] = []
+    for action in actions:
+        feedback = feedback_by_action.get(action.name)
+        if not feedback or feedback.get("verdict") == "no-history":
+            out.append(action)
+            continue
+        verdict = str(feedback["verdict"])
+        suffix = (
+            f" policy_feedback={verdict}"
+            f"(helpful={feedback['helpful']}, harmful={feedback['harmful']}, unknown={feedback['unknown']})"
+        )
+        status = action.status
+        if verdict == "harmful-history" and status not in {"gate", "guard"}:
+            status = "watch"
+        out.append(
+            RecallPolicyAction(
+                action.name,
+                status,
+                action.reason + ";" + suffix,
+                action.command,
+            )
+        )
+    return out
 
 
 def _shell_hint(value: str) -> str:
