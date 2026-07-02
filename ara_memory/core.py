@@ -204,6 +204,12 @@ class AraMemory:
         scope = _canonical_scope(scope)
         return [dict(row) for row in self.store.list_review_witnesses(scope=scope, action=action, limit=limit)]
 
+    def prepare_review_rollback(self, witness_id: str, *, ttl_minutes: int = 30) -> dict[str, Any]:
+        return self.store.prepare_review_rollback_approval(witness_id, ttl_minutes=ttl_minutes)
+
+    def live_review_rollback(self, approval_token: str, *, confirm: str) -> dict[str, Any]:
+        return self.store.live_review_rollback(approval_token, confirm=confirm)
+
     def sleep(self, *, scope: str = "global", dry_run: bool = False) -> SleepReport:
         scope = _canonical_scope(scope) or "global"
         return SleepConsolidator(self.store, advisor=self._advisor()).run(scope=scope, dry_run=dry_run)

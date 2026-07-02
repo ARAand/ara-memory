@@ -827,6 +827,14 @@ def main(argv: list[str] | None = None) -> int:
     review_witnesses.add_argument("--action", default=None)
     review_witnesses.add_argument("--limit", type=int, default=50)
     review_witnesses.add_argument("--json", action="store_true")
+    prepare_review_rollback = sub.add_parser("prepare-review-rollback")
+    prepare_review_rollback.add_argument("--witness-id", required=True)
+    prepare_review_rollback.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_review_rollback.add_argument("--json", action="store_true")
+    live_review_rollback = sub.add_parser("live-review-rollback")
+    live_review_rollback.add_argument("--approval-token", required=True)
+    live_review_rollback.add_argument("--confirm", required=True)
+    live_review_rollback.add_argument("--json", action="store_true")
     review_worker = sub.add_parser("review-worker")
     review_worker.add_argument("--scope", default=None)
     review_worker.add_argument("--limit", type=int, default=25)
@@ -2334,6 +2342,29 @@ def main(argv: list[str] | None = None) -> int:
                     f"{row['capsule_id']} {row['before_status']}->{row['after_status']}"
                 )
         return 0
+
+    if args.cmd == "prepare-review-rollback":
+        result = memory.prepare_review_rollback(args.witness_id, ttl_minutes=args.ttl_minutes)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"approval_id: {result['approval_id']}")
+            print(f"review_witness_id: {result['review_witness_id']}")
+            print(f"confirmation_required: {result['confirmation_required']}")
+            print(f"expires_at: {result['expires_at']}")
+            print(f"token: {result['token']}")
+        return 0
+
+    if args.cmd == "live-review-rollback":
+        result = memory.live_review_rollback(args.approval_token, confirm=args.confirm)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            status = "passed" if result.get("passed") else "blocked"
+            print(f"{status}: {result.get('approval_id')}")
+            for item in result.get("recommendations", []):
+                print(f"- {item}")
+        return 0 if result.get("passed") else 1
 
     if args.cmd == "review-worker":
         result = memory.review_worker(scope=args.scope, limit=args.limit, dry_run=not args.apply)

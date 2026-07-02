@@ -818,7 +818,11 @@ quarantine apply operations write `memory_review_witnesses` rows with the review
 requested/applied action, before/after status, before/after capsule projection,
 and digests. Use `review-witnesses --scope project --action promote --json` to
 inspect those witnesses before trusting or rolling back a worker-applied memory
-change.
+change. To roll back one witnessed status transition, run
+`prepare-review-rollback --witness-id ID`, review the approval output, then
+execute `live-review-rollback --approval-token TOKEN --confirm "ROLL BACK REVIEW WITNESS"`.
+The live rollback is one-use, token-gated, and blocks if the target capsule
+changed after approval.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

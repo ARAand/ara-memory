@@ -501,6 +501,17 @@ review_worker_apply(scope)
   -> compare-and-set status write
   -> memory_review_witnesses before/after capsule snapshot + digest
   -> resolve queue row only after witness-backed mutation succeeds
+
+prepare_review_rollback(witness)
+  -> reload memory_review_witnesses row
+  -> require live capsule still equals witness after snapshot
+  -> write one-use rollback approval with token hash and capsule snapshot
+
+live_review_rollback(token)
+  -> require exact confirmation and prepared, unexpired token
+  -> require witness and capsule snapshots have not drifted
+  -> compare-and-set capsule status back to witness before_status
+  -> write memory_review_rollback_witnesses and consume approval
 ```
 
 Manual promotion uses the shared deterministic risk gate but remains an

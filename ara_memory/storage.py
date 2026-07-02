@@ -2,10 +2,12 @@
 
 import json
 import re
+import secrets
 import sqlite3
 from hashlib import sha256
 from contextlib import contextmanager
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -14,7 +16,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -583,6 +585,47 @@ ON memory_review_witnesses(scope, requested_action, applied_action, created_at);
 CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_capsule
 ON memory_review_witnesses(capsule_id, created_at);
 
+CREATE TABLE IF NOT EXISTS memory_review_rollback_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  review_witness_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  requested_action TEXT NOT NULL,
+  applied_action TEXT NOT NULL,
+  witness_snapshot_json TEXT NOT NULL,
+  capsule_snapshot_json TEXT NOT NULL,
+  confirmation_required TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  FOREIGN KEY(review_witness_id) REFERENCES memory_review_witnesses(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_approvals_status
+ON memory_review_rollback_approvals(scope, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS memory_review_rollback_witnesses (
+  id TEXT PRIMARY KEY,
+  rollback_approval_id TEXT NOT NULL,
+  review_witness_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(rollback_approval_id) REFERENCES memory_review_rollback_approvals(id),
+  FOREIGN KEY(review_witness_id) REFERENCES memory_review_witnesses(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_witnesses_scope
+ON memory_review_rollback_witnesses(scope, action, created_at);
+
 CREATE TABLE IF NOT EXISTS working_memory_impacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL,
@@ -667,6 +710,8 @@ class MemoryStore:
                 _ensure_reconsolidation_action_rollback_witness_v23_tables(conn)
             if old_version < 24:
                 _ensure_memory_review_witness_v24_tables(conn)
+            if old_version < 25:
+                _ensure_memory_review_rollback_v25_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1937,6 +1982,186 @@ class MemoryStore:
                 )
             )
 
+    def prepare_review_rollback_approval(
+        self,
+        witness_id: str,
+        *,
+        ttl_minutes: int = 30,
+    ) -> dict[str, Any]:
+        self.init()
+        token = secrets.token_urlsafe(24)
+        approval_id = new_id("rrb")
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+        confirmation = "ROLL BACK REVIEW WITNESS"
+        with self.session() as conn:
+            witness_row = conn.execute(
+                "SELECT * FROM memory_review_witnesses WHERE id = ?",
+                (witness_id,),
+            ).fetchone()
+            if witness_row is None:
+                raise ValueError(f"Review witness not found: {witness_id}")
+            witness = dict(witness_row)
+            current_row = conn.execute("SELECT * FROM capsules WHERE id = ?", (witness["capsule_id"],)).fetchone()
+            if current_row is None:
+                raise ValueError("Cannot prepare rollback because target capsule is missing.")
+            current = _capsule_witness_snapshot(current_row)
+            current_digest = _json_digest(current)
+            if current_digest != witness["after_digest"]:
+                raise ValueError("Cannot prepare rollback because target capsule changed after review witness.")
+            conn.execute(
+                """
+                INSERT INTO memory_review_rollback_approvals(
+                  id, token_hash, scope, review_witness_id, capsule_id,
+                  requested_action, applied_action, witness_snapshot_json, capsule_snapshot_json,
+                  confirmation_required, expires_at, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval_id,
+                    _token_hash(token),
+                    witness["scope"],
+                    witness["id"],
+                    witness["capsule_id"],
+                    witness["requested_action"],
+                    witness["applied_action"],
+                    json.dumps(witness, ensure_ascii=False, sort_keys=True),
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    confirmation,
+                    expires_at,
+                    "prepared",
+                    utc_now(),
+                ),
+            )
+        return {
+            "approval_id": approval_id,
+            "token": token,
+            "scope": witness["scope"],
+            "review_witness_id": witness["id"],
+            "capsule_id": witness["capsule_id"],
+            "requested_action": witness["requested_action"],
+            "applied_action": witness["applied_action"],
+            "confirmation_required": confirmation,
+            "expires_at": expires_at,
+            "status": "prepared",
+        }
+
+    def live_review_rollback(
+        self,
+        approval_token: str,
+        *,
+        confirm: str,
+    ) -> dict[str, Any]:
+        self.init()
+        confirmation = "ROLL BACK REVIEW WITNESS"
+        if confirm != confirmation:
+            return _review_rollback_blocked(None, "Confirmation did not match.", confirmation)
+        with self.session() as conn:
+            approval_row = conn.execute(
+                "SELECT * FROM memory_review_rollback_approvals WHERE token_hash = ?",
+                (_token_hash(approval_token),),
+            ).fetchone()
+            if approval_row is None:
+                return _review_rollback_blocked(None, "Approval token was not found.", confirmation)
+            approval = dict(approval_row)
+            if approval["status"] != "prepared":
+                return _review_rollback_blocked(approval, f"Approval status is {approval['status']}, not prepared.", confirmation)
+            if _is_expired(str(approval["expires_at"])):
+                conn.execute(
+                    "UPDATE memory_review_rollback_approvals SET status = ? WHERE id = ?",
+                    ("expired", approval["id"]),
+                )
+                return _review_rollback_blocked(approval, "Approval token is expired.", confirmation)
+            witness_row = conn.execute(
+                "SELECT * FROM memory_review_witnesses WHERE id = ?",
+                (approval["review_witness_id"],),
+            ).fetchone()
+            if witness_row is None:
+                return _review_rollback_blocked(approval, "Approved review witness is missing.", confirmation)
+            witness = dict(witness_row)
+            if _json_digest(witness) != _json_digest(json.loads(str(approval["witness_snapshot_json"]))):
+                return _review_rollback_blocked(approval, "Approved review witness changed after rollback approval.", confirmation)
+            current_row = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if current_row is None:
+                return _review_rollback_blocked(approval, "Approved capsule is missing.", confirmation)
+            current = _capsule_witness_snapshot(current_row)
+            approved_current = json.loads(str(approval["capsule_snapshot_json"]))
+            if _json_digest(current) != _json_digest(approved_current):
+                return _review_rollback_blocked(approval, "Approved capsule changed after rollback approval.", confirmation)
+            if _json_digest(current) != witness["after_digest"]:
+                return _review_rollback_blocked(approval, "Approved capsule no longer matches review witness after snapshot.", confirmation)
+            before_snapshot = json.loads(str(witness["before_json"]))
+            target_status = str(before_snapshot.get("status") or witness["before_status"])
+            if target_status != witness["before_status"]:
+                return _review_rollback_blocked(approval, "Review witness before snapshot status mismatch.", confirmation)
+            now = utc_now()
+            cur = conn.execute(
+                "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (target_status, now, approval["capsule_id"], current["status"]),
+            )
+            if cur.rowcount <= 0:
+                return _review_rollback_blocked(approval, "Review rollback compare-and-set failed.", confirmation)
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if updated is None:
+                return _review_rollback_blocked(approval, "Capsule disappeared during review rollback.", confirmation)
+            _sync_capsule_fts_row(conn, updated)
+            after = _capsule_witness_snapshot(updated)
+            rollback_witness_id = new_id("rrbw")
+            conn.execute(
+                """
+                INSERT INTO memory_review_rollback_witnesses(
+                  id, rollback_approval_id, review_witness_id, capsule_id, scope,
+                  action, reason, before_json, after_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rollback_witness_id,
+                    approval["id"],
+                    approval["review_witness_id"],
+                    approval["capsule_id"],
+                    approval["scope"],
+                    "review-rollback",
+                    f"approved rollback of review witness {approval['review_witness_id']}",
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    json.dumps(after, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_status,
+                    approval["capsule_id"],
+                    approval["scope"],
+                    f"approved rollback of review witness {approval['review_witness_id']}",
+                    "memory-review-rollback",
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                "UPDATE memory_review_rollback_approvals SET status = ?, used_at = ? WHERE id = ?",
+                ("used", utc_now(), approval["id"]),
+            )
+            _invalidate_hot_scope(self.hot_dir, str(approval["scope"]))
+            return {
+                "passed": True,
+                "approval_id": approval["id"],
+                "rollback_witness_id": rollback_witness_id,
+                "review_witness_id": approval["review_witness_id"],
+                "capsule_id": approval["capsule_id"],
+                "scope": approval["scope"],
+                "before_status": current["status"],
+                "after_status": after["status"],
+                "recommendations": [
+                    "Review rollback changed only the capsule status recorded by the approved review witness.",
+                    "Run health and recall-regression after live review rollback.",
+                ],
+            }
+
     def list_working_memory_impacts(
         self,
         *,
@@ -2085,6 +2310,39 @@ def _capsule_witness_snapshot(row: sqlite3.Row) -> dict[str, Any]:
 def _json_digest(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _token_hash(token: str) -> str:
+    return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _is_expired(expires_at: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed <= datetime.now(timezone.utc)
+
+
+def _review_rollback_blocked(
+    approval: dict[str, Any] | None,
+    message: str,
+    confirmation: str,
+) -> dict[str, Any]:
+    return {
+        "passed": False,
+        "approval_id": approval.get("id") if approval else None,
+        "rollback_witness_id": None,
+        "review_witness_id": approval.get("review_witness_id") if approval else None,
+        "capsule_id": approval.get("capsule_id") if approval else None,
+        "scope": approval.get("scope") if approval else None,
+        "before_status": None,
+        "after_status": None,
+        "confirmation_required": confirmation,
+        "recommendations": [message],
+    }
 
 
 def _normalize_relation_text(text: str) -> str:
@@ -2346,6 +2604,53 @@ def _ensure_memory_review_witness_v24_tables(conn: sqlite3.Connection) -> None:
         ON memory_review_witnesses(scope, requested_action, applied_action, created_at);
         CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_capsule
         ON memory_review_witnesses(capsule_id, created_at);
+        """
+    )
+
+
+def _ensure_memory_review_rollback_v25_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memory_review_rollback_approvals (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          scope TEXT NOT NULL,
+          review_witness_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          requested_action TEXT NOT NULL,
+          applied_action TEXT NOT NULL,
+          witness_snapshot_json TEXT NOT NULL,
+          capsule_snapshot_json TEXT NOT NULL,
+          confirmation_required TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          used_at TEXT,
+          FOREIGN KEY(review_witness_id) REFERENCES memory_review_witnesses(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_approvals_status
+        ON memory_review_rollback_approvals(scope, status, expires_at);
+
+        CREATE TABLE IF NOT EXISTS memory_review_rollback_witnesses (
+          id TEXT PRIMARY KEY,
+          rollback_approval_id TEXT NOT NULL,
+          review_witness_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          before_json TEXT NOT NULL,
+          after_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(rollback_approval_id) REFERENCES memory_review_rollback_approvals(id),
+          FOREIGN KEY(review_witness_id) REFERENCES memory_review_witnesses(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_witnesses_scope
+        ON memory_review_rollback_witnesses(scope, action, created_at);
         """
     )
 

@@ -13820,6 +13820,155 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload[0]["id"], witness["id"])
 
+    def test_live_review_rollback_requires_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            first = memory.retain(
+                kind="note",
+                text="Independent evidence: project gamma promotion should be rollback-ready.",
+                source="test-a",
+                scope="gamma",
+            )
+            second = memory.retain(
+                kind="note",
+                text="Independent evidence: project gamma promotion should be rollback-ready.",
+                source="test-b",
+                scope="gamma",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="rollback-ready promotion candidate",
+                body="Project gamma promotion should be rollback-ready.",
+                scope="gamma",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[first.id, second.id],
+                tags=["promotion", "rollback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+            memory.quality(scope="gamma", persist=True)
+            applied = memory.review_worker(scope="gamma", limit=10, dry_run=False)
+            witness_id = applied.items[0].witness_id
+            self.assertIsNotNone(witness_id)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.STABLE.value)
+
+            approval = memory.prepare_review_rollback(str(witness_id), ttl_minutes=10)
+
+            self.assertTrue(approval["token"])
+            self.assertEqual(approval["confirmation_required"], "ROLL BACK REVIEW WITNESS")
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT * FROM memory_review_rollback_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(approval_row)
+                self.assertNotEqual(approval_row["token_hash"], approval["token"])
+
+            wrong_confirm = memory.live_review_rollback(approval["token"], confirm="ROLLBACK")
+            self.assertFalse(wrong_confirm["passed"])
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.STABLE.value)
+
+            rollback = memory.live_review_rollback(
+                approval["token"],
+                confirm="ROLL BACK REVIEW WITNESS",
+            )
+
+            self.assertTrue(rollback["passed"], rollback)
+            self.assertEqual(rollback["before_status"], MemoryStatus.STABLE.value)
+            self.assertEqual(rollback["after_status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
+            reused = memory.live_review_rollback(
+                approval["token"],
+                confirm="ROLL BACK REVIEW WITNESS",
+            )
+            self.assertFalse(reused["passed"])
+            self.assertIn("not prepared", reused["recommendations"][0])
+            with memory.store.session() as conn:
+                approval_status = conn.execute(
+                    "SELECT status, used_at FROM memory_review_rollback_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertEqual(approval_status["status"], "used")
+                self.assertIsNotNone(approval_status["used_at"])
+                witness_row = conn.execute(
+                    "SELECT * FROM memory_review_rollback_witnesses WHERE rollback_approval_id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(witness_row)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "live-review-rollback",
+                    "--approval-token",
+                    approval["token"],
+                    "--confirm",
+                    "ROLL BACK REVIEW WITNESS",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"])
+
+    def test_live_review_rollback_blocks_when_capsule_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            first = memory.retain(
+                kind="note",
+                text="Independent evidence: project delta promotion should detect rollback drift.",
+                source="test-a",
+                scope="delta",
+            )
+            second = memory.retain(
+                kind="note",
+                text="Independent evidence: project delta promotion should detect rollback drift.",
+                source="test-b",
+                scope="delta",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="rollback drift promotion candidate",
+                body="Project delta promotion should detect rollback drift.",
+                scope="delta",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[first.id, second.id],
+                tags=["promotion", "rollback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+            memory.quality(scope="delta", persist=True)
+            applied = memory.review_worker(scope="delta", limit=10, dry_run=False)
+            witness_id = applied.items[0].witness_id
+            approval = memory.prepare_review_rollback(str(witness_id), ttl_minutes=10)
+
+            memory.store.update_capsule_status(
+                candidate.id,
+                MemoryStatus.QUARANTINED,
+                actor="test",
+                reason="simulate drift after rollback approval",
+            )
+            blocked = memory.live_review_rollback(
+                approval["token"],
+                confirm="ROLL BACK REVIEW WITNESS",
+            )
+
+            self.assertFalse(blocked["passed"])
+            self.assertIn("changed after rollback approval", blocked["recommendations"][0])
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.QUARANTINED.value)
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

@@ -168,7 +168,7 @@
     <article class="span-4">
       <h2>최신 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>은 24이고 review-worker apply witness 테이블이 있다.</li>
+        <li><code>SCHEMA_VERSION</code>은 25이고 review-worker apply rollback approval/witness 테이블이 있다.</li>
         <li><code>live-reconsolidation-cool</code>은 첫 제한적 live action executor로 열렸다.</li>
         <li><code>reconsolidation-action-witnesses</code>와 shadow rollback으로 live action의 되돌림 가능성을 검증한다.</li>
         <li><code>prepare-live-reconsolidation-action-rollback</code>은 one-use rollback approval token을 만든다.</li>
@@ -179,6 +179,7 @@
         <li><code>review-compact --compact</code>는 대량 review marker를 action/reason별로 묶어 검토한다.</li>
         <li><code>promotion-candidates</code>는 high-quality candidate를 ready/blocked로 나누는 읽기 전용 promotion gate다.</li>
         <li><code>review-witnesses</code>는 worker-applied promote/quarantine의 before/after capsule snapshot을 조회한다.</li>
+        <li><code>prepare-review-rollback</code>과 <code>live-review-rollback</code>은 review-worker status transition을 one-use token으로 되돌린다.</li>
       </ul>
     </article>
 
@@ -192,7 +193,7 @@
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue: open 9</li>
         <li>distant-memory raw-to-map reduction: 938.9x</li>
-        <li>storage: 341,956,107 bytes, backups: 119,917,259 bytes</li>
+        <li>storage: 341,986,614 bytes, backups: 119,917,259 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -262,9 +263,14 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
+          <strong>Review apply rollback</strong>
+          <p>Completed: review-worker promote/quarantine status transitions can be prepared and rolled back with an exact confirmation token when the witness and target capsule have not drifted.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
           <strong>rewrite / promote / delete executor</strong>
-          <p>현재 live executor는 cool 중심이고 review-worker status apply에는 witness가 붙었다. 다음 단계는 witness 기반 approval/rollback을 일반 memory review action으로 확장하는 것이다.</p>
-          <span class="badge watch">3-6h</span>
+          <p>현재 live executor는 cool 중심이고 review-worker status apply/rollback에는 witness가 붙었다. 다음 단계는 rewrite/delete처럼 내용이나 존재성을 바꾸는 action의 별도 approval/rollback을 여는 것이다.</p>
+          <span class="badge watch">4-7h</span>
         </div>
         <div class="row">
           <strong>Memory worker 분리</strong>
