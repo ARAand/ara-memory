@@ -23,8 +23,10 @@ supplement the candidate set after risk filtering, and normal outputs expose
 only compact activation diagnostics rather than graph path text. Temporal edge
 strings are also normalized into `relation_nodes` and `relation_edges`, and
 recall prefers that relation graph before falling back to raw temporal edges.
-The next layers are semantic relation merging, reconsolidation frames, and
-broader global graph policies.
+A conservative semantic relation merge dry-run gate can now inspect normalized
+relation nodes for likely aliases without mutating the graph. The next layers
+are reviewed/apply-mode relation merging, reconsolidation frames, and broader
+global graph policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -352,6 +354,14 @@ temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
 `recent_supplement_used` when this path is active.
 
+`relation-merge` is a conservative dry-run review gate for normalized relation
+nodes. It compares lexical overlap, prefix/substring evidence, shared relation
+neighborhoods, and degree balance, filters low-value hub-like terms, and reports
+candidate pairs without writing to SQLite. On the current operating store, the
+strict default review threshold intentionally returns no high-confidence
+`ara-memory` candidates; the fixture test proves the gate can still surface real
+alias candidates when evidence is present.
+
 `working-memory` is the smaller action layer between hot memory and cold
 recall. It turns the current prompt, active files, command errors, constraints,
 and temporal hints into a cue frame, recalls ranked candidates without rendering
@@ -488,7 +498,7 @@ verified backup.
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation
 readiness, cold-memory stewardship, distant-memory navigation, purpose-aware
-lifecycle policy, and purpose-aware recall control plus its feedback loop and
+lifecycle policy, relation-merge dry-run readiness, and purpose-aware recall control plus its feedback loop and
 self-directed deliberation. It is deliberately local and deterministic, so it
 can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by

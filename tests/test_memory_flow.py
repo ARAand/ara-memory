@@ -35,6 +35,7 @@ from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
 from ara_memory.projection import render_projection, search_projection, working_projection
+from ara_memory.relation_merge import run_relation_merge_dry_run
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
 from ara_memory.spreading import apply_spreading_activation
@@ -518,6 +519,60 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(result.diagnostics["relation_activation_used"])
             self.assertEqual(result.diagnostics["relation_activation_edges_considered"], 1)
             self.assertIn(target.id, result.diagnostics["spreading_activation_boosted_capsules"])
+
+    def test_relation_merge_dry_run_reports_candidates_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: backup restore relation merge",
+                body="Backup restore relation merge test.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["backup", "restore"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="backup restore drill",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="backup restore procedure",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            before = memory.store.stats()
+
+            report = run_relation_merge_dry_run(
+                memory.store,
+                scope="alpha",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+            )
+
+            after = memory.store.stats()
+            self.assertEqual(before, after)
+            self.assertTrue(report.passed)
+            self.assertGreaterEqual(report.pairs_considered, 1)
+            labels = {
+                (candidate.canonical_label, candidate.candidate_label)
+                for candidate in report.candidates
+            }
+            self.assertIn(("backup restore drill", "backup restore procedure"), labels)
+            text = report.to_text()
+            self.assertIn("Dry-run only", text)
 
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [

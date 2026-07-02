@@ -15,6 +15,7 @@ from ara_memory.regression import (
     load_recall_regression_cases,
     write_recall_regression_baseline,
 )
+from ara_memory.relation_merge import run_relation_merge_dry_run
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -365,6 +366,16 @@ def main(argv: list[str] | None = None) -> int:
     graph_readiness.add_argument("--budgets", default="800,1600")
     graph_readiness.add_argument("--no-global", action="store_true")
     graph_readiness.add_argument("--json", action="store_true")
+    relation_merge = sub.add_parser(
+        "relation-merge",
+        help="Dry-run semantic relation-node merge candidates without mutating the relation graph.",
+    )
+    relation_merge.add_argument("--scope", default="global")
+    relation_merge.add_argument("--limit", type=int, default=20)
+    relation_merge.add_argument("--threshold", type=float, default=0.72)
+    relation_merge.add_argument("--node-limit", type=int, default=800)
+    relation_merge.add_argument("--include-global", action="store_true")
+    relation_merge.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -1324,6 +1335,21 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.status in {"pass", "watch"} else 1
+
+    if args.cmd == "relation-merge":
+        result = run_relation_merge_dry_run(
+            memory.store,
+            scope=args.scope,
+            limit=args.limit,
+            threshold=args.threshold,
+            node_limit=args.node_limit,
+            include_global=args.include_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
 
     if args.cmd == "promote":
         if not memory.promote(args.capsule_id, actor=args.actor, reason=args.reason):

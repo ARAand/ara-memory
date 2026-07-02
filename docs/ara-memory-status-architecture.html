@@ -413,11 +413,12 @@
         <article class="panel">
           <h3>지금 된 것</h3>
           <ul>
-            <li>로컬 우선 durable store: events 1329, capsules 2849, storage 약 253MB.</li>
+            <li>로컬 우선 durable store: events 1337, capsules 2873, storage 약 270MB.</li>
             <li>원문 전체 재독해 대신 bounded recall: 800 token 예산 안에서 727 token / 18개 캡슐 선택.</li>
             <li>purpose continuity, identity continuity, semantic hygiene, milestone readiness 통과.</li>
-            <li>schema v11 기준 relation_nodes 5513개, relation_edges 20615개가 temporal edge에서 정규화됐습니다.</li>
+            <li>schema v11 기준 relation_nodes 5554개, relation_edges 20790개가 temporal edge에서 정규화됐습니다.</li>
             <li>temporal edge를 normalized relation_nodes / relation_edges로 정규화하고, bounded 2-hop graph spreading activation이 relation graph를 우선 사용합니다.</li>
+            <li>semantic relation merge는 자동 병합이 아니라 dry-run review gate로 후보만 산출합니다. 현재 ara-memory scope의 threshold 0.70 후보는 0개입니다.</li>
             <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
           </ul>
         </article>
@@ -536,8 +537,8 @@
               <td>완료</td>
             </tr>
             <tr>
-              <td>Semantic relation merge policy</td>
-              <td>표기만 다른 node를 넘어 의미상 같은 관계를 병합할 기준과 검증 게이트 정의</td>
+              <td>Semantic relation merge apply policy</td>
+              <td>dry-run 후보를 review queue, approval token, rollback witness와 연결해 실제 병합 가능한 apply 정책 정의</td>
               <td>8-16h</td>
               <td>높음</td>
             </tr>
@@ -582,7 +583,7 @@
         <article class="panel">
           <h3>최소 다음 버전</h3>
           <p>
-            8-16시간이면 semantic relation merge gate, global spreading policy, privacy gate 일부까지 넣은
+            8-16시간이면 reviewed relation merge apply policy, global spreading policy, privacy gate 일부까지 넣은
             “사용 가능한 v0.2”로 갈 수 있습니다.
           </p>
         </article>
@@ -595,7 +596,7 @@
         </article>
       </div>
       <div class="callout watch-border" style="margin-top:14px;">
-        Ara 판단: 운영 게이트는 처음으로 모두 초록입니다. 다음 작업은 semantic relation merge와 reconsolidation frame입니다.
+        Ara 판단: 운영 게이트는 처음으로 모두 초록이고 relation merge dry-run도 보수적으로 통과했습니다. 다음 작업은 reviewed merge apply, global spreading sandbox, reconsolidation frame입니다.
         이제는 기억을 보존하는 능력에서 기억을 재구성하는 능력으로 넘어가야 합니다.
       </div>
     </section>
@@ -633,7 +634,7 @@
         </div>
         <div class="timeline-item">
           <div class="timebox">4-10h</div>
-          <div>relation node 병합 후보를 산출하되 자동 병합하지 않는 dry-run gate를 만듭니다.</div>
+          <div>relation merge dry-run 결과를 review queue, approval token, rollback witness와 연결합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">10-18h</div>

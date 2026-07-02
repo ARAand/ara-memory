@@ -877,6 +877,74 @@ class MemoryStore:
                 )
         return rows
 
+    def relation_nodes_for_merge(
+        self,
+        *,
+        scope: str,
+        limit: int = 800,
+        include_global: bool = False,
+    ) -> list[dict[str, Any]]:
+        self.init()
+        scope_filter = "(rn.scope = ? OR rn.scope = 'global')" if include_global else "rn.scope = ?"
+        with self.session() as conn:
+            node_rows = list(
+                conn.execute(
+                    f"""
+                    SELECT
+                      rn.id,
+                      rn.label,
+                      rn.normalized_label,
+                      rn.scope,
+                      COUNT(re.id) AS degree
+                    FROM relation_nodes rn
+                    LEFT JOIN relation_edges re
+                      ON re.subject_node_id = rn.id
+                      OR re.object_node_id = rn.id
+                    WHERE {scope_filter}
+                    GROUP BY rn.id
+                    ORDER BY degree DESC, rn.updated_at DESC
+                    LIMIT ?
+                    """,
+                    (scope, limit),
+                )
+            )
+            node_ids = [str(row["id"]) for row in node_rows]
+            neighbors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+            if node_ids:
+                for chunk in _chunks(node_ids, SQLITE_IN_CHUNK_SIZE):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    edge_rows = conn.execute(
+                        f"""
+                        SELECT
+                          subject_node_id,
+                          object_node_id,
+                          predicate_norm
+                        FROM relation_edges
+                        WHERE subject_node_id IN ({placeholders})
+                           OR object_node_id IN ({placeholders})
+                        """,
+                        tuple([*chunk, *chunk]),
+                    )
+                    for row in edge_rows:
+                        subject = str(row["subject_node_id"])
+                        object_ = str(row["object_node_id"])
+                        predicate = str(row["predicate_norm"] or "")
+                        if subject in neighbors:
+                            neighbors[subject].add(f"{predicate}->{object_}")
+                        if object_ in neighbors:
+                            neighbors[object_].add(f"{subject}->{predicate}")
+            return [
+                {
+                    "id": str(row["id"]),
+                    "label": str(row["label"]),
+                    "normalized_label": str(row["normalized_label"]),
+                    "scope": str(row["scope"]),
+                    "degree": int(row["degree"] or 0),
+                    "neighbor_keys": sorted(neighbors.get(str(row["id"]), set()))[:64],
+                }
+                for row in node_rows
+            ]
+
     def stats(self) -> dict[str, int]:
         self.init()
         with self.session() as conn:
