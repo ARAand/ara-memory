@@ -826,6 +826,7 @@ def main(argv: list[str] | None = None) -> int:
     review_compact.add_argument("--scope", default=None)
     review_compact.add_argument("--limit", type=int, default=250)
     review_compact.add_argument("--apply", action="store_true")
+    review_compact.add_argument("--compact", action="store_true")
     review_compact.add_argument("--json", action="store_true")
     review_redact = sub.add_parser("review-redact")
     review_redact.add_argument("--scope", default=None)
@@ -2315,7 +2316,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "review-compact":
         result = memory.review_compact(scope=args.scope, limit=args.limit, dry_run=not args.apply)
         if args.json:
-            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            payload = result.as_compact_dict() if args.compact else result.as_dict()
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        elif args.compact:
+            print(result.to_compact_text())
         else:
             print(result.to_text())
         return 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -173,6 +174,47 @@ class ReviewCompactReport:
             "items": [item.as_dict() for item in self.items],
         }
 
+    def as_compact_dict(self, *, examples_per_group: int = 3) -> dict[str, Any]:
+        changed_items = [item for item in self.items if item.changed]
+        skipped_items = [item for item in self.items if not item.changed]
+        groups: dict[str, dict[str, Any]] = {}
+        for item in self.items:
+            key = _review_compact_group_key(item)
+            group = groups.setdefault(
+                key,
+                {
+                    "key": key,
+                    "action": item.action,
+                    "changed": item.changed,
+                    "reason": _review_compact_reason_label(item.reason),
+                    "count": 0,
+                    "examples": [],
+                },
+            )
+            group["count"] += 1
+            if len(group["examples"]) < examples_per_group:
+                group["examples"].append(
+                    {
+                        "queue_id": item.queue_id,
+                        "capsule_id": item.capsule_id,
+                        "reason": item.reason,
+                    }
+                )
+        return {
+            "scope": self.scope,
+            "dry_run": self.dry_run,
+            "processed": self.processed,
+            "changed": self.changed,
+            "skipped": self.skipped,
+            "change_rate": round(self.changed / self.processed, 4) if self.processed else 0.0,
+            "actions": dict(Counter(item.action for item in self.items)),
+            "outcomes": {
+                "changed": len(changed_items),
+                "skipped": len(skipped_items),
+            },
+            "groups": sorted(groups.values(), key=lambda item: (-int(item["count"]), str(item["key"]))),
+        }
+
     def to_text(self) -> str:
         scope = self.scope or "all"
         lines = [
@@ -184,6 +226,47 @@ class ReviewCompactReport:
             marker = "changed" if item.changed else "kept"
             lines.append(f"- [{marker}] {item.queue_id} {item.action}: {item.reason}")
         return "\n".join(lines)
+
+    def to_compact_text(self) -> str:
+        payload = self.as_compact_dict()
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Review Compact Summary: {scope}",
+            f"dry_run: {self.dry_run}",
+            (
+                f"processed={self.processed}, changed={self.changed}, skipped={self.skipped}, "
+                f"change_rate={payload['change_rate']:.2%}"
+            ),
+        ]
+        for group in payload["groups"]:
+            marker = "changed" if group["changed"] else "kept"
+            lines.append(f"- [{marker}] {group['count']} {group['action']}: {group['reason']}")
+            for example in group["examples"][:2]:
+                lines.append(f"  - {example['queue_id']} {example['capsule_id']}: {example['reason']}")
+        return "\n".join(lines)
+
+
+def _review_compact_reason_label(reason: str) -> str:
+    text = str(reason)
+    prefix = "acknowledged non-destructive review marker: "
+    if text.startswith(prefix):
+        text = text[len(prefix) :]
+    if "excluded from hot memory by deterministic risk policy" in text:
+        return "deterministic artifact exclusion marker"
+    if "low quality score" in text:
+        return "low quality marker"
+    if "resolved stale queue action" in text:
+        return "stale queue action"
+    if "capsule no longer exists" in text:
+        return "missing capsule"
+    if "needs explicit policy" in text:
+        return "requires explicit policy"
+    return text[:120]
+
+
+def _review_compact_group_key(item: ReviewCompactItem) -> str:
+    changed = "changed" if item.changed else "kept"
+    return f"{changed}|{item.action}|{_review_compact_reason_label(item.reason)}"
 
 
 @dataclass(slots=True)

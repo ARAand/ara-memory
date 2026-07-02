@@ -286,6 +286,7 @@ review_compact(scope)
   -> resolve missing-capsule and stale queue rows
   -> acknowledge low-quality review markers
   -> acknowledge deterministic artifact-exclusion markers
+  -> compact projection groups changes by action/reason for low-token review
   -> never promote, quarantine, decay, delete, or otherwise mutate capsules
 
 review_redact(scope)

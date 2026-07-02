@@ -15128,7 +15128,8 @@ class MemoryFlowTests(unittest.TestCase):
 
     def test_review_compact_acknowledges_low_quality_markers_without_reopening(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            memory = AraMemory(Path(tmp) / "memory")
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
             memory.init()
             event = memory.retain(
                 kind="prompt",
@@ -15155,7 +15156,33 @@ class MemoryFlowTests(unittest.TestCase):
 
             dry = memory.review_compact(scope="alpha", dry_run=True)
             self.assertEqual(dry.changed, 1, dry.as_dict())
+            compact = dry.as_compact_dict()
+            self.assertEqual(compact["groups"][0]["reason"], "low quality marker")
+            self.assertNotIn("items", compact)
             self.assertEqual(len(memory.review_queue(scope="alpha", status="open", limit=10)), 1)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "review-compact",
+                    "--scope",
+                    "alpha",
+                    "--compact",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["changed"], 1)
+            self.assertEqual(payload["groups"][0]["reason"], "low quality marker")
+            self.assertNotIn("items", payload)
 
             applied = memory.review_compact(scope="alpha", dry_run=False)
             self.assertEqual(applied.changed, 1, applied.as_dict())

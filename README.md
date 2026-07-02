@@ -799,7 +799,10 @@ that deterministic risk policy already excludes from hot/recall surfaces, such
 as instruction-like text inside code/test/document artifacts or keyword-stuffed
 artifact summaries. It does not promote, quarantine, decay, delete, or otherwise
 change memory capsules, and resolved review markers are not reopened by later
-quality persistence unless their reason changes.
+quality persistence unless their reason changes. Use `review-compact --compact`
+or `review-compact --compact --json` before apply on large queues; the compact
+report groups changes by action and reason so review does not spend tokens on
+hundreds of per-item rows.
 `review-redact` defaults to dry-run. With `--apply`, it handles sensitive-data
 review markers by redacting only the active capsule projection (`title`, `body`,
 and `tags`), leaving source-event provenance linked for local audit. Each apply

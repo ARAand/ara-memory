@@ -176,20 +176,21 @@
         <li><code>live-reconsolidation-action-rollback</code>은 prepared token을 소비해 기록된 <code>cool</code> status transition만 되돌린다.</li>
         <li><code>working-memory-impact-eval</code>은 작업기억 피드백을 capsule/source별로 읽기 전용 평가한다.</li>
         <li><code>health --compact</code>는 worker log와 상태 handoff용 저토큰 건강 보고를 낸다.</li>
+        <li><code>review-compact --compact</code>는 대량 review marker를 action/reason별로 묶어 검토한다.</li>
       </ul>
     </article>
 
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,633</li>
-        <li>capsules: 3,590</li>
-        <li>relation nodes: 6,718</li>
-        <li>relation edges: 26,115</li>
+        <li>source events: 1,643</li>
+        <li>capsules: 3,610</li>
+        <li>relation nodes: 6,753</li>
+        <li>relation edges: 26,252</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue: open 222</li>
+        <li>review queue: open 0</li>
         <li>distant-memory raw-to-map reduction: 907.6x</li>
-        <li>storage: 334,185,954 bytes, backups: 119,917,259 bytes</li>
+        <li>storage: 339,311,796 bytes, backups: 119,917,259 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -244,6 +245,11 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
+          <strong>Review compact summary</strong>
+          <p>Completed: review-compact --compact groups non-destructive review markers by action and reason; 223 open markers were resolved without mutating capsules.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
           <strong>rewrite / promote / delete executor</strong>
           <p>현재 live executor는 cool 중심이다. 더 강한 변경 권한은 action별 approval, snapshot, witness, rollback을 분리해서 열어야 한다.</p>
           <span class="badge watch">4-7h</span>
@@ -273,7 +279,7 @@
         <li><span class="badge pass">프로젝트 pass</span> <code>ara-memory</code> scope의 goal-roadmap과 milestone은 통과한다.</li>
         <li><span class="badge watch">전체 fail</span> 기본 global health/roadmap은 candidate/stable 비율과 목적 연속성, worker readiness가 섞여 fail로 보인다.</li>
         <li><span class="badge watch">미완성</span> promote/rewrite/delete live executor와 그 rollback은 아직 단계적으로 열어야 한다.</li>
-        <li><span class="badge watch">부채</span> review queue 222건은 다음 운영 정리 대상이다.</li>
+        <li><span class="badge pass">정리됨</span> review queue open count는 0이다.</li>
         <li><span class="badge info">방향</span> 지금은 “더 많이 저장”이 아니라 “안전하게 바꾸고 정확히 불러오기”가 병목이다.</li>
       </ul>
       <p class="note">
