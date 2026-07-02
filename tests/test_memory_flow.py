@@ -3319,6 +3319,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "milestone readiness",
                     "graph activation readiness",
                     "global spreading sandbox",
+                    "privacy pre-push gate",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -3336,6 +3337,9 @@ class MemoryFlowTests(unittest.TestCase):
             global_spreading = next(item for item in roadmap.items if item.name == "global spreading sandbox")
             self.assertIn("global=True", global_spreading.evidence)
             self.assertIn("risk_filtered=", global_spreading.evidence)
+            privacy_push = next(item for item in roadmap.items if item.name == "privacy pre-push gate")
+            self.assertIn("scanned=", privacy_push.evidence)
+            self.assertIn("warnings=", privacy_push.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)
@@ -10776,6 +10780,70 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(event.metadata["privacy"]["action"], "allowed_raw_private")
             self.assertFalse(event.metadata["privacy"]["text_redacted"])
             self.assertIn("allowed only because this is explicit", json.dumps(event.metadata, ensure_ascii=False))
+
+    def test_privacy_pre_push_blocks_private_memory_paths_and_source_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            memory_dir = repo / ".ara-memory" / "ledger"
+            memory_dir.mkdir(parents=True)
+            (memory_dir / "events.jsonl").write_text('{"text": "private memory event"}\n', encoding="utf-8")
+            src = repo / "app.py"
+            src.write_text('API_KEY = "sk-abcdefghijklmnopqrstuvwxyz123456"\n', encoding="utf-8")
+            tests_dir = repo / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_fixture.py").write_text(
+                'fixture = "sk-abcdefghijklmnopqrstuvwxyz123456"\n',
+                encoding="utf-8",
+            )
+            run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+
+            report = AraMemory(repo / "memory").privacy_pre_push(repo=repo)
+
+            self.assertFalse(report.passed, report.as_dict())
+            self.assertEqual(report.status, "fail")
+            findings = report.as_dict()["findings"]
+            self.assertTrue(any(item["kind"] == "private-memory-path" for item in findings), findings)
+            self.assertTrue(
+                any(
+                    item["kind"] == "secret-like-text"
+                    and item["severity"] == "fail"
+                    and item["path"] == "app.py"
+                    for item in findings
+                ),
+                findings,
+            )
+            self.assertTrue(
+                any(
+                    item["kind"] == "secret-like-text"
+                    and item["severity"] == "warning"
+                    and item["path"] == "tests/test_fixture.py"
+                    for item in findings
+                ),
+                findings,
+            )
+
+    def test_privacy_pre_push_passes_with_only_fixture_secret_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            (repo / "README.md").write_text("Safe public project.\n", encoding="utf-8")
+            tests_dir = repo / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_fixture.py").write_text(
+                'fixture = "Bearer AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"\n',
+                encoding="utf-8",
+            )
+            run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+
+            report = AraMemory(repo / "memory").privacy_pre_push(repo=repo)
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.status, "watch")
+            self.assertIn("Privacy Pre-Push Gate", report.to_text())
+            self.assertTrue(all(finding.severity == "warning" for finding in report.findings), report.as_dict())
 
     def test_remember_turn_redacts_command_output_before_event_storage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

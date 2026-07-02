@@ -412,6 +412,11 @@ class AraMemory:
 
         return run_global_spreading_sandbox(self, **kwargs)
 
+    def privacy_pre_push(self, **kwargs: Any) -> Any:
+        from ara_memory.privacy_push import run_privacy_pre_push_gate
+
+        return run_privacy_pre_push_gate(**kwargs)
+
     def doctor(
         self,
         *,

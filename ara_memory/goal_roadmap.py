@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -76,6 +77,7 @@ def build_goal_roadmap(
     )
     graph_readiness = memory.graph_activation_readiness(scope=scope)
     global_spreading = memory.global_spreading_sandbox(scope=scope)
+    privacy_pre_push = memory.privacy_pre_push(repo=Path.cwd())
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -169,6 +171,12 @@ def build_goal_roadmap(
             global_spreading.status,
             _global_spreading_evidence(global_spreading),
             "Tune global fanout, hub suppression, risk filtering, or representative global evidence before broader spreading.",
+        ),
+        RoadmapItem(
+            "privacy pre-push gate",
+            "pass" if privacy_pre_push.passed else "fail",
+            _privacy_pre_push_evidence(privacy_pre_push),
+            "Remove tracked private memory files or secret-like content before pushing the public repository.",
         ),
         RoadmapItem(
             "cold-memory stewardship",
@@ -269,6 +277,15 @@ def _global_spreading_evidence(global_spreading: Any) -> str:
         f"visible={diagnostics['visible_capsules']}, "
         f"risk_filtered={diagnostics['capsules_filtered_by_risk']}, "
         f"budget={diagnostics['best_budget']}"
+    )
+
+
+def _privacy_pre_push_evidence(report: Any) -> str:
+    failures = sum(1 for finding in report.findings if finding.severity == "fail")
+    warnings = sum(1 for finding in report.findings if finding.severity == "warning")
+    return (
+        f"{report.status}, scanned={report.scanned_files}, "
+        f"failures={failures}, warnings={warnings}"
     )
 
 

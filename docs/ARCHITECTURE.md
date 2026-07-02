@@ -315,6 +315,13 @@ rewrite the user's prompt, files, or worktree evidence. If a worker dies after
 moving a file into `processing`, the next drain/worker recovers stale processing
 records for that same scope back to `pending` before continuing.
 
+`privacy-pre-push` is the publication boundary. It does not inspect the live
+memory store directly; it inspects the Git repository about to be published. The
+gate fails when tracked or staged paths include private memory roots, ledgers,
+databases, backups, archives, logs, raw hidden-reasoning markers, or secret-like
+text outside approved test/docs fixtures. This keeps local-first evidence and
+public implementation code on different sides of the architecture.
+
 When the foreground session needs to recall immediately after draining, use
 `drain-spool --stabilize`. It performs the same conservative episode/candidate
 summary folds that the worker uses for repeated command, file, git-status,

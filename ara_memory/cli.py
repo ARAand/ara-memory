@@ -383,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
     global_spreading.add_argument("--max-depth", type=int, default=2)
     global_spreading.add_argument("--min-quality", type=int, default=35)
     global_spreading.add_argument("--json", action="store_true")
+    privacy_pre_push = sub.add_parser("privacy-pre-push")
+    privacy_pre_push.add_argument("--repo", type=Path, default=Path("."))
+    privacy_pre_push.add_argument("--include-untracked", action="store_true")
+    privacy_pre_push.add_argument("--include-direct-identifiers", action="store_true")
+    privacy_pre_push.add_argument("--max-bytes", type=int, default=1_000_000)
+    privacy_pre_push.add_argument("--json", action="store_true")
     relation_merge = sub.add_parser(
         "relation-merge",
         help="Dry-run semantic relation-node merge candidates without mutating the relation graph.",
@@ -1408,6 +1414,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.status in {"pass", "watch"} else 1
+
+    if args.cmd == "privacy-pre-push":
+        result = memory.privacy_pre_push(
+            repo=args.repo,
+            include_untracked=args.include_untracked,
+            include_direct_identifiers=args.include_direct_identifiers,
+            max_bytes=args.max_bytes,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "relation-merge":
         result = run_relation_merge_dry_run(

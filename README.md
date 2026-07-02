@@ -535,14 +535,23 @@ spreading activation has live evidence when graph recall is expected, but it
 does not turn an otherwise healthy small scope into a hard failure. Use
 milestone-check before declaring a memory milestone clean, then create a
 verified backup.
+
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation
-readiness, global spreading sandbox, cold-memory stewardship, distant-memory
-navigation, purpose-aware lifecycle policy, purpose-aware recall control, recall
-policy feedback, and
+readiness, global spreading sandbox, privacy pre-push safety, cold-memory
+stewardship, distant-memory navigation, purpose-aware lifecycle policy,
+purpose-aware recall control, recall policy feedback, and
 self-directed deliberation. It is deliberately local and deterministic, so it
 can be run before spending model context.
+
+`privacy-pre-push` is the public-repository guard. It scans tracked and staged
+files, optionally untracked files, and fails on private memory roots, memory
+databases, ledgers, archives, logs, raw hidden-reasoning markers, and
+secret-like text outside test/docs fixtures. Fixture secrets remain visible as
+warnings so regression tests can keep adversarial examples without blocking a
+reviewed public push.
+
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event

@@ -28,6 +28,7 @@
 - Manual and automatic `quarantine` exists for suspicious behavioral memory.
 - The deterministic risk auditor detects instruction-like text, secret-like credential patterns, direct identifiers, self-serving identity claims, and keyword stuffing across capsule title, body, and tags before hot memory is rebuilt.
 - The pre-retain privacy guard redacts secret-like credentials, direct identifiers, hidden reasoning text/metadata, and sensitive metadata keys before text events are written to the append-only ledger, SQLite event table, or FTS index. Source and scope labels containing recognized private patterns are replaced with deterministic private labels. `--allow-raw-secret` is the explicit override and records the privacy action in event metadata.
+- `privacy-pre-push` is the publication gate for the implementation repository. It scans tracked and staged files, optionally untracked files, fails on private memory roots/databases/ledgers/archives/logs, raw hidden-reasoning markers, and secret-like text outside approved fixtures, and leaves test/docs fixture secrets as warnings.
 - Instruction-like, secret-like, and direct-identifier tags are suppressed from recall tag surfaces.
 - `review-redact` handles existing sensitive review markers by redacting only active capsule projections and writing digest witnesses. It preserves source-event links for local audit and resolves the marker only after deterministic risk no longer sees sensitive projection text.
 - Default recall, manual promotion, quality review, and external advisor payloads reuse that deterministic risk boundary; risky advisor candidates are redacted before any external command receives them.
@@ -108,7 +109,6 @@
 - Periodic stale-memory review.
 - Poisoning benchmark suite based on OWASP ASI06-style cases.
 - Signed or allow-listed advisor providers.
-- A pre-push privacy gate that rejects tracked memory roots, databases, archives, absolute user paths, and secret-like patterns.
 - Encrypted backups and cold exports, with raw source events opt-in for portable archives.
 - Retention-cycle and cold-stewardship identity fingerprints over capsule/event ID sets, not only aggregate counts, so same-count drift cannot masquerade as current evidence.
 - Quality-aware provenance compaction that scores retained source events by recall contribution, not only deterministic time spacing, and can block apply on recall-regression drift.
