@@ -30,6 +30,7 @@ from ara_memory.cold_identity import build_cold_identity
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
 from ara_memory.compressors import estimate_tokens, extract_keywords
+from ara_memory.espa import capsule_axis_profile, query_axis_profile
 from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
@@ -137,6 +138,105 @@ class MemoryFlowTests(unittest.TestCase):
         self.assertLessEqual(len(working), 380)
         self.assertLess(len(searched), len(capsule["body"]))
         self.assertIn("Procedure memory", working)
+
+    def test_espa_procedural_query_boosts_procedure_over_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            summary = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Backup restore overview",
+                body="Backup restore overview explains the concept and context.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.95,
+                source_event_ids=[],
+                tags=["backup", "restore", "overview"],
+                status=MemoryStatus.STABLE,
+            )
+            procedure = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: backup restore runbook",
+                body="Steps to run backup restore safely: verify backup, restore sandbox, then test.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.40,
+                source_event_ids=[],
+                tags=["backup", "restore", "runbook"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(summary)
+            memory.store.upsert_capsule(procedure)
+
+            result = memory.recall_candidates(
+                "how to run backup restore",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertEqual(result.capsules[0]["id"], procedure.id)
+            self.assertGreater(result.diagnostics["espa_query_axes"]["procedural"], 0.0)
+            self.assertTrue(result.diagnostics["espa_activation_used"])
+            self.assertIn(procedure.id, result.diagnostics["espa_activation_boosted_capsules"])
+
+    def test_espa_affective_query_surfaces_failure_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: cold memory cleanup policy",
+                body="Cold memory cleanup policy discusses deleting cold memory after review.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.85,
+                source_event_ids=[],
+                tags=["cold", "memory", "cleanup"],
+                status=MemoryStatus.STABLE,
+            )
+            failure = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure warning: deleting cold memory without export",
+                body="Risk before deleting cold memory: export and verify evidence first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.35,
+                source_event_ids=[],
+                tags=["cold", "memory", "risk", "warning"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+            memory.store.upsert_capsule(failure)
+
+            result = memory.recall_candidates(
+                "risk before deleting cold memory",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertEqual(result.capsules[0]["id"], failure.id)
+            self.assertGreater(result.diagnostics["espa_query_axes"]["affective"], 0.0)
+            self.assertIn(failure.id, result.diagnostics["espa_activation_boosted_capsules"])
+
+    def test_espa_axis_profiles_are_bounded_and_explainable(self) -> None:
+        query_axes = query_axis_profile("어떻게 위험한 기억 삭제를 복구할까?", ["기억", "삭제", "복구"])
+        capsule_axes = capsule_axis_profile(
+            {
+                "kind": "failure",
+                "title": "Failure warning: unsafe deletion",
+                "body": "Recover by restoring backup and checking the warning.",
+                "tags": ["risk", "restore"],
+            }
+        )
+
+        self.assertIn("procedural", query_axes)
+        self.assertIn("affective", query_axes)
+        self.assertLessEqual(max(query_axes.values()), 1.0)
+        self.assertGreater(capsule_axes["affective"], capsule_axes.get("semantic", 0.0))
 
     def test_successful_regression_command_is_not_failure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -10786,7 +10886,66 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("visible_source_event_count", payload["cases"][0]["details"])
             self.assertIn("visible_source_event_digest", payload["cases"][0]["details"])
             self.assertIn("visible_source_event_ids_truncated", payload["cases"][0]["details"])
+            self.assertIn("expected_diagnostics", payload["cases"][0]["details"])
             self.assertGreater(payload["cases"][0]["details"]["capsules_visible"], 0)
+
+    def test_recall_regression_checks_expected_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROCEDURE,
+                    title="Procedure: backup restore",
+                    body="Steps to run backup restore safely.",
+                    scope="regression-diagnostics",
+                    confidence=0.9,
+                    salience=0.7,
+                    source_event_ids=[],
+                    tags=["backup", "restore", "procedure"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            report = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="diagnostic_case",
+                        query="how to run backup restore",
+                        scope="regression-diagnostics",
+                        expected_terms=["restore"],
+                        expected_diagnostics={
+                            "espa_activation_used": True,
+                            "espa_query_axes.procedural": "positive",
+                        },
+                        budget=900,
+                        include_global=False,
+                    )
+                ]
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            details = report.as_dict()["cases"][0]["details"]
+            self.assertTrue(details["expected_diagnostics"]["espa_activation_used"]["passed"])
+            self.assertTrue(details["expected_diagnostics"]["espa_query_axes.procedural"]["passed"])
+
+            failed = memory.recall_regression(
+                [
+                    RecallRegressionCase(
+                        name="diagnostic_case",
+                        query="how to run backup restore",
+                        scope="regression-diagnostics",
+                        expected_terms=["restore"],
+                        expected_diagnostics={"espa_query_axes.affective": "positive"},
+                        budget=900,
+                        include_global=False,
+                    )
+                ]
+            )
+
+            self.assertFalse(failed.passed, failed.as_dict())
+            failed_details = failed.as_dict()["cases"][0]["details"]
+            self.assertFalse(failed_details["expected_diagnostics"]["espa_query_axes.affective"]["passed"])
 
     def test_recall_regression_checks_evidence_not_query_echo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

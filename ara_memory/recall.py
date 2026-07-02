@@ -6,6 +6,7 @@ from hashlib import sha256
 from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, is_search_term
+from ara_memory.espa import apply_espa_activation, axis_coverage
 from ara_memory.models import MemoryStatus
 from ara_memory.projection import render_projection
 from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
@@ -89,6 +90,7 @@ class RecallCompiler:
             capsule_id = str(cap["id"])
             cap["impact_boost"] = impact_boosts.get(capsule_id, 0.0)
             cap["impact_match_count"] = impact_counts.get(capsule_id, 0)
+        espa = apply_espa_activation(filtered_candidates, query=query, terms=terms)
         capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:candidate_limit]
         low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
         renderable_capsules = [] if low_evidence_fallback_suppressed else _renderable_capsules(capsules, intent_query=intent_query)
@@ -125,6 +127,14 @@ class RecallCompiler:
                 for cap in capsules
                 if float(cap.get("impact_boost") or 0.0) < 0.0
             ],
+            "espa_query_axes": dict(espa["query_axes"]),
+            "espa_activation_used": bool(espa["activation_used"]),
+            "espa_activation_boosted_capsules": [
+                cap["id"]
+                for cap in capsules
+                if float(cap.get("espa_activation_score") or 0.0) > 0.0
+            ],
+            "espa_axis_coverage": axis_coverage(capsules),
             "temporal_query": temporal_query,
             "intent_query": intent_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
@@ -289,6 +299,10 @@ class RecallCompiler:
             "impact_feedback_rows": int(candidate_result.diagnostics["impact_feedback_rows"]),
             "impact_boosted_capsules": list(candidate_result.diagnostics["impact_boosted_capsules"]),
             "impact_penalized_capsules": list(candidate_result.diagnostics["impact_penalized_capsules"]),
+            "espa_query_axes": dict(candidate_result.diagnostics["espa_query_axes"]),
+            "espa_activation_used": bool(candidate_result.diagnostics["espa_activation_used"]),
+            "espa_activation_boosted_capsules": list(candidate_result.diagnostics["espa_activation_boosted_capsules"]),
+            "espa_axis_coverage": dict(candidate_result.diagnostics["espa_axis_coverage"]),
             "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
             "relevance_score_avg": (
@@ -384,6 +398,8 @@ def _public_capsule_summary(cap: dict[str, Any]) -> dict[str, Any]:
         "tags": redact_memory_tags(cap["tags"])[:8],
         "recall_match_source": cap.get("recall_match_source"),
         "bm25_score": cap.get("bm25_score"),
+        "espa_axes": dict(cap.get("espa_axes") or {}),
+        "espa_activation_score": float(cap.get("espa_activation_score") or 0.0),
     }
 
 
@@ -821,6 +837,7 @@ def _recall_score(cap: dict, terms: list[str], *, recency_boost: float = 0.0) ->
     score += min(2.4, title_hits * 0.45 + body_hits * 0.18)
     score += _bm25_bonus(cap)
     score += float(cap.get("impact_boost") or 0.0)
+    score += float(cap.get("espa_activation_score") or 0.0)
     score += recency_boost
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score

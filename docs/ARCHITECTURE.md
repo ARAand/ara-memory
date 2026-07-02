@@ -9,10 +9,10 @@ later, but it is not the center of recall.
 The working-memory model is an associative substrate rather than a finished
 human-like memory. Recall combines explicit purpose, scope, temporal edges,
 graph neighbors, FTS/BM25 matches, and budget selection instead of treating
-memory as one flat similarity search space. It is still lexical/salience-heavy:
-search/render projection split is now the first compression boundary, but there
-is no full ESPA router, spreading activation layer, or reconsolidation frame
-yet.
+memory as one flat similarity search space. It is still partly
+lexical/salience-heavy, but search/render projection split is now the first
+compression boundary and deterministic ESPA activation is the first axis router.
+There is no graph-wide spreading activation layer or reconsolidation frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -77,6 +77,7 @@ recall_candidates(query, scope)
   -> FTS/BM25 search over compact search projections, not raw capsule bodies
   -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
+  -> deterministic ESPA activation over episodic, semantic, procedural, and affective axes
   -> cue-matched working-memory-impact boost/penalty with bounded magnitude
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
   -> suppress no-evidence salience fallback bodies
@@ -377,15 +378,14 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     explain a turn but must not become self-certifying evidence that future
     agency reviews use to prove Ara's judgment.
 30. Prefer projection and routing over rereading raw memory. Raw body, search
-    projection, and render projection are now split; the next natural memory
-    layer should route recall through episodic, semantic, procedural, and
-    affective axes.
+    projection, and render projection are now split; deterministic ESPA
+    activation routes recall through episodic, semantic, procedural, and
+    affective axes before ranking.
     Affective signals are caution/context signals, not reward or promotion scores.
 
 ## Future Extension Points
 
-- ESPA memory axes: episodic, semantic, procedural, and affective routing over
-  SQLite metadata/FTS before considering optional embeddings.
+- Graph-wide spreading activation across temporal edges and ESPA axes.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

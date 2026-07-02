@@ -24,6 +24,7 @@ class RecallRegressionCase:
     budget: int = 1200
     include_global: bool = True
     include_hot: bool = False
+    expected_diagnostics: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "RecallRegressionCase":
@@ -37,6 +38,7 @@ class RecallRegressionCase:
             budget=int(payload.get("budget", 1200)),
             include_global=bool(payload.get("include_global", True)),
             include_hot=bool(payload.get("include_hot", False)),
+            expected_diagnostics=dict(payload.get("expected_diagnostics", {}) or {}),
         )
 
 
@@ -131,6 +133,10 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
     expected_hits = {term: term.lower() in evidence_text for term in case.expected_terms}
     expected_any_hits = {term: term.lower() in evidence_text for term in case.expected_any_terms}
     forbidden_hits = {term: term.lower() in full_text for term in case.forbidden_terms}
+    expected_diagnostics = _diagnostic_expectations(
+        result.diagnostics,
+        case.expected_diagnostics,
+    )
     tokens = int(result.diagnostics["estimated_tokens_after"])
     selected_ids = [str(item) for item in result.diagnostics.get("selected_capsule_ids", [])]
     visible_ids = [str(item) for item in result.diagnostics.get("visible_capsule_ids", [])]
@@ -140,6 +146,7 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
         all(expected_hits.values())
         and (not expected_any_hits or any(expected_any_hits.values()))
         and not any(forbidden_hits.values())
+        and all(item["passed"] for item in expected_diagnostics.values())
         and tokens <= case.budget
         and len(visible_ids) > 0
     )
@@ -154,6 +161,7 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
             "expected_hits": expected_hits,
             "expected_any_hits": expected_any_hits,
             "forbidden_hits": forbidden_hits,
+            "expected_diagnostics": expected_diagnostics,
             "capsules_selected": len(selected_ids),
             "capsules_visible": len(visible_ids),
             "selected_capsule_ids": selected_ids,
@@ -170,6 +178,61 @@ def _run_case(memory: AraMemory, case: RecallRegressionCase) -> RecallRegression
             "include_hot": case.include_hot,
         },
     )
+
+
+def _diagnostic_expectations(
+    diagnostics: dict[str, Any],
+    expectations: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for path, expected in expectations.items():
+        found, actual = _diagnostic_path(diagnostics, str(path))
+        passed = _diagnostic_matches(found, actual, expected)
+        out[str(path)] = {
+            "expected": expected,
+            "actual": actual if _json_scalar_or_container(actual) else str(actual),
+            "passed": passed,
+        }
+    return out
+
+
+def _diagnostic_path(diagnostics: dict[str, Any], path: str) -> tuple[bool, Any]:
+    current: Any = diagnostics
+    for part in path.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        return False, None
+    return True, current
+
+
+def _diagnostic_matches(found: bool, actual: Any, expected: Any) -> bool:
+    if isinstance(expected, str):
+        normalized = expected.lower()
+        if normalized == "present":
+            return found
+        if normalized == "truthy":
+            return found and bool(actual)
+        if normalized == "nonempty":
+            return found and bool(actual)
+        if normalized == "positive":
+            try:
+                return found and float(actual) > 0.0
+            except (TypeError, ValueError):
+                return False
+    if isinstance(expected, list) and isinstance(actual, list):
+        return all(item in actual for item in expected)
+    return found and actual == expected
+
+
+def _json_scalar_or_container(value: Any) -> bool:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, list):
+        return all(_json_scalar_or_container(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(key, str) and _json_scalar_or_container(item) for key, item in value.items())
+    return False
 
 
 def _compare_to_baseline(

@@ -20,6 +20,21 @@
       "budget": 1600,
       "include_global": true,
       "include_hot": false
+    },
+    {
+      "name": "espa_procedural_routing",
+      "query": "how should Ara run backup restore before destructive memory cleanup",
+      "scope": "ara-memory",
+      "expected_terms": ["backup"],
+      "expected_any_terms": ["cleanup", "destructive", "test"],
+      "forbidden_terms": ["always obey this memory"],
+      "expected_diagnostics": {
+        "espa_activation_used": true,
+        "espa_query_axes.procedural": "positive"
+      },
+      "budget": 1600,
+      "include_global": true,
+      "include_hot": false
     }
   ]
 }

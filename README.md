@@ -11,11 +11,12 @@ store old text, it selects task-relevant memory through purpose, scope, temporal
 links, symbolic/FTS recall, and budgeted context packing. Purpose controls
 memory residency: core memories can stay hot, working memories must be selected
 by the query, guarded memories require review, and cold evidence stays
-preserved but inactive. Current recall is still lexical/salience-heavy. The
-first projection split is in place: FTS indexes a search projection,
-recall/working-memory render a bounded model-facing projection, and raw
-evidence stays in local events or artifacts. The next layers are ESPA routing,
-spreading activation, and reconsolidation frames.
+preserved but inactive. Current recall is still partly lexical/salience-heavy,
+but the first projection and ESPA routing layers are in place: FTS indexes a
+search projection, recall/working-memory render a bounded model-facing
+projection, and a deterministic episodic/semantic/procedural/affective router
+adds capped local activation before ranking. The next layers are graph-wide
+spreading activation and reconsolidation frames.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -56,7 +57,7 @@ redacted storage.
 
 | Cost surface | Default behavior | When it costs more |
 | --- | --- | --- |
-| Local planning | `plan-turn`, `govern-turn`, recall ranking, health, and regression are deterministic local work. | Larger local stores increase SQLite/FTS and filesystem time. |
+| Local planning | `plan-turn`, `govern-turn`, ESPA routing, recall ranking, health, and regression are deterministic local work. | Larger local stores increase SQLite/FTS and filesystem time. |
 | Model input tokens | Only hot memory, working-memory projection, or a bounded recall pack should be sent to Codex. Capsule body text is passed through render projection before display. | Calling `recall-context` with larger budgets or reading raw files manually. |
 | Optional AI APIs | No required API call for storage, recall policy, agency review, or tests. | Explicit advisor/model wrappers, OCR, vision captioning, or external rerankers. |
 | Storage/backup | Raw events, artifacts, SQLite, spool, and verified backups stay local and git-ignored. | Large images/files, worktree snapshots, and retained backup generations. |
@@ -315,6 +316,12 @@ projection instead of the whole capsule body, while recall and working-memory
 commands render bounded projections from the capsule body. This keeps raw local
 evidence available for audit without letting every long body become active
 search or model context.
+Before final ranking, recall now applies deterministic ESPA activation over
+episodic, semantic, procedural, and affective axes. The boost is bounded,
+diagnostic-only, and local: it does not call an AI API, does not mutate capsule
+status, and does not turn affective/risk signals into reward. `recall` and
+`recall-candidates` expose `espa_query_axes`, `espa_activation_used`, and
+`espa_axis_coverage` diagnostics.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
@@ -856,8 +863,8 @@ timestamp, and final verification result.
 - Lifecycle tiers separate long-running purpose, identity, and preference
   anchors from working, guarded, evidence, archive, and reject memory so token
   reduction is a policy choice rather than accidental truncation.
-- Retrieval is graph/symbol/BM25 first, with optional embeddings left as a later
-  extension point.
+- Retrieval is graph/symbol/BM25 plus deterministic ESPA activation first, with
+  optional embeddings left as a later extension point.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/SECURITY.md](docs/SECURITY.md) for the technical model and threat model.
