@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -305,6 +305,28 @@ CREATE TABLE IF NOT EXISTS reconsolidation_witnesses (
 
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_witnesses_approval ON reconsolidation_witnesses(approval_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_witnesses_scope ON reconsolidation_witnesses(scope, created_at);
+
+CREATE TABLE IF NOT EXISTS reconsolidation_review_queue (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  approval_id TEXT,
+  witness_id TEXT,
+  capsule_id TEXT,
+  action TEXT NOT NULL,
+  priority REAL NOT NULL,
+  reason TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  review_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  FOREIGN KEY(approval_id) REFERENCES reconsolidation_approvals(id),
+  FOREIGN KEY(witness_id) REFERENCES reconsolidation_witnesses(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_review_queue_status ON reconsolidation_review_queue(scope, status, priority);
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_review_queue_witness ON reconsolidation_review_queue(witness_id, status);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

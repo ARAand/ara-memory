@@ -544,7 +544,7 @@ verified backup.
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation
 readiness, global spreading sandbox, privacy pre-push safety, reconsolidation
-framing, cold-memory stewardship, distant-memory navigation, purpose-aware
+framing, reconsolidation rollback review queue, cold-memory stewardship, distant-memory navigation, purpose-aware
 lifecycle policy, purpose-aware recall control, recall policy feedback, and
 self-directed deliberation. It is deliberately local and deterministic, so it
 can be run before spending model context.
@@ -571,7 +571,11 @@ stronger future apply path. Add `--regression-manifest` and an optional
 `--regression-baseline` to make review run a recall-regression sandbox; the
 candidate witness, created-capsule provenance compare-and-set, and
 representative recall cases must all pass before any future stronger apply gate
-can be considered.
+can be considered. Add `--record-queue` to persist failed or watched witnesses
+into `reconsolidation_review_queue`; fail rows are stored as
+`block-strong-reconsolidation`, surfaced by `health` and `goal-roadmap`, and
+must be resolved before stronger live mutation is opened. Use
+`reconsolidation-review-queue --status open` to inspect the current blockers.
 `reconsolidation-strong-preflight` is the next non-destructive gate: it verifies
 a backup, restores it into a temporary shadow store, runs prepare/apply/review
 and optional recall-regression there, and redacts the shadow approval token from
@@ -724,7 +728,8 @@ the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,
 runs the review worker in dry-run mode by
 default, summarizes the review queue through triage, reruns relation-merge
-witness review with queue recording, reports open relation-review pressure, runs
+witness review with queue recording, reports open relation-review and
+reconsolidation-review pressure, runs
 doctor, optionally runs recall regression, and finishes with lossless
 maintenance. Its default is conservative, not read-only: it does not
 apply review-worker promotions/quarantines unless `--apply-review` is set, but

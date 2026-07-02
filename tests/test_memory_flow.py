@@ -44,6 +44,10 @@ from ara_memory.relation_merge import (
     review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
+from ara_memory.reconsolidation import (
+    list_reconsolidation_review_queue,
+    record_reconsolidation_review_queue,
+)
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
 from ara_memory.spreading import apply_spreading_activation
@@ -2447,6 +2451,92 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(review.fail_count, 1)
             self.assertIn("created frame capsule changed field body_digest", review.items[0].warnings)
 
+    def test_reconsolidation_review_queue_records_and_resolves_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: long-running purpose requires reconsolidation review queue to block stronger mutation when witness evidence fails.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: reconsolidation queue",
+                    body="Long-running purpose requires reconsolidation review queue to block stronger mutation when witness evidence fails.",
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "reconsolidation", "review"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: blocker queue before strong mutation",
+                    body="Failed reconsolidation witnesses must become blocker queue rows before strong mutation.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "reconsolidation"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "reconsolidation review queue block stronger mutation",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM reconsolidation_witnesses WHERE id = ?",
+                    (applied.witness_id,),
+                ).fetchone()
+                original_before = row["before_json"]
+                before = json.loads(row["before_json"])
+                before["frame_fingerprint"] = "tampered"
+                conn.execute(
+                    "UPDATE reconsolidation_witnesses SET before_json = ? WHERE id = ?",
+                    (json.dumps(before, ensure_ascii=False, sort_keys=True), applied.witness_id),
+                )
+
+            failed_review = memory.review_reconsolidation(scope="alpha")
+            queued = record_reconsolidation_review_queue(memory, failed_review)
+
+            self.assertFalse(failed_review.passed, failed_review.as_dict())
+            self.assertEqual(queued.recorded, 1)
+            self.assertEqual(len(queued.open_items), 1)
+            self.assertEqual(queued.open_items[0]["action"], "block-strong-reconsolidation")
+            self.assertEqual(queued.open_items[0]["review_status"], "fail")
+
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE reconsolidation_witnesses SET before_json = ? WHERE id = ?",
+                    (original_before, applied.witness_id),
+                )
+            repaired_review = memory.review_reconsolidation(scope="alpha")
+            resolved = record_reconsolidation_review_queue(memory, repaired_review)
+            open_queue = list_reconsolidation_review_queue(memory, scope="alpha", status="open")
+            resolved_queue = list_reconsolidation_review_queue(memory, scope="alpha", status="resolved")
+
+            self.assertTrue(repaired_review.passed, repaired_review.as_dict())
+            self.assertEqual(resolved.resolved, 1)
+            self.assertEqual(open_queue.open_items, [])
+            self.assertEqual(len(resolved_queue.open_items), 1)
+
     def test_reconsolidation_review_cli_runs_recall_regression_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"
@@ -2527,6 +2617,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "alpha",
                     "--regression-manifest",
                     str(manifest),
+                    "--record-queue",
                     "--json",
                 ],
                 cwd=Path(__file__).resolve().parents[1],
@@ -2542,6 +2633,27 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["reviewed"], 1)
             self.assertTrue(payload["regression"]["passed"])
             self.assertEqual(payload["regression"]["cases"][0]["name"], "reconsolidation_review_sandbox")
+            self.assertEqual(payload["queue"]["open_items"], [])
+
+            queue_result = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "reconsolidation-review-queue",
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "ARA_MEMORY_HOME": str(root)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(queue_result.returncode, 0, queue_result.stderr + queue_result.stdout)
+            queue_payload = json.loads(queue_result.stdout)
+            self.assertEqual(queue_payload["open_items"], [])
 
     def test_reconsolidation_strong_preflight_runs_only_in_restored_shadow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3952,6 +4064,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "privacy pre-push gate",
                     "reconsolidation frame",
                     "reconsolidation apply safety",
+                    "reconsolidation rollback review queue",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -3979,6 +4092,9 @@ class MemoryFlowTests(unittest.TestCase):
             recon_review = next(item for item in roadmap.items if item.name == "reconsolidation apply safety")
             self.assertIn("reviewed=", recon_review.evidence)
             self.assertIn("fail=", recon_review.evidence)
+            recon_queue = next(item for item in roadmap.items if item.name == "reconsolidation rollback review queue")
+            self.assertIn("open=", recon_queue.evidence)
+            self.assertIn("blockers=", recon_queue.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)
@@ -4682,8 +4798,16 @@ class MemoryFlowTests(unittest.TestCase):
                     """,
                     ("recon_approval_legacy",),
                 ).fetchone()
+                queue_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_review_queue'
+                    """
+                ).fetchone()
             self.assertIn("rollback_witness_json", columns)
             self.assertEqual(row["rollback_witness_json"], "{}")
+            self.assertIsNotNone(queue_table)
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:
@@ -13628,6 +13752,53 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(signal.passed)
             self.assertEqual(signal.severity, "error")
             self.assertEqual(signal.value["fail_count"], 1)
+
+    def test_health_fails_on_failed_reconsolidation_review_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: health must stop on failed reconsolidation review queue blockers before strong mutation.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=600)
+            memory.backup(output=memory.store.root / "backups" / "recon-health.zip")
+            with memory.store.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO reconsolidation_review_queue(
+                        id, scope, approval_id, witness_id, capsule_id, action, priority, reason,
+                        review_status, review_json, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "recon_review_health_fail",
+                        "alpha",
+                        None,
+                        None,
+                        None,
+                        "block-strong-reconsolidation",
+                        0.98,
+                        "created frame capsule changed field body_digest",
+                        "fail",
+                        json.dumps({"passed": False}, sort_keys=True),
+                        "open",
+                        utc_now(),
+                    ),
+                )
+
+            report = memory.health(scope="alpha", query="recon health queue", recall_budget=900, hot_budget=600)
+
+            self.assertFalse(report.passed, report.as_dict())
+            signal = next(item for item in report.signals if item.name == "reconsolidation_review_pressure")
+            self.assertFalse(signal.passed)
+            self.assertEqual(signal.severity, "error")
+            self.assertEqual(signal.value["fail_count"], 1)
+            self.assertEqual(signal.value["blockers"], 1)
 
     def test_health_warns_on_recall_baseline_drift_but_fails_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

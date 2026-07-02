@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import secrets
+import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -271,6 +272,38 @@ class ReconsolidationReviewReport:
         if self.recommendations:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationReviewQueueReport:
+    scope: str | None
+    recorded: int
+    resolved: int
+    open_items: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "recorded": self.recorded,
+            "resolved": self.resolved,
+            "open_items": self.open_items,
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Reconsolidation Review Queue: {scope}",
+            f"recorded={self.recorded}, resolved={self.resolved}, open={len(self.open_items)}",
+        ]
+        if not self.open_items:
+            lines.append("- No open reconsolidation review items.")
+        for item in self.open_items[:20]:
+            lines.append(
+                f"- [{item['review_status']}] {item['action']} "
+                f"witness={item.get('witness_id') or 'none'} capsule={item.get('capsule_id') or 'none'}: "
+                f"{item['reason']}"
+            )
         return "\n".join(lines)
 
 
@@ -658,6 +691,87 @@ def apply_reconsolidation_approval(
             "Run recall-regression, doctor, and health before promoting this candidate or using it as hot memory.",
         ],
     )
+
+
+def record_reconsolidation_review_queue(
+    memory: Any,
+    report: ReconsolidationReviewReport,
+    *,
+    limit: int = 50,
+) -> ReconsolidationReviewQueueReport:
+    memory.store.init()
+    now = utc_now()
+    recorded = 0
+    resolved = 0
+    with memory.store.session() as conn:
+        for item in report.items:
+            if item.status == "pass":
+                resolved += _resolve_reconsolidation_review_queue(
+                    conn,
+                    scope=item.scope,
+                    witness_id=item.witness_id,
+                    now=now,
+                )
+                continue
+            action = "block-strong-reconsolidation" if item.status == "fail" else "review-reconsolidation-witness"
+            reason = "; ".join(item.warnings) or f"reconsolidation witness status {item.status}"
+            if _upsert_reconsolidation_review_queue(
+                conn,
+                scope=item.scope,
+                approval_id=item.approval_id,
+                witness_id=item.witness_id,
+                capsule_id=item.capsule_id,
+                action=action,
+                priority=0.98 if item.status == "fail" else 0.72,
+                reason=reason,
+                review_status=item.status,
+                review_json=item.as_dict(),
+                now=now,
+            ):
+                recorded += 1
+        if report.regression is not None:
+            if bool(report.regression.get("passed")):
+                resolved += _resolve_reconsolidation_review_queue(
+                    conn,
+                    scope=report.scope,
+                    witness_id=None,
+                    now=now,
+                    action="block-strong-reconsolidation-regression",
+                )
+            elif _upsert_reconsolidation_review_queue(
+                conn,
+                scope=report.scope or "global",
+                approval_id=report.approval_id,
+                witness_id=None,
+                capsule_id=None,
+                action="block-strong-reconsolidation-regression",
+                priority=0.99,
+                reason="reconsolidation review recall-regression sandbox failed",
+                review_status="fail",
+                review_json=report.regression,
+                now=now,
+            ):
+                recorded += 1
+        open_items = _list_reconsolidation_review_queue(conn, scope=report.scope, status="open", limit=limit)
+    return ReconsolidationReviewQueueReport(
+        scope=report.scope,
+        recorded=recorded,
+        resolved=resolved,
+        open_items=open_items,
+    )
+
+
+def list_reconsolidation_review_queue(
+    memory: Any,
+    *,
+    scope: str | None = None,
+    status: str = "open",
+    limit: int = 50,
+) -> ReconsolidationReviewQueueReport:
+    memory.store.init()
+    with memory.store.session() as conn:
+        rows = _list_reconsolidation_review_queue(conn, scope=scope, status=status, limit=limit)
+    return ReconsolidationReviewQueueReport(scope=scope, recorded=0, resolved=0, open_items=rows)
 
 
 def review_reconsolidation_witnesses(
@@ -1194,6 +1308,129 @@ def _is_failed_witness_warning(warning: str) -> bool:
         "evidence capsule set changed during apply",
         "created frame capsule is missing",
     } or warning.startswith("evidence capsule ") or warning.startswith("created frame capsule changed field ")
+
+
+def _upsert_reconsolidation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    approval_id: str | None,
+    witness_id: str | None,
+    capsule_id: str | None,
+    action: str,
+    priority: float,
+    reason: str,
+    review_status: str,
+    review_json: dict[str, Any],
+    now: str,
+) -> bool:
+    existing = conn.execute(
+        f"""
+        SELECT id
+        FROM reconsolidation_review_queue
+        WHERE scope = ?
+          AND action = ?
+          AND status = 'open'
+          AND {'witness_id IS NULL' if witness_id is None else 'witness_id = ?'}
+        LIMIT 1
+        """,
+        (scope, action) if witness_id is None else (scope, action, witness_id),
+    ).fetchone()
+    payload = json.dumps(review_json, ensure_ascii=False, sort_keys=True)
+    if existing:
+        conn.execute(
+            """
+            UPDATE reconsolidation_review_queue
+            SET priority = ?, reason = ?, review_status = ?, review_json = ?, capsule_id = ?, created_at = ?
+            WHERE id = ?
+            """,
+            (priority, reason, review_status, payload, capsule_id, now, existing["id"]),
+        )
+        return False
+    conn.execute(
+        """
+        INSERT INTO reconsolidation_review_queue(
+          id, scope, approval_id, witness_id, capsule_id, action, priority, reason,
+          review_status, review_json, status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_id("recon_review"),
+            scope,
+            approval_id,
+            witness_id,
+            capsule_id,
+            action,
+            priority,
+            reason,
+            review_status,
+            payload,
+            "open",
+            now,
+        ),
+    )
+    return True
+
+
+def _resolve_reconsolidation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str | None,
+    witness_id: str | None,
+    now: str,
+    action: str | None = None,
+) -> int:
+    clauses = ["status = 'open'"]
+    where_args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        where_args.append(scope)
+    if witness_id is None:
+        clauses.append("witness_id IS NULL")
+    else:
+        clauses.append("witness_id = ?")
+        where_args.append(witness_id)
+    if action:
+        clauses.append("action = ?")
+        where_args.append(action)
+    cur = conn.execute(
+        f"""
+        UPDATE reconsolidation_review_queue
+        SET status = ?, resolved_at = ?
+        WHERE {' AND '.join(clauses)}
+        """,
+        ("resolved", now, *where_args),
+    )
+    return cur.rowcount
+
+
+def _list_reconsolidation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str | None,
+    status: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    clauses = ["status = ?"]
+    args: list[Any] = [status]
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    args.append(limit)
+    return [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT *
+            FROM reconsolidation_review_queue
+            WHERE {' AND '.join(clauses)}
+            ORDER BY priority DESC, created_at DESC
+            LIMIT ?
+            """,
+            args,
+        )
+    ]
 
 
 def _token_hash(token: str) -> str:

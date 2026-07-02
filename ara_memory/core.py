@@ -362,6 +362,16 @@ class AraMemory:
 
         return review_reconsolidation_witnesses(self, **kwargs)
 
+    def record_reconsolidation_review_queue(self, report: Any, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import record_reconsolidation_review_queue
+
+        return record_reconsolidation_review_queue(self, report, **kwargs)
+
+    def reconsolidation_review_queue(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import list_reconsolidation_review_queue
+
+        return list_reconsolidation_review_queue(self, **kwargs)
+
     def strong_reconsolidation_preflight(self, query: str, **kwargs: Any) -> Any:
         from ara_memory.reconsolidation import strong_reconsolidation_preflight
 

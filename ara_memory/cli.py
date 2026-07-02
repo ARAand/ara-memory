@@ -24,7 +24,11 @@ from ara_memory.relation_merge import (
     review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
-from ara_memory.reconsolidation import RECONSOLIDATION_APPLY_CONFIRMATION
+from ara_memory.reconsolidation import (
+    RECONSOLIDATION_APPLY_CONFIRMATION,
+    list_reconsolidation_review_queue,
+    record_reconsolidation_review_queue,
+)
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -262,7 +266,16 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_review.add_argument("--limit", type=int, default=50)
     reconsolidation_review.add_argument("--regression-manifest", type=Path, default=None)
     reconsolidation_review.add_argument("--regression-baseline", type=Path, default=None)
+    reconsolidation_review.add_argument("--record-queue", action="store_true")
     reconsolidation_review.add_argument("--json", action="store_true")
+    reconsolidation_review_queue = sub.add_parser(
+        "reconsolidation-review-queue",
+        help="List persisted reconsolidation witness risks that block or warn stronger memory mutation.",
+    )
+    reconsolidation_review_queue.add_argument("--scope", default=None)
+    reconsolidation_review_queue.add_argument("--status", default="open", choices=["open", "resolved"])
+    reconsolidation_review_queue.add_argument("--limit", type=int, default=50)
+    reconsolidation_review_queue.add_argument("--json", action="store_true")
     reconsolidation_strong_preflight = sub.add_parser(
         "reconsolidation-strong-preflight",
         help="Run prepare/apply/review/recall-regression inside a restored backup shadow store before stronger reconsolidation design.",
@@ -1283,11 +1296,33 @@ def main(argv: list[str] | None = None) -> int:
             regression_cases=cases,
             regression_baseline=baseline,
         )
+        queue = None
+        if args.record_queue:
+            queue = record_reconsolidation_review_queue(memory, result)
+        if args.json:
+            payload = result.as_dict()
+            if queue is not None:
+                payload["queue"] = queue.as_dict()
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+            if queue is not None:
+                print()
+                print(queue.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-review-queue":
+        result = list_reconsolidation_review_queue(
+            memory,
+            scope=args.scope,
+            status=args.status,
+            limit=args.limit,
+        )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(result.to_text())
-        return 0 if result.passed else 1
+        return 0
 
     if args.cmd == "reconsolidation-strong-preflight":
         query = args.query if args.query is not None else sys.stdin.read().strip()

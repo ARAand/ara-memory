@@ -144,7 +144,10 @@ reconsolidation_review(scope)
   -> compare the created frame capsule against the witness after-snapshot for kind, status, scope, source links, and content digests
   -> keep the created frame capsule candidate-only and fail review if it drifted after witness creation
   -> optionally run recall-regression as a sandbox over representative recall cases
-  -> block stronger reconsolidation when witness review or recall regression fails
+  -> optionally persist fail/watch items into reconsolidation_review_queue with --record-queue
+  -> store failed rows as block-strong-reconsolidation so health and goal-roadmap can gate stronger live mutation
+  -> resolve open queue rows when the same witness later passes review
+  -> block stronger reconsolidation when witness review, recall regression, or open blocker queue rows fail
 
 reconsolidation_strong_preflight(backup, query, scope)
   -> verify backup and restore into a temporary shadow memory root
@@ -195,6 +198,7 @@ recall_regression(manifest, baseline)
 
 health(scope)
   -> doctor + spool + review pressure
+  -> relation-merge and reconsolidation review queue pressure
   -> candidate/cold retention ratios
   -> latest backup age + read-only backup stewardship dry-run pressure
   -> cold_stewardship when cold pressure is high

@@ -86,6 +86,7 @@ def build_goal_roadmap(
         recall_budget=1600,
     )
     reconsolidation_review = memory.review_reconsolidation(scope=scope, limit=10)
+    reconsolidation_queue = memory.reconsolidation_review_queue(scope=scope, status="open", limit=10)
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -197,6 +198,12 @@ def build_goal_roadmap(
             "pass" if reconsolidation_review.passed and reconsolidation_review.pass_count > 0 else "watch",
             _reconsolidation_review_evidence(reconsolidation_review),
             "Run reconsolidation-prepare, reconsolidation-apply, and reconsolidation-review so candidate-only frame snapshots have passing witnesses.",
+        ),
+        RoadmapItem(
+            "reconsolidation rollback review queue",
+            _reconsolidation_queue_status(reconsolidation_queue),
+            _reconsolidation_queue_evidence(reconsolidation_queue),
+            "Run reconsolidation-review --record-queue, inspect open blocker rows, and resolve failed witnesses before stronger live mutation.",
         ),
         RoadmapItem(
             "cold-memory stewardship",
@@ -325,6 +332,21 @@ def _reconsolidation_review_evidence(report: Any) -> str:
         f"reviewed={report.reviewed}, pass={report.pass_count}, "
         f"watch={report.watch_count}, fail={report.fail_count}"
     )
+
+
+def _reconsolidation_queue_status(report: Any) -> str:
+    if not report.open_items:
+        return "pass"
+    if any(str(item.get("action", "")).startswith("block-strong-reconsolidation") for item in report.open_items):
+        return "fail"
+    return "watch"
+
+
+def _reconsolidation_queue_evidence(report: Any) -> str:
+    fail_count = sum(1 for item in report.open_items if item.get("review_status") == "fail")
+    watch_count = sum(1 for item in report.open_items if item.get("review_status") == "watch")
+    blockers = sum(1 for item in report.open_items if str(item.get("action", "")).startswith("block-strong-reconsolidation"))
+    return f"open={len(report.open_items)}, blockers={blockers}, fail={fail_count}, watch={watch_count}"
 
 
 def _cold_map_status(cold_stewardship: Any, cold_map: Any) -> str:

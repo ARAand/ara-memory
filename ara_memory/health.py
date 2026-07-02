@@ -107,6 +107,7 @@ def run_health_check(
         _spool_signal(spool),
         _review_pressure_signal(triage.as_dict()),
         _relation_review_pressure_signal(memory.store, scope=scope, limit=review_limit),
+        _reconsolidation_review_pressure_signal(memory, scope=scope, limit=review_limit),
         _candidate_ratio_signal(retention.as_dict()),
         cold_signal,
         _retention_cycle_signal(
@@ -197,6 +198,40 @@ def _relation_review_pressure_signal(store: Any, *, scope: str, limit: int) -> H
             value=value,
         )
     return HealthSignal("relation_review_pressure", True, "0 open relation merge review items", value=value)
+
+
+def _reconsolidation_review_pressure_signal(memory: Any, *, scope: str, limit: int) -> HealthSignal:
+    from ara_memory.reconsolidation import list_reconsolidation_review_queue
+
+    report = list_reconsolidation_review_queue(memory, scope=scope, status="open", limit=limit)
+    items = report.open_items
+    total_open = len(items)
+    fail_count = sum(1 for item in items if item.get("review_status") == "fail")
+    watch_count = sum(1 for item in items if item.get("review_status") == "watch")
+    blockers = sum(1 for item in items if str(item.get("action", "")).startswith("block-strong-reconsolidation"))
+    value = {
+        "total_open": total_open,
+        "fail_count": fail_count,
+        "watch_count": watch_count,
+        "blockers": blockers,
+        "items": items[:10],
+    }
+    if fail_count or blockers:
+        return HealthSignal(
+            "reconsolidation_review_pressure",
+            False,
+            f"{max(fail_count, blockers)} reconsolidation blocker item(s) require review before stronger memory mutation",
+            value=value,
+        )
+    if total_open:
+        return HealthSignal(
+            "reconsolidation_review_pressure",
+            False,
+            f"{total_open} open reconsolidation review item(s) need inspection",
+            severity="warning",
+            value=value,
+        )
+    return HealthSignal("reconsolidation_review_pressure", True, "0 open reconsolidation review items", value=value)
 
 
 def _candidate_ratio_signal(retention: dict[str, Any]) -> HealthSignal:
