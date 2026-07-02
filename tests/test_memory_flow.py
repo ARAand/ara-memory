@@ -9459,6 +9459,8 @@ class MemoryFlowTests(unittest.TestCase):
                     "quality",
                     "review_worker",
                     "review_triage",
+                    "relation_merge_review",
+                    "relation_review_queue",
                     "doctor",
                     "maintenance",
                 ],
@@ -9472,9 +9474,94 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("summaries_created", report.steps[3].detail)
             self.assertIn("groups", report.steps[6].detail)
             self.assertIn("groups_truncated", report.steps[6].detail)
-            self.assertTrue(report.steps[7].detail["passed"])
+            self.assertEqual(report.steps[7].detail["reviewed"], 0)
+            self.assertEqual(report.steps[8].detail["total_open"], 0)
+            self.assertTrue(report.steps[9].detail["passed"])
             self.assertIn("items_truncated", report.steps[4].detail)
             self.assertIn("items_truncated", report.steps[5].detail)
+
+    def test_memory_worker_records_failed_relation_merge_review_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: worker relation review",
+                body="The background worker should surface failed relation merge witnesses.",
+                scope="worker-rel",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["worker", "relation"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="backup restore procedure",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="worker-rel",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="backup restore drill",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="worker-rel",
+                source_capsule_id=capsule.id,
+                confidence=0.7,
+            )
+            memory.build_hot(scope="worker-rel", budget=600)
+            approval = prepare_relation_merge_approval(
+                memory.store,
+                scope="worker-rel",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+                ttl_minutes=5,
+            )
+            applied = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation=RELATION_MERGE_CONFIRMATION,
+            )
+            self.assertTrue(applied.passed)
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM relation_merge_witnesses WHERE approval_id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                after = json.loads(row["after_json"])
+                before = json.loads(row["before_json"])
+                after["candidate_node"] = before["candidate_node"]
+                after["edges"] = before["edges"]
+                conn.execute(
+                    "UPDATE relation_merge_witnesses SET after_json = ? WHERE id = ?",
+                    (json.dumps(after, ensure_ascii=False, sort_keys=True), row["id"]),
+                )
+
+            report = memory.worker(
+                scope="worker-rel",
+                episode_summary=False,
+                candidate_summary=False,
+                run_maintenance_step=False,
+                doctor_query="worker relation review",
+                recall_budget=900,
+                hot_budget=600,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            relation_review = next(step for step in report.steps if step.name == "relation_merge_review")
+            relation_queue = next(step for step in report.steps if step.name == "relation_review_queue")
+            self.assertFalse(relation_review.passed)
+            self.assertEqual(relation_review.detail["fail_count"], 1)
+            self.assertEqual(relation_review.detail["queue_recorded"], 1)
+            self.assertFalse(relation_queue.passed)
+            self.assertEqual(relation_queue.detail["fail_count"], 1)
+            open_queue = list_relation_merge_review_queue(memory.store, scope="worker-rel", status="open")
+            self.assertEqual(len(open_queue.open_items), 1)
+            self.assertEqual(open_queue.open_items[0]["review_status"], "fail")
 
     def test_memory_worker_apply_review_stops_after_drain_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

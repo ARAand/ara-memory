@@ -174,6 +174,8 @@ worker(scope)
   -> quality(persist=True)
   -> review_worker(dry_run=True by default)
   -> review_triage()
+  -> relation_merge_review(record_queue=True)
+  -> relation_review_queue(open pressure)
   -> doctor()
   -> optional recall_regression()
   -> maintenance()
@@ -312,12 +314,16 @@ preventing fresh operational evidence from destabilizing the next recall pack.
 
 `worker` is the separate memory processor. Codex can keep acting as the live
 reasoning agent while the worker drains queued turns for its scope and runs quality, review,
-triage, doctor, recall-regression, and maintenance gates. The default review
-worker mode is dry-run, so background operation can inspect and score memories
-without silently rewriting long-term behavior. Review triage groups large queues
-by action, reason, status, and kind so humans/Ara can inspect the queue without
-reading hundreds of repeated rows. The worker also takes a filesystem lock by
-default, so overlapping scheduler invocations skip safely instead of racing over
+triage, relation-merge witness review, doctor, recall-regression, and maintenance
+gates. The default review worker mode is dry-run, so background operation can
+inspect and score memories without silently rewriting long-term behavior. Review
+triage groups large queues by action, reason, status, and kind so humans/Ara can
+inspect the queue without reading hundreds of repeated rows. Relation-merge
+review is narrower: the worker does not apply new graph merges, but it reruns the
+applied witness audit, records watch/fail rows in `relation_merge_review_queue`,
+resolves stale passing rows, and fails the worker when an open failed relation
+review remains. The worker also takes a filesystem lock by default, so overlapping
+scheduler invocations skip safely instead of racing over
 the same spool and SQLite store.
 
 External advisor providers receive redacted candidate projections when the

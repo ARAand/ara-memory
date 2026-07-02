@@ -45,7 +45,7 @@
 - `drain-spool` moves failures to `.ara-memory/spool/failed/` with the sealed guarded envelope and error details intact; malformed queue files keep a raw sidecar there.
 - Artifact preflight runs before retaining turn text so a failed drain does not leave partial prompt-only memory or later read an unsnapshotted live artifact path.
 - Recall regression blocks retrieval drift, token jumps, and forbidden-text reintroduction after memory system changes.
-- `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`, and sensitive-data or identity-policy review markers are kept open instead of being silently resolved.
+- `worker` runs review-worker in dry-run mode by default; behavior-changing review actions require explicit `--apply-review`, and sensitive-data or identity-policy review markers are kept open instead of being silently resolved. It does run relation-merge witness review with relation queue recording because that operation is bounded to applied witness audit rows and relation-review queue rows; it never prepares or applies new graph merges. Open failed relation-review queue rows fail the worker so scheduled runs cannot hide unsafe graph state.
 - `worker` takes `.ara-memory/locks/worker.lock` by default and skips when another worker owns the lock.
 - `drain-spool` and `worker` recover stale `.ara-memory/spool/processing/` files for the requested scope back to pending before draining.
 - `worker-schedule-verify` checks generated scheduled-worker scripts before they are treated as installable script-readiness evidence.
