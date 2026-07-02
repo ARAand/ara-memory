@@ -3549,6 +3549,44 @@ class MemoryFlowTests(unittest.TestCase):
                 "approved target capsule changed after action rollback approval",
                 drifted_rollback_approval.items[0].warnings,
             )
+            with memory.store.session() as conn:
+                conn.execute("UPDATE capsules SET body = ? WHERE id = ?", (target.body, target.id))
+            repaired_rollback_approval = memory.review_reconsolidation_action_rollback_approvals(
+                scope="alpha",
+                action="cool",
+                approval_id=live_rollback_approval.approval_id,
+            )
+            self.assertTrue(repaired_rollback_approval.passed, repaired_rollback_approval.as_dict())
+            live_action_rollback = memory.live_reconsolidation_action_rollback(
+                approval_token=live_rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION ACTION",
+                include_global=False,
+            )
+            self.assertTrue(live_action_rollback.passed, live_action_rollback.as_dict())
+            self.assertEqual(live_action_rollback.before_status, MemoryStatus.SUPERSEDED.value)
+            self.assertEqual(live_action_rollback.after_status, MemoryStatus.STABLE.value)
+            self.assertEqual(memory.store.get_capsule(target.id)["status"], MemoryStatus.STABLE.value)
+            reused_rollback = memory.live_reconsolidation_action_rollback(
+                approval_token=live_rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION ACTION",
+                include_global=False,
+            )
+            self.assertFalse(reused_rollback.passed)
+            self.assertIn("not prepared", reused_rollback.recommendations[0])
+            with memory.store.session() as conn:
+                used_rb_approval = conn.execute(
+                    "SELECT status, used_at FROM reconsolidation_action_rollback_approvals WHERE id = ?",
+                    (live_rollback_approval.approval_id,),
+                ).fetchone()
+                action_rb_witness = conn.execute(
+                    "SELECT * FROM reconsolidation_action_rollback_witnesses WHERE rollback_approval_id = ?",
+                    (live_rollback_approval.approval_id,),
+                ).fetchone()
+            self.assertEqual(used_rb_approval["status"], "used")
+            self.assertIsNotNone(used_rb_approval["used_at"])
+            self.assertIsNotNone(action_rb_witness)
+            self.assertEqual(action_rb_witness["action"], "cool")
+            self.assertEqual(action_rb_witness["capsule_id"], target.id)
 
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

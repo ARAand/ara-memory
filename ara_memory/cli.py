@@ -26,6 +26,7 @@ from ara_memory.relation_merge import (
 )
 from ara_memory.reconsolidation import (
     RECONSOLIDATION_APPLY_CONFIRMATION,
+    RECONSOLIDATION_LIVE_ACTION_ROLLBACK_CONFIRMATION,
     RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION,
     RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION,
     STRONG_RECONSOLIDATION_ACTIONS,
@@ -412,6 +413,24 @@ def main(argv: list[str] | None = None) -> int:
     recon_action_rollback_approvals.add_argument("--prepared-only", action="store_true")
     recon_action_rollback_approvals.add_argument("--limit", type=int, default=50)
     recon_action_rollback_approvals.add_argument("--json", action="store_true")
+    live_recon_action_rollback = sub.add_parser(
+        "live-reconsolidation-action-rollback",
+        help="Consume one prepared action rollback approval and restore the exact recorded cool status transition.",
+    )
+    live_recon_action_rollback.add_argument("--approval-token", required=True)
+    live_recon_action_rollback.add_argument(
+        "--confirm",
+        required=True,
+        help=f"Must exactly match: {RECONSOLIDATION_LIVE_ACTION_ROLLBACK_CONFIRMATION}",
+    )
+    live_recon_action_rollback.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation action rollback",
+    )
+    live_recon_action_rollback.add_argument("--recall-budget", type=int, default=1200)
+    live_recon_action_rollback.add_argument("--hot-budget", type=int, default=900)
+    live_recon_action_rollback.add_argument("--no-global", action="store_true")
+    live_recon_action_rollback.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1658,6 +1677,21 @@ def main(argv: list[str] | None = None) -> int:
             witness_id=args.witness_id,
             include_non_prepared=not args.prepared_only,
             limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "live-reconsolidation-action-rollback":
+        result = memory.live_reconsolidation_action_rollback(
+            approval_token=args.approval_token,
+            confirmation=args.confirm,
+            doctor_query=args.doctor_query,
+            recall_budget=args.recall_budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

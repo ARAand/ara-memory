@@ -141,7 +141,7 @@
     <aside class="meta">
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v22</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v23</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">로드맵</span><span class="value">ara-memory pass, global fail</span></div>
       <div class="metric"><span class="label">최근 백업</span><span class="value">검증됨</span></div>
@@ -165,12 +165,12 @@
     <article class="span-4">
       <h2>최신 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>은 22이고 <code>reconsolidation_action_rollback_approvals</code> 테이블이 있다.</li>
+        <li><code>SCHEMA_VERSION</code>은 23이고 action rollback approval/witness 테이블이 있다.</li>
         <li><code>live-reconsolidation-cool</code>은 첫 제한적 live action executor로 열렸다.</li>
         <li><code>reconsolidation-action-witnesses</code>와 shadow rollback으로 live action의 되돌림 가능성을 검증한다.</li>
         <li><code>prepare-live-reconsolidation-action-rollback</code>은 one-use rollback approval token을 만든다.</li>
         <li><code>reconsolidation-action-rollback-approvals</code>는 준비된 rollback approval을 읽기 전용으로 재검사한다.</li>
-        <li>아직 action rollback live executor는 닫혀 있다. 다음 안전 단계는 token을 소비하는 compare-and-set executor다.</li>
+        <li><code>live-reconsolidation-action-rollback</code>은 prepared token을 소비해 기록된 <code>cool</code> status transition만 되돌린다.</li>
       </ul>
     </article>
 
@@ -184,7 +184,7 @@
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue: open 187</li>
         <li>distant-memory raw-to-map reduction: 907.6x</li>
-        <li>latest verified backup: <code>.ara-memory\backups\action-rollback-prepare-v22.zip</code></li>
+        <li>latest verified backup: <code>.ara-memory\backups\live-action-rollback-v23.zip</code></li>
       </ul>
     </article>
   </section>
@@ -214,8 +214,8 @@
         </div>
         <div class="row">
           <strong>Live action rollback executor</strong>
-          <p>review gate 통과 후에만 one-use token을 소비하고 compare-and-set으로 되돌린 뒤 rollback witness를 남긴다.</p>
-          <span class="badge watch">2-4h</span>
+          <p>완료: approval review를 다시 통과한 one-use token만 소비하고, recorded cool transition을 compare-and-set으로 되돌린 뒤 action rollback witness를 남긴다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>rewrite / promote / delete executor</strong>
@@ -246,7 +246,7 @@
         <li><span class="badge pass">건강함</span> health, doctor, recall regression, backup은 통과 중이다.</li>
         <li><span class="badge pass">프로젝트 pass</span> <code>ara-memory</code> scope의 goal-roadmap과 milestone은 통과한다.</li>
         <li><span class="badge watch">전체 fail</span> 기본 global roadmap은 아직 목적 연속성, milestone readiness, worker readiness가 섞여 fail로 보인다.</li>
-        <li><span class="badge watch">미완성</span> 강한 live mutation과 live rollback은 아직 단계적으로 열어야 한다.</li>
+        <li><span class="badge watch">미완성</span> promote/rewrite/delete live executor와 그 rollback은 아직 단계적으로 열어야 한다.</li>
         <li><span class="badge watch">부채</span> review queue 187건은 정리해야 할 기억 품질 부채다.</li>
         <li><span class="badge info">방향</span> 지금은 “더 많이 저장”이 아니라 “안전하게 바꾸고 정확히 불러오기”가 병목이다.</li>
       </ul>
@@ -258,7 +258,7 @@
   </section>
 
   <footer>
-    Generated from local repository evidence: git status, Ara Memory health, goal-roadmap, schema v22, and current docs.
+    Generated from local repository evidence: git status, Ara Memory health, goal-roadmap, schema v23, and current docs.
   </footer>
 </main>
 </body>

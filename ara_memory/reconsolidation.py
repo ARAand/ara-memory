@@ -18,6 +18,7 @@ from ara_memory.storage import _invalidate_hot_scope, _sync_capsule_fts_row, row
 
 RECONSOLIDATION_APPLY_CONFIRMATION = "APPLY RECONSOLIDATION FRAME"
 RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION = "ROLLBACK RECONSOLIDATION CANDIDATE"
+RECONSOLIDATION_LIVE_ACTION_ROLLBACK_CONFIRMATION = "ROLLBACK RECONSOLIDATION ACTION"
 RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION = "PREPARE STRONG RECONSOLIDATION ACTION"
 STRONG_RECONSOLIDATION_ACTIONS = ("promote", "rewrite", "delete", "cool")
 
@@ -1031,7 +1032,7 @@ class ReconsolidationActionRollbackApprovalReview:
                 "This is a read-only approval review.",
                 "It does not consume approval tokens.",
                 "It does not mutate memory capsules.",
-                "Live action rollback still requires a separate executor and rollback witness.",
+                "Actual rollback requires live-reconsolidation-action-rollback to consume the token and write a witness.",
             ],
         }
 
@@ -1053,6 +1054,63 @@ class ReconsolidationActionRollbackApprovalReview:
             )
             for warning in item.warnings[:4]:
                 lines.append(f"  warning: {warning}")
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationActionLiveRollbackReport:
+    scope: str | None
+    action: str | None
+    passed: bool
+    rollback_approval_id: str | None
+    rollback_witness_id: str | None
+    action_witness_id: str | None
+    action_approval_id: str | None
+    capsule_id: str | None
+    before_status: str | None
+    after_status: str | None
+    doctor: dict[str, Any] | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "action": self.action,
+            "passed": self.passed,
+            "rollback_approval_id": self.rollback_approval_id,
+            "rollback_witness_id": self.rollback_witness_id,
+            "action_witness_id": self.action_witness_id,
+            "action_approval_id": self.action_approval_id,
+            "capsule_id": self.capsule_id,
+            "before_status": self.before_status,
+            "after_status": self.after_status,
+            "doctor": self.doctor,
+            "recommendations": self.recommendations,
+            "safety": [
+                "Consumes exactly one prepared action rollback approval token.",
+                "Reuses the read-only approval review gate before live mutation.",
+                "Currently supports only cool action rollback: superseded -> recorded prior active status.",
+                "Writes a dedicated action rollback witness and preserves source events and action witnesses.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            "# Ara Reconsolidation Action Live Rollback",
+            f"status: {'pass' if self.passed else 'fail'}",
+            f"scope: {self.scope or 'none'}",
+            f"action: {self.action or 'none'}",
+            f"rollback_approval_id: {self.rollback_approval_id or 'none'}",
+            f"rollback_witness_id: {self.rollback_witness_id or 'none'}",
+            f"action_witness_id: {self.action_witness_id or 'none'}",
+            f"capsule_id: {self.capsule_id or 'none'}",
+            f"status_change: {self.before_status or 'none'} -> {self.after_status or 'none'}",
+        ]
+        if self.doctor is not None:
+            lines.append(f"doctor: {self.doctor.get('passed')}")
         if self.recommendations:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
@@ -2485,6 +2543,210 @@ def review_reconsolidation_action_rollback_approvals(
     )
 
 
+def live_reconsolidation_action_rollback(
+    memory: Any,
+    *,
+    approval_token: str,
+    confirmation: str,
+    doctor_query: str = "current memory state after reconsolidation action rollback",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationActionLiveRollbackReport:
+    memory.store.init()
+    if confirmation != RECONSOLIDATION_LIVE_ACTION_ROLLBACK_CONFIRMATION:
+        return _blocked_live_action_rollback_report(
+            None,
+            f"Confirmation must exactly match: {RECONSOLIDATION_LIVE_ACTION_ROLLBACK_CONFIRMATION}",
+        )
+    approval = _load_live_action_rollback_approval(memory, approval_token)
+    if approval is None:
+        return _blocked_live_action_rollback_report(None, "Approval token was not found.")
+    if approval["status"] != "prepared":
+        return _blocked_live_action_rollback_report(
+            approval,
+            f"Approval status is {approval['status']}, not prepared.",
+        )
+    if str(approval["action"]) != "cool":
+        return _blocked_live_action_rollback_report(
+            approval,
+            "Only cool action rollback is implemented for live action rollback.",
+        )
+    if _is_expired(str(approval["expires_at"])):
+        _mark_live_action_rollback_approval(memory, str(approval["id"]), "expired")
+        return _blocked_live_action_rollback_report(approval, "Approval token is expired.")
+    review = review_reconsolidation_action_rollback_approvals(
+        memory,
+        scope=str(approval["scope"]),
+        action=str(approval["action"]),
+        approval_id=str(approval["id"]),
+        witness_id=str(approval["action_witness_id"]),
+        include_non_prepared=False,
+        limit=1,
+    )
+    if not review.passed or len(review.items) != 1:
+        reasons = []
+        if not review.items:
+            reasons.append("approval review found no prepared record")
+        for item in review.items:
+            reasons.extend(item.warnings)
+        return _blocked_live_action_rollback_report(
+            approval,
+            "Action rollback approval review failed: " + "; ".join(reasons),
+        )
+
+    rows = _select_reconsolidation_action_witness_rows(
+        memory,
+        scope=str(approval["scope"]),
+        action=str(approval["action"]),
+        witness_id=str(approval["action_witness_id"]),
+        limit=1,
+    )
+    if len(rows) != 1:
+        return _blocked_live_action_rollback_report(approval, "Approved live action witness is missing.")
+    item = _review_action_witness(memory, rows[0])
+    if not item.passed:
+        return _blocked_live_action_rollback_report(
+            approval,
+            "Approved live action witness no longer passes review: " + "; ".join(item.warnings),
+        )
+    try:
+        witness_before = json.loads(str(rows[0]["before_json"]))
+        witness_after = json.loads(str(rows[0]["after_json"]))
+    except json.JSONDecodeError:
+        return _blocked_live_action_rollback_report(approval, "Approved live action witness JSON is malformed.")
+    before_capsule = witness_before.get("capsule")
+    after_capsule = witness_after.get("capsule")
+    if not isinstance(before_capsule, dict) or not isinstance(after_capsule, dict):
+        return _blocked_live_action_rollback_report(approval, "Approved live action witness capsule snapshots missing.")
+    target_status = str(before_capsule.get("status") or "")
+    current_status = str(after_capsule.get("status") or "")
+    if current_status != MemoryStatus.SUPERSEDED.value:
+        return _blocked_live_action_rollback_report(
+            approval,
+            "Cool action rollback must start from the recorded superseded status.",
+        )
+    if target_status not in {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}:
+        return _blocked_live_action_rollback_report(
+            approval,
+            "Cool action rollback target status must be candidate or stable.",
+        )
+
+    rollback_witness_id = new_id("recon_act_rb_witness")
+    now = utc_now()
+    live_scope = str(approval["scope"])
+    before = {
+        "schema": "reconsolidation-live-action-rollback-before-v1",
+        "rollback_approval_id": approval["id"],
+        "action_witness_id": item.action_witness_id,
+        "action_approval_id": item.action_approval_id,
+        "action": item.action,
+        "capsule": _capsule_snapshot_for_id(memory, item.capsule_id),
+        "shadow": json.loads(str(approval["shadow_json"])),
+    }
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM capsules WHERE id = ? AND status = ?",
+            (item.capsule_id, MemoryStatus.SUPERSEDED.value),
+        ).fetchone()
+        if row is None:
+            return _blocked_live_action_rollback_report(
+                approval,
+                "Target capsule changed before live action rollback.",
+            )
+        cur = conn.execute(
+            "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+            (target_status, now, item.capsule_id, MemoryStatus.SUPERSEDED.value),
+        )
+        if cur.rowcount != 1:
+            return _blocked_live_action_rollback_report(
+                approval,
+                "Action rollback compare-and-set failed.",
+            )
+        updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (item.capsule_id,)).fetchone()
+        if updated is None:
+            return _blocked_live_action_rollback_report(
+                approval,
+                "Target capsule disappeared during live action rollback.",
+            )
+        _sync_capsule_fts_row(conn, updated)
+        after_snapshot = _capsule_compare_snapshot(row_to_capsule(updated))
+        after = {
+            "schema": "reconsolidation-live-action-rollback-after-v1",
+            "rollback_approval_id": approval["id"],
+            "action_witness_id": item.action_witness_id,
+            "action_approval_id": item.action_approval_id,
+            "action": item.action,
+            "capsule": after_snapshot,
+        }
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_action_rollback_witnesses(
+              id, rollback_approval_id, action_witness_id, action_approval_id, scope,
+              action, capsule_id, reason, before_json, after_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rollback_witness_id,
+                approval["id"],
+                item.action_witness_id,
+                item.action_approval_id,
+                live_scope,
+                item.action,
+                item.capsule_id,
+                "approved live rollback of reconsolidation cool action witness",
+                json.dumps(before, ensure_ascii=False, sort_keys=True),
+                json.dumps(after, ensure_ascii=False, sort_keys=True),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "rollback-reconsolidation-cool-action",
+                item.capsule_id,
+                live_scope,
+                f"live rollback of reconsolidation action witness {item.action_witness_id}",
+                "reconsolidation-live-action-rollback",
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE reconsolidation_action_rollback_approvals SET status = ?, used_at = ? WHERE id = ?",
+            ("used", now, approval["id"]),
+        )
+    _invalidate_hot_scope(memory.store.hot_dir, live_scope)
+    doctor = memory.doctor(
+        scope=live_scope,
+        recall_query=doctor_query,
+        recall_budget=recall_budget,
+        hot_budget=hot_budget,
+        include_global=include_global,
+    )
+    doctor_payload = doctor.as_dict()
+    return ReconsolidationActionLiveRollbackReport(
+        scope=live_scope,
+        action=item.action,
+        passed=bool(doctor_payload.get("passed")),
+        rollback_approval_id=str(approval["id"]),
+        rollback_witness_id=rollback_witness_id,
+        action_witness_id=item.action_witness_id,
+        action_approval_id=item.action_approval_id,
+        capsule_id=item.capsule_id,
+        before_status=MemoryStatus.SUPERSEDED.value,
+        after_status=target_status,
+        doctor=doctor_payload,
+        recommendations=[
+            "Live action rollback restored only the status recorded by the action witness.",
+            "Run health, recall-regression, backup, and restore-drill after live action rollback.",
+        ],
+    )
+
+
 def shadow_reconsolidation_rollback(
     memory: Any,
     *,
@@ -3611,6 +3873,23 @@ def _mark_live_action_approval(memory: Any, approval_id: str, status: str) -> No
         )
 
 
+def _load_live_action_rollback_approval(memory: Any, token: str) -> dict[str, Any] | None:
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM reconsolidation_action_rollback_approvals WHERE token_hash = ?",
+            (_token_hash(token),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _mark_live_action_rollback_approval(memory: Any, approval_id: str, status: str) -> None:
+    with memory.store.session() as conn:
+        conn.execute(
+            "UPDATE reconsolidation_action_rollback_approvals SET status = ? WHERE id = ?",
+            (status, approval_id),
+        )
+
+
 def _blocked_live_action_report(
     action: str,
     approval: dict[str, Any] | None,
@@ -3623,6 +3902,26 @@ def _blocked_live_action_report(
         action_approval_id=str(approval["id"]) if approval else None,
         action_witness_id=None,
         capsule_id=None,
+        before_status=None,
+        after_status=None,
+        doctor=None,
+        recommendations=[message],
+    )
+
+
+def _blocked_live_action_rollback_report(
+    approval: dict[str, Any] | None,
+    message: str,
+) -> ReconsolidationActionLiveRollbackReport:
+    return ReconsolidationActionLiveRollbackReport(
+        scope=str(approval["scope"]) if approval else None,
+        action=str(approval["action"]) if approval else None,
+        passed=False,
+        rollback_approval_id=str(approval["id"]) if approval else None,
+        rollback_witness_id=None,
+        action_witness_id=str(approval["action_witness_id"]) if approval else None,
+        action_approval_id=str(approval["action_approval_id"]) if approval else None,
+        capsule_id=str(approval["capsule_id"]) if approval else None,
         before_status=None,
         after_status=None,
         doctor=None,

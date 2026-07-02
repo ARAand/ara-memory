@@ -615,17 +615,20 @@ temporary shadow store and proves that a reviewed action witness can be rolled
 back there without touching live memory. The current implementation rolls back
 only `cool` witnesses from `superseded` to the exact recorded prior active
 status; passing it is rollback evidence, not live rollback authorization.
-`prepare-live-reconsolidation-action-rollback` is now the next approval-only
+`prepare-live-reconsolidation-action-rollback` is the approval-only rollback
 gate: it reruns that shadow proof for exactly one action witness, requires the
 live witness to still pass review, freezes backup identity and capsule snapshot,
-and stores a short-lived one-use approval record. No live executor consumes that
-token yet; live action rollback remains closed until a future command can
-compare-and-set the target state and write its own rollback witness.
+and stores a short-lived one-use approval record.
 `reconsolidation-action-rollback-approvals` is the read-only review layer for
 those prepared approvals. It consumes no token and mutates no capsule; it
 rechecks approval status/expiry, backup identity, backup verification, live
 action witness review, and target capsule snapshot drift before any future live
 rollback executor is allowed to trust an older approval.
+`live-reconsolidation-action-rollback` consumes one prepared action rollback
+approval token, reruns that approval review, compare-and-sets only the recorded
+`cool` status transition from `superseded` back to the prior active status, and
+writes a `reconsolidation_action_rollback_witnesses` row. It does not restore
+text, source events, arbitrary fields, or non-`cool` actions.
 `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in

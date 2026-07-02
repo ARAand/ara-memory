@@ -192,13 +192,19 @@ prepare_live_reconsolidation_action_rollback(backup, action_witness_id)
   -> recheck the live action witness review and backup identity after the shadow proof
   -> store a short-lived one-use approval token plus the frozen capsule snapshot
   -> never mutate live capsules and never consume the token itself
-  -> leave live action rollback execution closed until a future compare-and-set witness writer exists
 
 reconsolidation_action_rollback_approvals(scope, action, approval_id, witness_id)
   -> review prepared action rollback approvals without consuming their tokens
   -> recheck approval status/expiry, backup identity, backup verification, live witness review, and target snapshot drift
-  -> fail stale approvals before any future live action rollback executor can trust them
+  -> fail stale approvals before live action rollback can consume them
   -> never mutate live capsules and never write rollback witnesses
+
+live_reconsolidation_action_rollback(approval_token, confirm)
+  -> require exact confirmation and one prepared action rollback approval token
+  -> rerun reconsolidation_action_rollback_approvals for that exact approval before mutation
+  -> compare-and-set only the recorded cool status transition: superseded -> prior candidate/stable
+  -> write reconsolidation_action_rollback_witnesses and memory_actions evidence
+  -> mark the rollback approval used, invalidate hot memory, and run doctor
 
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
