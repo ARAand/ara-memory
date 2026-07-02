@@ -831,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
         "--target-backup-bytes",
         type=int,
         default=DEFAULT_TARGET_BACKUP_BYTES,
-        help="Target backup bytes after deleting selected candidates. Defaults to 67108864 (64 MiB).",
+        help=f"Target backup bytes after deleting selected candidates. Defaults to {DEFAULT_TARGET_BACKUP_BYTES} bytes.",
     )
     backup_stewardship.add_argument(
         "--quarantine-failed",

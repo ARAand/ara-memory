@@ -6839,6 +6839,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertNotIn("archive/self/backup.zip", names)
             self.assertIn("memory.db", names)
 
+    def test_backup_stewardship_default_budget_matches_protected_backup_policy(self) -> None:
+        self.assertEqual(backup_stewardship_module.DEFAULT_TARGET_BACKUP_BYTES, 128 * 1024 * 1024)
+
     def test_backup_stewardship_deletes_only_reviewed_redundant_backups(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

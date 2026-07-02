@@ -494,7 +494,7 @@ python -m ara_memory cold-map "old deployment pruning evidence" --scope ara-memo
 python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20
 python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20 --apply --confirm "COMPACT PROVENANCE"
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip --backup-archive-mode objects
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728
 python -m ara_memory lifecycle --scope ara-memory
 python -m ara_memory cold-export --scope ara-memory --order oldest --output .ara-memory/archive/cold/ara-memory-cold.zip
 python -m ara_memory verify-cold-export .ara-memory/archive/cold/ara-memory-cold.zip
@@ -989,17 +989,18 @@ dominate the local store even when live memory is small. Use
 memory:
 
 ```powershell
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --no-cache-write
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --quarantine-failed --apply --quarantine-confirm "QUARANTINE FAILED BACKUPS"
-python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 67108864 --apply --confirm "DELETE OLD BACKUPS"
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728 --no-cache-write
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728 --quarantine-failed
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728 --quarantine-failed --apply --quarantine-confirm "QUARANTINE FAILED BACKUPS"
+python -m ara_memory backup-stewardship --keep-latest 3 --keep-retention-cycles 2 --target-backup-bytes 134217728 --apply --confirm "DELETE OLD BACKUPS"
 ```
 
-The command is dry-run by default. The default CLI target is 64 MiB of backup
+The command is dry-run by default. The default CLI target is 128 MiB of backup
 bytes, and candidate selection deletes only enough old redundant backups to move
-toward that budget. Dry-runs update the backup verification cache by default so
-repeated manual reviews are cheap; use `--no-cache-write` for read-only
+toward that budget. The default is sized for the standard protection policy:
+latest 3 backups plus the last 2 retention-cycle referenced backups. Dry-runs
+update the backup verification cache by default so repeated manual reviews are cheap; use `--no-cache-write` for read-only
 diagnostic runs where the inspection itself must not mutate the store. Apply
 mode takes the same worker lock used by scheduled
 worker-loop and retention-cycle before it moves or deletes any backup file; use
