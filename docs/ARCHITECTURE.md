@@ -14,9 +14,10 @@ lexical/salience-heavy, but search/render projection split is now the first
 compression boundary, deterministic ESPA activation is the first axis router,
 and bounded two-hop relation spreading activation is now part of recall ranking.
 A conservative semantic relation merge dry-run gate can now report likely
-relation aliases without mutating the graph. There is still no reviewed
-apply-mode relation merge policy, global spreading layer, or reconsolidation
-frame yet.
+relation aliases without mutating the graph. A prepare gate can freeze reviewed
+candidates behind a short-lived approval token, relation fingerprint, and
+rollback witness preview. There is still no apply-mode relation merge policy,
+global spreading layer, or reconsolidation frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -242,8 +243,11 @@ sleep()
   edge text and fetch one additional edge layer with depth decay. This is capped,
   risk-filtered, and diagnostic; normal pack output exposes aggregate activation
   diagnostics rather than raw edge path text. The `relation-merge` command can
-  inspect likely relation-node aliases as a dry-run only; it does not mutate
-  capsule status, relation nodes, or relation edges.
+  inspect likely relation-node aliases as a dry-run only. The
+  `relation-merge-prepare` command stores a hashed approval token, candidate
+  snapshot, relation fingerprint, and rollback witness preview for future
+  reviewed apply work. Neither command mutates capsule status, relation nodes,
+  or relation edges.
 
 Cold memory is intentionally outside the active recall FTS index. `cold-map`
 provides the distant-memory layer between active recall and archival

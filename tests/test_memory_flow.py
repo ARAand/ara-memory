@@ -35,7 +35,7 @@ from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
 from ara_memory.projection import render_projection, search_projection, working_projection
-from ara_memory.relation_merge import run_relation_merge_dry_run
+from ara_memory.relation_merge import prepare_relation_merge_approval, run_relation_merge_dry_run
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
 from ara_memory.spreading import apply_spreading_activation
@@ -573,6 +573,66 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(("backup restore drill", "backup restore procedure"), labels)
             text = report.to_text()
             self.assertIn("Dry-run only", text)
+
+    def test_relation_merge_prepare_stores_token_and_rollback_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: Korean relation merge approval",
+                body="\uad00\uacc4 \ubcd1\ud569 \uc2b9\uc778 \ud14c\uc2a4\ud2b8.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["\uad00\uacc4", "\ubcd1\ud569"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="\ubc31\uc5c5 \ubcf5\uc6d0 \uc808\ucc28",
+                predicate="requires",
+                object_="\uccb4\ud06c\uc12c \ubd09\ud22c",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="\ubc31\uc5c5 \ubcf5\uc6d0 \ub4dc\ub9b4",
+                predicate="requires",
+                object_="\uccb4\ud06c\uc12c \ubd09\ud22c",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            before = memory.store.stats()
+
+            approval = prepare_relation_merge_approval(
+                memory.store,
+                scope="alpha",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+                ttl_minutes=5,
+            )
+
+            after = memory.store.stats()
+            self.assertEqual(before["relation_nodes"], after["relation_nodes"])
+            self.assertEqual(before["relation_edges"], after["relation_edges"])
+            self.assertTrue(approval.prepared)
+            self.assertIsNotNone(approval.token)
+            self.assertEqual(approval.rollback_witness["candidate_count"], 1)
+            self.assertEqual(len(approval.relation_fingerprint), 64)
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM relation_merge_approvals WHERE id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["status"], "prepared")
+            self.assertNotEqual(row["token_hash"], approval.token)
+            self.assertIn("Rollback witness", approval.to_text())
 
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [

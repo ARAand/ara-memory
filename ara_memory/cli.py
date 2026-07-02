@@ -15,7 +15,7 @@ from ara_memory.regression import (
     load_recall_regression_cases,
     write_recall_regression_baseline,
 )
-from ara_memory.relation_merge import run_relation_merge_dry_run
+from ara_memory.relation_merge import prepare_relation_merge_approval, run_relation_merge_dry_run
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -376,6 +376,17 @@ def main(argv: list[str] | None = None) -> int:
     relation_merge.add_argument("--node-limit", type=int, default=800)
     relation_merge.add_argument("--include-global", action="store_true")
     relation_merge.add_argument("--json", action="store_true")
+    relation_merge_prepare = sub.add_parser(
+        "relation-merge-prepare",
+        help="Prepare a short-lived approval token and rollback witness for reviewed relation-node merge candidates.",
+    )
+    relation_merge_prepare.add_argument("--scope", default="global")
+    relation_merge_prepare.add_argument("--limit", type=int, default=20)
+    relation_merge_prepare.add_argument("--threshold", type=float, default=0.72)
+    relation_merge_prepare.add_argument("--node-limit", type=int, default=800)
+    relation_merge_prepare.add_argument("--include-global", action="store_true")
+    relation_merge_prepare.add_argument("--ttl-minutes", type=int, default=60)
+    relation_merge_prepare.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -1344,6 +1355,22 @@ def main(argv: list[str] | None = None) -> int:
             threshold=args.threshold,
             node_limit=args.node_limit,
             include_global=args.include_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "relation-merge-prepare":
+        result = prepare_relation_merge_approval(
+            memory.store,
+            scope=args.scope,
+            limit=args.limit,
+            threshold=args.threshold,
+            node_limit=args.node_limit,
+            include_global=args.include_global,
+            ttl_minutes=args.ttl_minutes,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

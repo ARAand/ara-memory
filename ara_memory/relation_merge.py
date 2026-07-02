@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+import json
+import secrets
 from typing import Any
 
+from ara_memory.models import new_id, utc_now
 from ara_memory.storage import MemoryStore
 
 
@@ -112,6 +116,65 @@ class RelationMergeReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RelationMergeApproval:
+    approval_id: str | None
+    token: str | None
+    expires_at: str | None
+    dry_run: RelationMergeReport
+    relation_fingerprint: str
+    rollback_witness: dict[str, Any]
+
+    @property
+    def prepared(self) -> bool:
+        return self.approval_id is not None and self.token is not None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "prepared": self.prepared,
+            "token": self.token,
+            "expires_at": self.expires_at,
+            "scope": self.dry_run.scope,
+            "candidate_count": len(self.dry_run.candidates),
+            "relation_fingerprint": self.relation_fingerprint,
+            "rollback_witness": self.rollback_witness,
+            "dry_run": self.dry_run.as_dict(),
+            "safety": [
+                "No relation nodes or edges are mutated by prepare.",
+                "Future apply must recheck the fingerprint and consume the token once.",
+                "Rollback witness snapshots are stored before any future mutation exists.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Relation Merge Prepare: {self.dry_run.scope}",
+            "status: pass",
+            f"candidate_count: {len(self.dry_run.candidates)}",
+            f"relation_fingerprint: {self.relation_fingerprint}",
+        ]
+        if self.prepared:
+            lines.extend(
+                [
+                    f"approval_id: {self.approval_id}",
+                    f"expires_at: {self.expires_at}",
+                    f"approval_token: {self.token}",
+                ]
+            )
+        else:
+            lines.append("approval_id: none (no candidates above threshold)")
+        lines.extend(
+            [
+                "## Safety",
+                "- Prepare only: no relation_nodes, relation_edges, capsules, or source events are mutated.",
+                "- Any future apply mode must re-run dry-run, compare the fingerprint, and require this token.",
+                "- Rollback witness preview stores labels, ids, scores, and neighbor evidence.",
+            ]
+        )
+        return "\n".join(lines)
+
+
 def run_relation_merge_dry_run(
     store: MemoryStore,
     *,
@@ -173,6 +236,75 @@ def run_relation_merge_dry_run(
         pairs_considered=pairs_considered,
         threshold=threshold,
         limit=limit,
+    )
+
+
+def prepare_relation_merge_approval(
+    store: MemoryStore,
+    *,
+    scope: str = "global",
+    limit: int = 20,
+    threshold: float = 0.72,
+    node_limit: int = 800,
+    include_global: bool = False,
+    ttl_minutes: int = 60,
+) -> RelationMergeApproval:
+    dry_run = run_relation_merge_dry_run(
+        store,
+        scope=scope,
+        limit=limit,
+        threshold=threshold,
+        node_limit=node_limit,
+        include_global=include_global,
+    )
+    fingerprint = _relation_fingerprint(dry_run)
+    witness = _rollback_witness(dry_run)
+    if not dry_run.candidates:
+        return RelationMergeApproval(
+            approval_id=None,
+            token=None,
+            expires_at=None,
+            dry_run=dry_run,
+            relation_fingerprint=fingerprint,
+            rollback_witness=witness,
+        )
+    token = secrets.token_urlsafe(24)
+    approval_id = new_id("relation_merge_approval")
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+    with store.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO relation_merge_approvals(
+              id, token_hash, scope, candidates_json, relation_fingerprint,
+              rollback_witness_json, threshold, node_limit, expires_at, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                _token_hash(token),
+                scope,
+                json.dumps(
+                    [candidate.as_dict() for candidate in dry_run.candidates],
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                fingerprint,
+                json.dumps(witness, ensure_ascii=False, sort_keys=True),
+                threshold,
+                node_limit,
+                expires_at,
+                "prepared",
+                utc_now(),
+            ),
+        )
+    return RelationMergeApproval(
+        approval_id=approval_id,
+        token=token,
+        expires_at=expires_at,
+        dry_run=dry_run,
+        relation_fingerprint=fingerprint,
+        rollback_witness=witness,
     )
 
 
@@ -252,11 +384,37 @@ def _is_mergeable_profile(profile: dict[str, Any]) -> bool:
 
 def _tokens(text: str) -> set[str]:
     out: set[str] = set()
-    for raw in re.findall(r"[A-Za-z0-9가-힣][A-Za-z0-9가-힣_-]*", text.lower()):
-        if len(raw) < 3 or raw in LOW_VALUE_RELATION_TOKENS:
+    for raw in _token_parts(text.lower()):
+        if raw in LOW_VALUE_RELATION_TOKENS:
+            continue
+        if len(raw) < 3 and not _has_hangul(raw):
             continue
         out.add(raw)
     return out
+
+
+def _token_parts(text: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    for char in text:
+        if char.isascii():
+            keep = char.isalnum() or char in {"_", "-"}
+        else:
+            codepoint = ord(char)
+            keep = 0xAC00 <= codepoint <= 0xD7A3
+        if keep:
+            current.append(char)
+            continue
+        if current:
+            parts.append("".join(current))
+            current = []
+    if current:
+        parts.append("".join(current))
+    return parts
+
+
+def _has_hangul(text: str) -> bool:
+    return any(0xAC00 <= ord(char) <= 0xD7A3 for char in text)
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:
@@ -279,3 +437,51 @@ def _prefix_score(left: str, right: str) -> float:
             break
         common += 1
     return common / max(1, len(long))
+
+
+def _relation_fingerprint(report: RelationMergeReport) -> str:
+    payload = {
+        "scope": report.scope,
+        "threshold": report.threshold,
+        "limit": report.limit,
+        "nodes_considered": report.nodes_considered,
+        "pairs_considered": report.pairs_considered,
+        "candidates": [
+            {
+                "canonical_node_id": item.canonical_node_id,
+                "candidate_node_id": item.candidate_node_id,
+                "score": item.score,
+                "shared_neighbors": item.shared_neighbors,
+                "canonical_degree": item.canonical_degree,
+                "candidate_degree": item.candidate_degree,
+            }
+            for item in report.candidates
+        ],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _rollback_witness(report: RelationMergeReport) -> dict[str, Any]:
+    return {
+        "scope": report.scope,
+        "candidate_count": len(report.candidates),
+        "candidates": [
+            {
+                "canonical_node_id": item.canonical_node_id,
+                "candidate_node_id": item.candidate_node_id,
+                "canonical_label": item.canonical_label,
+                "candidate_label": item.candidate_label,
+                "score": item.score,
+                "reasons": item.reasons,
+                "shared_neighbors": item.shared_neighbors,
+                "canonical_degree": item.canonical_degree,
+                "candidate_degree": item.candidate_degree,
+            }
+            for item in report.candidates
+        ],
+    }
+
+
+def _token_hash(token: str) -> str:
+    return sha256(token.encode("utf-8")).hexdigest()

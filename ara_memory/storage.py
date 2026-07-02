@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -214,6 +214,23 @@ CREATE INDEX IF NOT EXISTS idx_relation_nodes_scope_label ON relation_nodes(scop
 CREATE INDEX IF NOT EXISTS idx_relation_edges_scope_subject ON relation_edges(scope, subject_node_id, predicate_norm);
 CREATE INDEX IF NOT EXISTS idx_relation_edges_scope_object ON relation_edges(scope, object_node_id, predicate_norm);
 CREATE INDEX IF NOT EXISTS idx_relation_edges_source ON relation_edges(scope, source_capsule_id, confidence, updated_at);
+
+CREATE TABLE IF NOT EXISTS relation_merge_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  candidates_json TEXT NOT NULL,
+  relation_fingerprint TEXT NOT NULL,
+  rollback_witness_json TEXT NOT NULL,
+  threshold REAL NOT NULL,
+  node_limit INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_relation_merge_approvals_status ON relation_merge_approvals(scope, status, expires_at);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -24,8 +24,10 @@ only compact activation diagnostics rather than graph path text. Temporal edge
 strings are also normalized into `relation_nodes` and `relation_edges`, and
 recall prefers that relation graph before falling back to raw temporal edges.
 A conservative semantic relation merge dry-run gate can now inspect normalized
-relation nodes for likely aliases without mutating the graph. The next layers
-are reviewed/apply-mode relation merging, reconsolidation frames, and broader
+relation nodes for likely aliases without mutating the graph. A separate
+`relation-merge-prepare` gate freezes reviewed candidates behind a short-lived
+approval token, relation fingerprint, and rollback witness preview. The next
+layers are apply-mode relation merging, reconsolidation frames, and broader
 global graph policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
@@ -357,10 +359,14 @@ reranking; `recall --diagnostics` exposes `temporal_query` and
 `relation-merge` is a conservative dry-run review gate for normalized relation
 nodes. It compares lexical overlap, prefix/substring evidence, shared relation
 neighborhoods, and degree balance, filters low-value hub-like terms, and reports
-candidate pairs without writing to SQLite. On the current operating store, the
-strict default review threshold intentionally returns no high-confidence
-`ara-memory` candidates; the fixture test proves the gate can still surface real
-alias candidates when evidence is present.
+candidate pairs without writing relation graph data. `relation-merge-prepare`
+re-runs that dry-run and, only when candidates exist, stores a prepared approval
+record with a hashed token, candidate JSON, relation fingerprint, and rollback
+witness preview. It still does not merge nodes or edges. On the current
+operating store, the strict default review threshold intentionally returns no
+high-confidence `ara-memory` candidates; fixture tests prove the gates can still
+surface and freeze real alias candidates when evidence is present, including
+Korean relation labels.
 
 `working-memory` is the smaller action layer between hot memory and cold
 recall. It turns the current prompt, active files, command errors, constraints,
