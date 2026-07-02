@@ -337,6 +337,11 @@ class AraMemory:
 
         return build_recall_context(self, query, **kwargs)
 
+    def recall_policy(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_policy import build_recall_policy
+
+        return build_recall_policy(self, query, **kwargs)
+
     def working_memory(self, **kwargs: Any) -> Any:
         from ara_memory.working_memory import build_working_memory
 

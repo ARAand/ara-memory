@@ -76,6 +76,14 @@ recall_candidates(query, scope)
   -> suppress no-evidence salience fallback bodies
   -> ranked capsule ids and diagnostics without rendering a pack
 
+recall_policy(query, scope)
+  -> classify recall intent: purpose continuity, working context, distant memory, retention safety, or balanced recall
+  -> run bounded recall-plan for active memory evidence
+  -> inspect purpose-aware lifecycle tiers for hot/core availability
+  -> run cold-map only for distant or retention-safety intents
+  -> emit actions such as purpose-check, working-memory, recall-context, cold-map, or retention-cycle
+  -> never render cold capsule bodies
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack
@@ -317,16 +325,17 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 17. Rotate redundant verified backups with `backup-stewardship` against a target backup-byte budget before touching live memory or cold evidence; keep latest backups, retention-cycle evidence, failed-verification backups, and active live-prune approval backups.
 18. Use purpose-aware lifecycle tiers before recall or pruning: long-running purpose, identity, and preference anchors may enter hot memory, working memories require query selection, guarded memories require review, and cold evidence requires export/prune gates.
 19. Use `cold-map` as distant-memory navigation, not cold recall. It may scan cold text locally, but it renders only redacted group cues, tier/source counts, and source digests so old evidence can be located without reactivating or printing cold bodies.
-20. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
-21. Compact active summary provenance before expecting cold pressure to fall, but only from a reviewed dry-run. The retained source sample is deterministic and quality-aware: it prefers decision, verification, regression, health, backup, retention, identity, purpose, and risk evidence while preserving temporal coverage. Apply uses one transaction with compare-and-set checks on capsule status, source links, event existence, and provenance witness creation, so a stale or malformed plan rolls back without partial link rewrites. Witness rows preserve the original source-event set and digest while active direct links are shortened. When recall-regression manifest/baseline inputs are supplied, baseline-visible and baseline-selected capsules are protected, then apply simulates the remaining rewrite in a shadow store. If the simulation shifts a reviewed recall path, unstable candidates are elided and retried; live mutation is blocked when no recall-stable plan remains. This operation changes active provenance links, not memory text or promotion status, and must be followed by cold-stewardship, health, and recall-regression before retention-cycle or pruning decisions.
-22. Redact sensitive active capsule projections through reviewed `review-redact` dry-runs, not by deleting source evidence. The operation updates only title/body/tags with compare-and-set checks, records original/redacted digests in `capsule_redaction_witnesses`, keeps source-event links intact, and resolves the review marker only after a fresh risk score no longer detects sensitive projection text.
-23. Treat temporal recall as explicit: only temporal words or phrases should
+20. Use `recall-policy` as the purpose-aware recall controller before spending context. It should classify intent, choose hot/core, working-memory, recall-context, cold-map, or retention-cycle actions, and keep distant cold bodies out of model context unless a separate audited export path is chosen.
+21. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
+22. Compact active summary provenance before expecting cold pressure to fall, but only from a reviewed dry-run. The retained source sample is deterministic and quality-aware: it prefers decision, verification, regression, health, backup, retention, identity, purpose, and risk evidence while preserving temporal coverage. Apply uses one transaction with compare-and-set checks on capsule status, source links, event existence, and provenance witness creation, so a stale or malformed plan rolls back without partial link rewrites. Witness rows preserve the original source-event set and digest while active direct links are shortened. When recall-regression manifest/baseline inputs are supplied, baseline-visible and baseline-selected capsules are protected, then apply simulates the remaining rewrite in a shadow store. If the simulation shifts a reviewed recall path, unstable candidates are elided and retried; live mutation is blocked when no recall-stable plan remains. This operation changes active provenance links, not memory text or promotion status, and must be followed by cold-stewardship, health, and recall-regression before retention-cycle or pruning decisions.
+23. Redact sensitive active capsule projections through reviewed `review-redact` dry-runs, not by deleting source evidence. The operation updates only title/body/tags with compare-and-set checks, records original/redacted digests in `capsule_redaction_witnesses`, keeps source-event links intact, and resolves the review marker only after a fresh risk score no longer detects sensitive projection text.
+24. Treat temporal recall as explicit: only temporal words or phrases should
     trigger recency boosts, while ordinary substrings such as `knowledge` or
     `blast` must stay lexical.
-24. Treat working memory as a cue-led action pack, not another cache: it should
+25. Treat working memory as a cue-led action pack, not another cache: it should
     change the next step, record whether it helped, and stay empty when recall
     has no visible evidence.
-25. Treat feedback as bounded evidence, not reward maximization: impact rows may
+26. Treat feedback as bounded evidence, not reward maximization: impact rows may
     nudge ranking only when their cue overlaps the current query, and the boost
     or penalty is capped.
 

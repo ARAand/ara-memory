@@ -83,6 +83,14 @@ def build_goal_roadmap(
         budget=700,
     )
     lifecycle = memory.lifecycle(scope=scope, limit=1000, examples_per_tier=0)
+    recall_policy = memory.recall_policy(
+        "next natural memory architecture work purpose-aware recall controller",
+        scope=scope,
+        budgets=[800, 1600, 2500],
+        include_hot=True,
+        cold_budget=700,
+        cold_group_limit=3,
+    )
     worker_schedule = memory.verify_worker_schedule(
         output=memory.store.root / "scripts" / "install-worker-task.ps1",
         scope=scope,
@@ -155,6 +163,12 @@ def build_goal_roadmap(
             "fail" if lifecycle.status == "fail" else "watch" if lifecycle.status == "watch" else "pass",
             _lifecycle_evidence(lifecycle),
             "Run lifecycle and promote/review/summarize memories until hot memory is core-only and query recall stays bounded.",
+        ),
+        RoadmapItem(
+            "purpose-aware recall controller",
+            "fail" if recall_policy.status == "fail" else "watch" if recall_policy.status == "watch" else "pass",
+            _recall_policy_evidence(recall_policy),
+            "Run recall-policy and fix intent routing, hot-memory visibility, or cold-map evidence before relying on autonomous recall.",
         ),
         RoadmapItem(
             "scheduled worker script readiness",
@@ -234,6 +248,18 @@ def _lifecycle_evidence(lifecycle: Any) -> str:
         f"guarded={totals['guarded_capsules']}, archive={totals['archive_capsules']}, "
         f"core_tokens={policy['core_tokens']}/{policy['target_hot_tokens']}, "
         f"raw_to_core_reduction={policy['raw_to_core_reduction']:.1f}x"
+    )
+
+
+def _recall_policy_evidence(recall_policy: Any) -> str:
+    plan = recall_policy.recall_plan
+    tokens = recall_policy.token_policy
+    return (
+        f"{recall_policy.status}, intent={recall_policy.intent}, "
+        f"strategy={recall_policy.strategy}, "
+        f"budget={plan.recommended_budget}, tokens={plan.estimated_tokens}, "
+        f"visible={plan.diagnostics.get('visible_capsules', 0)}, "
+        f"cold_avoided={tokens.get('avoided_cold_raw_tokens', 0)}"
     )
 
 

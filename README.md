@@ -235,6 +235,7 @@ budgeted cold pack:
 python -m ara_memory recall-plan "current project memory" --scope project --budgets 800,1600,2500
 python -m ara_memory recall-candidates "current project memory" --scope project --budget 1600
 python -m ara_memory recall-context "current project memory" --scope project --budgets 800,1600,2500
+python -m ara_memory recall-policy "old deployment archive evidence" --scope project
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
 ```
@@ -254,6 +255,12 @@ high-salience fallback bodies and emits a small "No direct memory evidence"
 notice instead of pretending to remember. `recall-context` applies that plan and
 emits the selected pack, so normal work can use one command while still
 preserving the budget decision.
+`recall-policy` is the purpose-aware controller above recall-plan. It classifies
+the query as purpose continuity, working context, distant memory, retention
+safety, or balanced recall, then recommends the cheapest safe path: hot/core
+anchors, working-memory projection, recall-context, cold-map, or retention-cycle
+gates. It does not render cold bodies; distant-memory queries receive redacted
+map evidence and source digests before any active recall pack is considered.
 Recall budgets are ceilings, not targets. When hot memory is included and the
 pack already has enough visible evidence, recall applies a smaller soft budget
 instead of spending the whole allowance. Hot-memory items also avoid repeating
@@ -290,6 +297,7 @@ the following low-friction operations:
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall "current task" --scope ara-memory
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-plan "current task" --scope ara-memory --budgets 800,1600,2500
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" recall-context "current task" --scope ara-memory --budgets 800,1600,2500
+python -m ara_memory recall-policy "current task" --scope ara-memory
 python -m ara_memory working-memory "current task" --scope ara-memory --active-file ara_memory/working_memory.py
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" purpose-check --scope ara-memory --repair-hot
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" identity-check --scope ara-memory --repair-hot
@@ -381,7 +389,8 @@ then create a verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
-stewardship, distant-memory navigation, and purpose-aware lifecycle policy. It is deliberately local and
+stewardship, distant-memory navigation, purpose-aware lifecycle policy, and
+purpose-aware recall control. It is deliberately local and
 deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

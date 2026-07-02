@@ -947,6 +947,155 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("planned memory pack", payload["pack"].lower())
             self.assertIn("Ara Recall Plan", context.to_text())
 
+    def test_recall_policy_routes_purpose_query_to_hot_core(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: natural memory should preserve purpose before operational logs.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural purpose",
+                body="Natural memory should preserve purpose before operational logs.",
+                scope="alpha",
+                confidence=0.82,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "natural-memory"],
+                status=MemoryStatus.STABLE,
+            )
+            operational = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: noisy command log",
+                body="Operational command log should not define Ara's purpose.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.99,
+                source_event_ids=[event.id],
+                tags=["project", "command"],
+                status=MemoryStatus.STABLE,
+            )
+            cold = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: old raw purpose archive",
+                body="Cold raw body should not be rendered for purpose policy.",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[event.id],
+                tags=["archive"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(operational)
+            memory.store.upsert_capsule(cold)
+            memory.build_hot(scope="alpha", budget=900)
+
+            report = memory.recall_policy(
+                "why does Ara need natural memory purpose",
+                scope="alpha",
+                budgets=[700, 1200],
+                include_hot=True,
+            )
+            text = report.to_text()
+            actions = {action.name for action in report.actions}
+
+            self.assertEqual(report.intent, "purpose-continuity")
+            self.assertEqual(report.status, "pass")
+            self.assertIsNone(report.cold_map_summary)
+            self.assertGreaterEqual(report.lifecycle_summary["core_capsules"], 1)
+            self.assertIn("purpose-check", actions)
+            self.assertIn("recall-context", actions)
+            self.assertIn("hot core anchors first", report.strategy)
+            self.assertNotIn("Cold raw body should not be rendered", text)
+
+    def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="note",
+                text="Old note: deployment archive evidence should stay distant.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="Project memory: old deployment archive",
+                    body=" ".join(
+                        ["Distant raw deployment body should never appear in recall policy output."] * 80
+                    ),
+                    scope="alpha",
+                    confidence=0.4,
+                    salience=0.3,
+                    source_event_ids=[event.id],
+                    tags=["deployment", "archive"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
+
+            report = memory.recall_policy(
+                "old deployment archive evidence",
+                scope="alpha",
+                budgets=[500, 900],
+                cold_budget=650,
+            )
+            text = report.to_text()
+            actions = {action.name for action in report.actions}
+
+            self.assertEqual(report.intent, "distant-memory")
+            self.assertEqual(report.status, "pass")
+            self.assertIsNotNone(report.cold_map_summary)
+            self.assertEqual(report.cold_map_summary["matched_capsules"], 1)
+            self.assertGreater(report.token_policy["avoided_cold_raw_tokens"], 0)
+            self.assertIn("cold-map", actions)
+            self.assertIn("avoid-raw-cold-reread", actions)
+            self.assertIn("cold-map first", report.strategy)
+            self.assertNotIn("Distant raw deployment body should never appear", text)
+
+    def test_recall_policy_routes_retention_query_to_safety_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="note",
+                text="Old note: retention pruning evidence must go through safety gates.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROCEDURE,
+                    title="Procedure candidate: old retention prune evidence",
+                    body=" ".join(["Retention pruning raw body should stay outside recall policy output."] * 90),
+                    scope="alpha",
+                    confidence=0.4,
+                    salience=0.3,
+                    source_event_ids=[event.id],
+                    tags=["retention", "prune", "archive"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
+
+            report = memory.recall_policy(
+                "old retention prune evidence",
+                scope="alpha",
+                budgets=[500, 900],
+                cold_budget=650,
+            )
+            text = report.to_text()
+            actions = {action.name for action in report.actions}
+
+            self.assertEqual(report.intent, "retention-safety")
+            self.assertEqual(report.status, "pass")
+            self.assertIn("cold-map", actions)
+            self.assertIn("retention-cycle", actions)
+            self.assertIn("avoid-raw-cold-reread", actions)
+            self.assertIn("retention gates", report.strategy)
+            self.assertNotIn("Retention pruning raw body should stay outside", text)
+
     def test_recall_with_hot_uses_soft_budget_after_enough_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1707,6 +1856,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
+                    "purpose-aware recall controller",
                     "scheduled worker script readiness",
                 },
             )
@@ -1717,6 +1867,9 @@ class MemoryFlowTests(unittest.TestCase):
             cold_map = next(item for item in roadmap.items if item.name == "distant-memory navigation")
             self.assertIn("matched=1", cold_map.evidence)
             self.assertIn("map_tokens=", cold_map.evidence)
+            recall_policy = next(item for item in roadmap.items if item.name == "purpose-aware recall controller")
+            self.assertIn("intent=", recall_policy.evidence)
+            self.assertIn("budget=", recall_policy.evidence)
             self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
 
     def test_goal_roadmap_fails_when_semantic_hygiene_fails(self) -> None:
@@ -4930,6 +5083,56 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["totals"]["matched_capsules"], 1)
             self.assertEqual(payload["groups"][0]["tier"], "archive")
             self.assertEqual(payload["groups"][0]["source_events"], 1)
+
+    def test_recall_policy_cli_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            event = memory.retain(
+                kind="note",
+                text="Old note: recall policy CLI should route deploy archive evidence through cold-map.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="Project memory: old deploy archive",
+                    body=" ".join(["CLI distant raw body should not be rendered by recall-policy."] * 80),
+                    scope="alpha",
+                    confidence=0.4,
+                    salience=0.3,
+                    source_event_ids=[event.id],
+                    tags=["deploy", "archive"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-policy",
+                    "old deploy archive evidence",
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["scope"], "alpha")
+            self.assertEqual(payload["intent"], "distant-memory")
+            self.assertEqual(payload["cold_map_summary"]["matched_capsules"], 1)
+            self.assertGreater(payload["token_policy"]["avoided_cold_raw_tokens"], 0)
+            self.assertNotIn("CLI distant raw body should not be rendered", completed.stdout)
 
     def test_lifecycle_maps_memory_into_purpose_aware_tiers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
