@@ -829,6 +829,12 @@ deterministic risk without mutating the live store. For delete it only plans a
 reversible soft-delete to `rejected`; physical deletion remains outside this
 gate, and stable memory delete is blocked until a stronger shadow-delete
 approval exists.
+`prepare-mutation --action rewrite` reruns the preflight and writes a one-use
+approval only when the live capsule still matches the digest-bound before
+projection. `live-mutation-apply` consumes the token with exact confirmation
+`APPLY MEMORY REWRITE`, compare-and-sets the approved projection fields, writes a
+`memory_mutation_witnesses` row, and blocks on any post-approval drift. Delete
+mutation approvals are intentionally not implemented.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

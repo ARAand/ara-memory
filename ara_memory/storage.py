@@ -16,7 +16,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -626,6 +626,43 @@ CREATE TABLE IF NOT EXISTS memory_review_rollback_witnesses (
 CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_witnesses_scope
 ON memory_review_rollback_witnesses(scope, action, created_at);
 
+CREATE TABLE IF NOT EXISTS memory_mutation_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  mutation_digest TEXT NOT NULL,
+  preflight_json TEXT NOT NULL,
+  capsule_snapshot_json TEXT NOT NULL,
+  confirmation_required TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_mutation_approvals_status
+ON memory_mutation_approvals(scope, action, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS memory_mutation_witnesses (
+  id TEXT PRIMARY KEY,
+  mutation_approval_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_mutation_witnesses_scope
+ON memory_mutation_witnesses(scope, action, created_at);
+
 CREATE TABLE IF NOT EXISTS working_memory_impacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL,
@@ -712,6 +749,8 @@ class MemoryStore:
                 _ensure_memory_review_witness_v24_tables(conn)
             if old_version < 25:
                 _ensure_memory_review_rollback_v25_tables(conn)
+            if old_version < 26:
+                _ensure_memory_mutation_v26_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -2162,6 +2201,213 @@ class MemoryStore:
                 ],
             }
 
+    def prepare_mutation_approval(
+        self,
+        preflight: dict[str, Any],
+        *,
+        ttl_minutes: int = 30,
+    ) -> dict[str, Any]:
+        self.init()
+        action = str(preflight.get("action") or "")
+        if action != "rewrite":
+            raise ValueError("Only rewrite mutation approval is implemented.")
+        if not preflight.get("passed"):
+            raise ValueError("Cannot prepare mutation approval from a failed preflight.")
+        before = preflight.get("before")
+        after = preflight.get("after")
+        mutation_digest = str(preflight.get("mutation_digest") or "")
+        if not isinstance(before, dict) or not isinstance(after, dict) or not mutation_digest:
+            raise ValueError("Mutation preflight is missing before/after/digest.")
+        expected_digest = _json_digest(
+            {
+                "action": action,
+                "before": before,
+                "after": after,
+                "rollback": preflight.get("rollback"),
+            }
+        )
+        if expected_digest != mutation_digest:
+            raise ValueError("Mutation preflight digest mismatch.")
+        token = secrets.token_urlsafe(24)
+        approval_id = new_id("mut")
+        confirmation = "APPLY MEMORY REWRITE"
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM capsules WHERE id = ?", (preflight["capsule_id"],)).fetchone()
+            if row is None:
+                raise ValueError("Cannot prepare mutation approval because target capsule is missing.")
+            current = _capsule_witness_snapshot(row)
+            if _json_digest(_mutation_projection_snapshot(current)) != before.get("projection_digest"):
+                raise ValueError("Cannot prepare mutation approval because target capsule changed after preflight.")
+            conn.execute(
+                """
+                INSERT INTO memory_mutation_approvals(
+                  id, token_hash, scope, capsule_id, action, mutation_digest,
+                  preflight_json, capsule_snapshot_json, confirmation_required,
+                  expires_at, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval_id,
+                    _token_hash(token),
+                    preflight["scope"],
+                    preflight["capsule_id"],
+                    action,
+                    mutation_digest,
+                    json.dumps(preflight, ensure_ascii=False, sort_keys=True),
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    confirmation,
+                    expires_at,
+                    "prepared",
+                    utc_now(),
+                ),
+            )
+        return {
+            "approval_id": approval_id,
+            "token": token,
+            "scope": preflight["scope"],
+            "capsule_id": preflight["capsule_id"],
+            "action": action,
+            "mutation_digest": mutation_digest,
+            "confirmation_required": confirmation,
+            "expires_at": expires_at,
+            "status": "prepared",
+        }
+
+    def live_mutation_apply(
+        self,
+        approval_token: str,
+        *,
+        confirm: str,
+    ) -> dict[str, Any]:
+        self.init()
+        confirmation = "APPLY MEMORY REWRITE"
+        if confirm != confirmation:
+            return _mutation_blocked(None, "Confirmation did not match.", confirmation)
+        with self.session() as conn:
+            approval_row = conn.execute(
+                "SELECT * FROM memory_mutation_approvals WHERE token_hash = ?",
+                (_token_hash(approval_token),),
+            ).fetchone()
+            if approval_row is None:
+                return _mutation_blocked(None, "Approval token was not found.", confirmation)
+            approval = dict(approval_row)
+            if approval["status"] != "prepared":
+                return _mutation_blocked(approval, f"Approval status is {approval['status']}, not prepared.", confirmation)
+            if _is_expired(str(approval["expires_at"])):
+                conn.execute(
+                    "UPDATE memory_mutation_approvals SET status = ? WHERE id = ?",
+                    ("expired", approval["id"]),
+                )
+                return _mutation_blocked(approval, "Approval token is expired.", confirmation)
+            if approval["action"] != "rewrite":
+                return _mutation_blocked(approval, "Only rewrite live mutation is implemented.", confirmation)
+            preflight = json.loads(str(approval["preflight_json"]))
+            before = preflight.get("before")
+            after_plan = preflight.get("after")
+            if not isinstance(before, dict) or not isinstance(after_plan, dict):
+                return _mutation_blocked(approval, "Approved preflight JSON is malformed.", confirmation)
+            expected_digest = _json_digest(
+                {
+                    "action": approval["action"],
+                    "before": before,
+                    "after": after_plan,
+                    "rollback": preflight.get("rollback"),
+                }
+            )
+            if expected_digest != approval["mutation_digest"]:
+                return _mutation_blocked(approval, "Approved preflight digest mismatch.", confirmation)
+            row = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if row is None:
+                return _mutation_blocked(approval, "Approved capsule is missing.", confirmation)
+            current = _capsule_witness_snapshot(row)
+            approved_current = json.loads(str(approval["capsule_snapshot_json"]))
+            if _json_digest(current) != _json_digest(approved_current):
+                return _mutation_blocked(approval, "Approved capsule changed after mutation approval.", confirmation)
+            if _json_digest(_mutation_projection_snapshot(current)) != before.get("projection_digest"):
+                return _mutation_blocked(approval, "Approved capsule no longer matches rewrite preflight before snapshot.", confirmation)
+            now = utc_now()
+            tags_json = json.dumps(list(after_plan["tags"]), ensure_ascii=False)
+            cur = conn.execute(
+                """
+                UPDATE capsules
+                SET title = ?, body = ?, tags_json = ?, updated_at = ?
+                WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                """,
+                (
+                    after_plan["title"],
+                    after_plan["body"],
+                    tags_json,
+                    now,
+                    approval["capsule_id"],
+                    before["title"],
+                    before["body"],
+                    json.dumps(list(before["tags"]), ensure_ascii=False),
+                    before["status"],
+                ),
+            )
+            if cur.rowcount <= 0:
+                return _mutation_blocked(approval, "Rewrite compare-and-set failed.", confirmation)
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if updated is None:
+                return _mutation_blocked(approval, "Capsule disappeared during rewrite.", confirmation)
+            _sync_capsule_fts_row(conn, updated)
+            after = _capsule_witness_snapshot(updated)
+            witness_id = new_id("mutw")
+            conn.execute(
+                """
+                INSERT INTO memory_mutation_witnesses(
+                  id, mutation_approval_id, capsule_id, scope, action,
+                  reason, before_json, after_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    witness_id,
+                    approval["id"],
+                    approval["capsule_id"],
+                    approval["scope"],
+                    approval["action"],
+                    f"approved live rewrite from mutation preflight {approval['mutation_digest']}",
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    json.dumps(after, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "rewrite",
+                    approval["capsule_id"],
+                    approval["scope"],
+                    f"approved live rewrite from mutation preflight {approval['mutation_digest']}",
+                    "memory-mutation",
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                "UPDATE memory_mutation_approvals SET status = ?, used_at = ? WHERE id = ?",
+                ("used", utc_now(), approval["id"]),
+            )
+            _invalidate_hot_scope(self.hot_dir, str(approval["scope"]))
+            return {
+                "passed": True,
+                "approval_id": approval["id"],
+                "mutation_witness_id": witness_id,
+                "capsule_id": approval["capsule_id"],
+                "scope": approval["scope"],
+                "action": approval["action"],
+                "mutation_digest": approval["mutation_digest"],
+                "recommendations": [
+                    "Live rewrite changed only the approved capsule projection fields.",
+                    "Run health and recall-regression after live rewrite.",
+                ],
+            }
+
     def list_working_memory_impacts(
         self,
         *,
@@ -2340,6 +2586,33 @@ def _review_rollback_blocked(
         "scope": approval.get("scope") if approval else None,
         "before_status": None,
         "after_status": None,
+        "confirmation_required": confirmation,
+        "recommendations": [message],
+    }
+
+
+def _mutation_projection_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": snapshot["title"],
+        "body": snapshot["body"],
+        "tags": list(snapshot["tags"]),
+        "status": snapshot["status"],
+    }
+
+
+def _mutation_blocked(
+    approval: dict[str, Any] | None,
+    message: str,
+    confirmation: str,
+) -> dict[str, Any]:
+    return {
+        "passed": False,
+        "approval_id": approval.get("id") if approval else None,
+        "mutation_witness_id": None,
+        "capsule_id": approval.get("capsule_id") if approval else None,
+        "scope": approval.get("scope") if approval else None,
+        "action": approval.get("action") if approval else None,
+        "mutation_digest": approval.get("mutation_digest") if approval else None,
         "confirmation_required": confirmation,
         "recommendations": [message],
     }
@@ -2651,6 +2924,49 @@ def _ensure_memory_review_rollback_v25_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_memory_review_rollback_witnesses_scope
         ON memory_review_rollback_witnesses(scope, action, created_at);
+        """
+    )
+
+
+def _ensure_memory_mutation_v26_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memory_mutation_approvals (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          scope TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          mutation_digest TEXT NOT NULL,
+          preflight_json TEXT NOT NULL,
+          capsule_snapshot_json TEXT NOT NULL,
+          confirmation_required TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          used_at TEXT,
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_approvals_status
+        ON memory_mutation_approvals(scope, action, status, expires_at);
+
+        CREATE TABLE IF NOT EXISTS memory_mutation_witnesses (
+          id TEXT PRIMARY KEY,
+          mutation_approval_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          before_json TEXT NOT NULL,
+          after_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_witnesses_scope
+        ON memory_mutation_witnesses(scope, action, created_at);
         """
     )
 

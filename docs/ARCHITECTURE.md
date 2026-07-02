@@ -520,6 +520,17 @@ mutation_preflight(capsule, action)
   -> map delete to reversible rejected status only
   -> block stable delete and all physical deletion
   -> return digest-bound plan without live mutation
+
+prepare_mutation(rewrite)
+  -> rerun mutation_preflight
+  -> require live capsule still equals preflight before projection
+  -> write one-use approval with token hash, preflight JSON, and capsule snapshot
+
+live_mutation_apply(token)
+  -> require exact confirmation and prepared, unexpired rewrite token
+  -> require approval capsule snapshot and preflight digest have not drifted
+  -> compare-and-set title/body/tags only
+  -> write memory_mutation_witnesses and consume approval
 ```
 
 Manual promotion uses the shared deterministic risk gate but remains an

@@ -14073,6 +14073,147 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.after["status"], MemoryStatus.REJECTED.value)
             self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.STABLE.value)
 
+    def test_live_mutation_rewrite_requires_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project eta live rewrite should be token gated.",
+                source="test",
+                scope="eta",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="old eta title",
+                body="Project eta live rewrite should be token gated.",
+                scope="eta",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["rewrite", "live"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            approval = memory.prepare_mutation(
+                capsule_id=capsule.id,
+                action="rewrite",
+                title="new eta title",
+                body="Project eta live rewrite was approved through mutation preflight.",
+                tags=["rewrite", "live", "approved"],
+                ttl_minutes=10,
+            )
+
+            self.assertTrue(approval["token"])
+            self.assertEqual(approval["confirmation_required"], "APPLY MEMORY REWRITE")
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT * FROM memory_mutation_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(approval_row)
+                self.assertNotEqual(approval_row["token_hash"], approval["token"])
+
+            wrong_confirm = memory.live_mutation_apply(approval["token"], confirm="APPLY")
+            self.assertFalse(wrong_confirm["passed"])
+            self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "old eta title")
+
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+
+            self.assertTrue(applied["passed"], applied)
+            updated = memory.store.get_capsule(capsule.id)
+            self.assertEqual(updated["title"], "new eta title")
+            self.assertEqual(updated["body"], "Project eta live rewrite was approved through mutation preflight.")
+            reused = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+            self.assertFalse(reused["passed"])
+            self.assertIn("not prepared", reused["recommendations"][0])
+            with memory.store.session() as conn:
+                approval_status = conn.execute(
+                    "SELECT status, used_at FROM memory_mutation_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertEqual(approval_status["status"], "used")
+                self.assertIsNotNone(approval_status["used_at"])
+                witness_row = conn.execute(
+                    "SELECT * FROM memory_mutation_witnesses WHERE mutation_approval_id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(witness_row)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "live-mutation-apply",
+                    "--approval-token",
+                    approval["token"],
+                    "--confirm",
+                    "APPLY MEMORY REWRITE",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"])
+
+    def test_live_mutation_rewrite_blocks_when_capsule_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project theta live rewrite should block drift.",
+                source="test",
+                scope="theta",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="old theta title",
+                body="Project theta live rewrite should block drift.",
+                scope="theta",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["rewrite", "drift"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(
+                capsule_id=capsule.id,
+                action="rewrite",
+                title="new theta title",
+                body="Project theta live rewrite should have been approved.",
+                tags=["rewrite", "drift", "approved"],
+                ttl_minutes=10,
+            )
+            memory.store.update_capsule_projection_if_current(
+                capsule.id,
+                title="drifted theta title",
+                body=capsule.body,
+                tags=capsule.tags,
+                expected_status=MemoryStatus.CANDIDATE,
+                expected_title=capsule.title,
+                expected_body=capsule.body,
+                expected_tags=capsule.tags,
+                actor="test",
+                reason="simulate rewrite drift",
+                action="test-drift",
+            )
+
+            blocked = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+
+            self.assertFalse(blocked["passed"])
+            self.assertIn("changed after mutation approval", blocked["recommendations"][0])
+            self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "drifted theta title")
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

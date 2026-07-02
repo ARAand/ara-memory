@@ -192,6 +192,14 @@ def _snapshot_digest(snapshot: dict[str, Any]) -> str:
     return _json_digest({key: value for key, value in snapshot.items() if key != "projection_digest"})
 
 
+def mutation_plan_digest(payload: dict[str, Any]) -> str:
+    return _json_digest(payload)
+
+
+def snapshot_digest(snapshot: dict[str, Any]) -> str:
+    return _snapshot_digest(snapshot)
+
+
 def _json_digest(payload: dict[str, Any]) -> str:
     return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 

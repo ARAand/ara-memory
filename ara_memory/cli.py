@@ -842,6 +842,18 @@ def main(argv: list[str] | None = None) -> int:
     mutation_preflight.add_argument("--body", default=None)
     mutation_preflight.add_argument("--tag", action="append", default=None)
     mutation_preflight.add_argument("--json", action="store_true")
+    prepare_mutation = sub.add_parser("prepare-mutation")
+    prepare_mutation.add_argument("--capsule-id", required=True)
+    prepare_mutation.add_argument("--action", required=True, choices=["rewrite", "delete"])
+    prepare_mutation.add_argument("--title", default=None)
+    prepare_mutation.add_argument("--body", default=None)
+    prepare_mutation.add_argument("--tag", action="append", default=None)
+    prepare_mutation.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_mutation.add_argument("--json", action="store_true")
+    live_mutation_apply = sub.add_parser("live-mutation-apply")
+    live_mutation_apply.add_argument("--approval-token", required=True)
+    live_mutation_apply.add_argument("--confirm", required=True)
+    live_mutation_apply.add_argument("--json", action="store_true")
     review_worker = sub.add_parser("review-worker")
     review_worker.add_argument("--scope", default=None)
     review_worker.add_argument("--limit", type=int, default=25)
@@ -2386,6 +2398,37 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.passed else 1
+
+    if args.cmd == "prepare-mutation":
+        result = memory.prepare_mutation(
+            capsule_id=args.capsule_id,
+            action=args.action,
+            title=args.title,
+            body=args.body,
+            tags=args.tag,
+            ttl_minutes=args.ttl_minutes,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"approval_id: {result['approval_id']}")
+            print(f"capsule_id: {result['capsule_id']}")
+            print(f"action: {result['action']}")
+            print(f"confirmation_required: {result['confirmation_required']}")
+            print(f"expires_at: {result['expires_at']}")
+            print(f"token: {result['token']}")
+        return 0
+
+    if args.cmd == "live-mutation-apply":
+        result = memory.live_mutation_apply(args.approval_token, confirm=args.confirm)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            status = "passed" if result.get("passed") else "blocked"
+            print(f"{status}: {result.get('approval_id')}")
+            for item in result.get("recommendations", []):
+                print(f"- {item}")
+        return 0 if result.get("passed") else 1
 
     if args.cmd == "review-worker":
         result = memory.review_worker(scope=args.scope, limit=args.limit, dry_run=not args.apply)

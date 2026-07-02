@@ -228,6 +228,28 @@ class AraMemory:
             tags=tags,
         )
 
+    def prepare_mutation(
+        self,
+        *,
+        capsule_id: str,
+        action: str,
+        title: str | None = None,
+        body: str | None = None,
+        tags: list[str] | None = None,
+        ttl_minutes: int = 30,
+    ) -> dict[str, Any]:
+        preflight = self.mutation_preflight(
+            capsule_id=capsule_id,
+            action=action,
+            title=title,
+            body=body,
+            tags=tags,
+        )
+        return self.store.prepare_mutation_approval(preflight.as_dict(), ttl_minutes=ttl_minutes)
+
+    def live_mutation_apply(self, approval_token: str, *, confirm: str) -> dict[str, Any]:
+        return self.store.live_mutation_apply(approval_token, confirm=confirm)
+
     def sleep(self, *, scope: str = "global", dry_run: bool = False) -> SleepReport:
         scope = _canonical_scope(scope) or "global"
         return SleepConsolidator(self.store, advisor=self._advisor()).run(scope=scope, dry_run=dry_run)
