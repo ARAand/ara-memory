@@ -2311,6 +2311,30 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertTrue(approval.prepared, approval.as_dict())
             self.assertIsNotNone(approval.token)
+            approval_payload = approval.as_dict()
+            rollback = approval_payload["rollback_witness"]
+            self.assertEqual(rollback["schema"], "reconsolidation-rollback-witness-v1")
+            self.assertEqual(rollback["frame_fingerprint"], approval.frame_fingerprint)
+            self.assertTrue(rollback["candidate_only"])
+            self.assertEqual(rollback["allowed_live_mutations"], [])
+            self.assertGreaterEqual(rollback["evidence_capsule_count"], 2)
+            self.assertTrue(
+                any(item["id"] == goal.id for item in rollback["evidence_capsules"]),
+                rollback,
+            )
+            self.assertTrue(
+                any(item["id"] == decision.id for item in rollback["evidence_capsules"]),
+                rollback,
+            )
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT rollback_witness_json FROM reconsolidation_approvals WHERE id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            stored_rollback = json.loads(row["rollback_witness_json"])
+            self.assertEqual(stored_rollback["frame_fingerprint"], approval.frame_fingerprint)
+            self.assertEqual(stored_rollback["query_digest"], rollback["query_digest"])
             self.assertEqual(memory.store.get_capsule(goal.id)["status"], MemoryStatus.STABLE.value)
 
             blocked = memory.apply_reconsolidation(
@@ -2347,6 +2371,17 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(review.reviewed, 1)
             self.assertEqual(review.pass_count, 1)
             self.assertEqual(review.items[0].capsule_id, applied.capsule_id)
+            with memory.store.session() as conn:
+                witness = conn.execute(
+                    "SELECT before_json FROM reconsolidation_witnesses WHERE id = ?",
+                    (applied.witness_id,),
+                ).fetchone()
+            self.assertIsNotNone(witness)
+            before = json.loads(witness["before_json"])
+            self.assertEqual(
+                before["approval_rollback_witness"]["frame_fingerprint"],
+                approval.frame_fingerprint,
+            )
 
     def test_reconsolidation_review_fails_when_created_candidate_drifted_after_witness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4566,6 +4601,90 @@ class MemoryFlowTests(unittest.TestCase):
             memory.init()
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
             self.assertEqual(memory.stats()["schema_version"], storage_module.SCHEMA_VERSION)
+
+    def test_reconsolidation_v16_migration_adds_rollback_witness_column(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            root.mkdir(parents=True)
+            memory = AraMemory(root)
+            conn = sqlite3.connect(memory.store.db_path)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE memory_meta (
+                      key TEXT PRIMARY KEY,
+                      value TEXT NOT NULL,
+                      updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE reconsolidation_approvals (
+                      id TEXT PRIMARY KEY,
+                      token_hash TEXT NOT NULL UNIQUE,
+                      scope TEXT NOT NULL,
+                      query TEXT NOT NULL,
+                      frame_json TEXT NOT NULL,
+                      frame_fingerprint TEXT NOT NULL,
+                      params_json TEXT NOT NULL,
+                      expires_at TEXT NOT NULL,
+                      status TEXT NOT NULL,
+                      created_at TEXT NOT NULL,
+                      used_at TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO memory_meta(key, value, updated_at)
+                    VALUES ('schema_version', '15', ?)
+                    """,
+                    (utc_now(),),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO reconsolidation_approvals(
+                      id, token_hash, scope, query, frame_json, frame_fingerprint,
+                      params_json, expires_at, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "recon_approval_legacy",
+                        "token-hash",
+                        "alpha",
+                        "legacy query",
+                        "{}",
+                        "fingerprint",
+                        "{}",
+                        utc_now(),
+                        "prepared",
+                        utc_now(),
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            memory.init()
+
+            with memory.store.session() as conn:
+                columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(reconsolidation_approvals)")
+                }
+                row = conn.execute(
+                    """
+                    SELECT rollback_witness_json
+                    FROM reconsolidation_approvals
+                    WHERE id = ?
+                    """,
+                    ("recon_approval_legacy",),
+                ).fetchone()
+            self.assertIn("rollback_witness_json", columns)
+            self.assertEqual(row["rollback_witness_json"], "{}")
+            self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

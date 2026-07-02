@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -278,6 +278,7 @@ CREATE TABLE IF NOT EXISTS reconsolidation_approvals (
   frame_json TEXT NOT NULL,
   frame_fingerprint TEXT NOT NULL,
   params_json TEXT NOT NULL,
+  rollback_witness_json TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -460,6 +461,8 @@ class MemoryStore:
                 _sync_relation_graph_from_temporal_edges(conn)
             if old_version < 13:
                 _ensure_relation_merge_v13_columns(conn)
+            if old_version < 16:
+                _ensure_reconsolidation_v16_columns(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1793,6 +1796,17 @@ def _ensure_relation_merge_v13_columns(conn: sqlite3.Connection) -> None:
     if "include_global" not in columns:
         conn.execute(
             "ALTER TABLE relation_merge_approvals ADD COLUMN include_global INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def _ensure_reconsolidation_v16_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(reconsolidation_approvals)")
+    }
+    if "rollback_witness_json" not in columns:
+        conn.execute(
+            "ALTER TABLE reconsolidation_approvals ADD COLUMN rollback_witness_json TEXT NOT NULL DEFAULT '{}'"
         )
 
 

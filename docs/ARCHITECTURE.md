@@ -140,6 +140,7 @@ recall_policy_impact(query, intent, actions, outcome)
 
 reconsolidation_review(scope)
   -> review candidate-only reconsolidation witnesses for unchanged evidence capsules
+  -> compare the approval rollback witness preview against the approved frame fingerprint
   -> compare the created frame capsule against the witness after-snapshot for kind, status, scope, source links, and content digests
   -> keep the created frame capsule candidate-only and fail review if it drifted after witness creation
   -> optionally run recall-regression as a sandbox over representative recall cases
@@ -484,12 +485,15 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     old memories into accidental always-on context.
 32. Treat reconsolidation apply as candidate-only until stronger apply safety
     exists. `reconsolidation-frame` and `reconsolidation-prepare` are read-only.
+    `reconsolidation-prepare` stores a rollback witness preview for the evidence
+    capsule identities, statuses, source links, and content digests.
     `reconsolidation-apply` may create only one candidate summary capsule and a
-    witness after matching the approved fingerprint. It must not promote,
+    witness after matching the approved fingerprint and prepared rollback
+    witness fingerprint. It must not promote,
     supersede, rewrite, delete, or cool existing capsules. Any future stronger
     apply path must first pass `reconsolidation-strong-preflight` in a restored
     backup shadow store, prove recall-regression stability, and preserve
-    source-event provenance.
+    source-event provenance with an explicit live rollback or exception witness.
 
 ## Future Extension Points
 

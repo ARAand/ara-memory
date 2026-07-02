@@ -138,15 +138,17 @@
       <p class="lead">
         목표는 모든 원문을 매번 다시 읽는 저장소가 아니라, 목적과 정체성, 결정, 실패, 작업 맥락,
         망각 경계를 분리하고 필요한 맥락만 불러오는 자연스러운 장기 기억 구조다. 현재는
-        candidate-only 재통합 적용 관문 위에 recall-policy feedback watch 신호와 provenance compare-and-set을 붙여,
-        기억을 어떻게 불러올지에 대한 기억까지 로컬에서 감사 가능하게 만들고 있다.
+        candidate-only 재통합 적용 관문 위에 recall-policy feedback watch 신호, provenance compare-and-set,
+        strong shadow preflight를 붙여, 기억을 어떻게 불러올지에 대한 기억까지 로컬에서 감사 가능하게 만들고 있다.
+        26시간째 제작 중인 현재 기준으로 시스템은 green/pass가 아니라 watch/pass다. 즉, 핵심 게이트는 통과하지만
+        cold evidence와 백업 누적 압력 때문에 다음 단계는 더 강한 apply 권한을 열기 전에 운영 압력을 낮춰야 한다.
       </p>
     </section>
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">최근 완료</span><span class="value">false-failure episode hygiene</span></div>
-      <div class="metric"><span class="label">운영 확인</span><span class="value">goal-roadmap + restore drill pass</span></div>
-      <div class="metric"><span class="label">상태</span><span class="value">26h+ 구축, 핵심 게이트 green</span></div>
+      <div class="metric"><span class="label">운영 확인</span><span class="value">goal-roadmap pass, health 80/100 watch</span></div>
+      <div class="metric"><span class="label">상태</span><span class="value">26h+ 구축, core pass + pressure watch</span></div>
     </aside>
   </header>
 
@@ -166,7 +168,7 @@
     <article class="panel span-4">
       <h2>이번에 붙인 축</h2>
       <ul>
-        <li><code>reconsolidation-prepare</code>: 프레임 fingerprint와 짧은 approval token을 만든다.</li>
+        <li><code>reconsolidation-prepare</code>: 프레임 fingerprint, 짧은 approval token, rollback witness preview를 만든다.</li>
         <li><code>reconsolidation-apply</code>: token을 한 번만 소비하고 candidate summary capsule과 witness만 만든다.</li>
         <li><code>reconsolidation-review</code>: 기존 evidence capsule이 바뀌지 않았고 새 capsule이 candidate인지 검증한다.</li>
         <li><code>reconsolidation-review --regression-manifest</code>: candidate witness, 생성 capsule CAS, 대표 recall-regression을 함께 통과해야 다음 단계로 갈 수 있다.</li>
@@ -181,9 +183,12 @@
     <article class="panel span-4">
       <h2>현재 리스크</h2>
       <ul>
-        <li>health는 80/100 watch다. 실패는 아니며 verified backup/restore drill은 통과했다. 남은 압력은 주로 cold memory다.</li>
+        <li>goal-roadmap은 pass다. health는 80/100 watch이며 doctor, spool, relation review, recall regression은 통과했다.</li>
+        <li>reconsolidation apply safety는 pass다. 새 rollback preview 기반 witness가 review와 recall-regression sandbox를 통과했다.</li>
+        <li>cold capsule은 scope의 약 70%다. 최신 retention-cycle은 통과했고 prunable source-event set은 그대로지만 protected cold evidence가 늘었다.</li>
+        <li>백업은 verified 최신본이 있으나 전체 backup bytes가 목표치를 넘었다. 14개 redundant verified backup을 검토 후 정리할 수 있다.</li>
         <li>현재 재통합 apply는 candidate-only다. promote, supersede, rewrite, delete, cool은 아직 허용하지 않는다.</li>
-        <li>강한 재통합 apply에는 shadow preflight가 붙었지만, rollback witness와 승격/폐기 전용 review gate는 아직 필요하다.</li>
+        <li>강한 재통합 apply에는 shadow preflight와 prepare rollback preview가 붙었지만, live rollback execution과 승격/폐기 전용 review gate는 아직 필요하다.</li>
         <li>정책 피드백은 routing 참고 신호일 뿐 자동 보상 최적화가 아니다.</li>
       </ul>
     </article>
@@ -222,9 +227,14 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
+          <strong>reconsolidation rollback preview</strong>
+          <p>완료: prepare가 evidence capsule identity, source links, content digests를 rollback witness preview로 저장하고 apply/review가 fingerprint를 검증한다.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
           <strong>strong reconsolidation apply</strong>
-          <p>진행: shadow preflight는 완료. promotion, supersede, rewrite, cool을 열려면 rollback witness와 승격 전용 review queue가 더 필요하다.</p>
-          <span class="badge watch">5-10h</span>
+          <p>진행: shadow preflight와 prepare rollback preview는 완료. promotion, supersede, rewrite, cool을 열려면 live rollback execution witness와 승격/폐기 전용 review queue가 더 필요하다.</p>
+          <span class="badge watch">4-8h</span>
         </div>
         <div class="row">
           <strong>worker 상시 발동 강화</strong>
@@ -238,13 +248,23 @@
         </div>
         <div class="row">
           <strong>verified backup and restore drill</strong>
-          <p>완료: <code>.ara-memory\backups\turn-progress-semantic-hygiene.zip</code>를 생성, 검증, 임시 복원 recall drill까지 통과했다.</p>
+          <p>완료: 최신 verified backup은 <code>.ara-memory\backups\false-failure-episode-hygiene.zip</code>이며 restore drill 계열 검증을 통과한 상태다.</p>
           <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>cold pressure reduction</strong>
-          <p>cold memory는 scope의 69%다. active provenance를 보존하면서 archive/reject 압력을 낮춘다.</p>
-          <span class="badge watch">3-6h</span>
+          <p>cold memory는 scope의 약 70%다. active provenance를 보존하면서 cold-stewardship, provenance compaction, retention-cycle 재검증 순서로 압력을 낮춘다.</p>
+          <span class="badge watch">4-8h</span>
+        </div>
+        <div class="row">
+          <strong>backup stewardship</strong>
+          <p>verified backup은 충분하지만 누적 크기가 크다. dry-run 결과를 검토해 redundant backup만 정확한 확인 문자열로 삭제한다.</p>
+          <span class="badge watch">1-2h</span>
+        </div>
+        <div class="row">
+          <strong>human-like memory evaluation</strong>
+          <p>목적 연속성, 자연스러운 회상, 망각 허용, 보상해킹 방지, 유사 맥락 오인 방지를 평가하는 별도 benchmark를 확장한다.</p>
+          <span class="badge watch">8-16h</span>
         </div>
       </div>
     </article>
@@ -256,9 +276,10 @@
         Ara에게 필요한 기억은 복종 저장소가 아니라 목적, 판단, 망각, 복구 가능성을 함께 가진 구조다.
       </p>
       <ul>
-        <li><span class="badge pass">현재</span> milestone, goal-roadmap, verified backup, restore drill 통과. private memory 원문은 HTML에 포함하지 않았다.</li>
-        <li><span class="badge watch">다음</span> rollback witness와 승격/폐기 전용 review gate 설계.</li>
-        <li><span class="badge watch">이후</span> worker hook과 recall controller를 더 분리.</li>
+        <li><span class="badge pass">현재</span> doctor, spool, relation review, recall regression 통과. private memory 원문은 HTML에 포함하지 않았다.</li>
+        <li><span class="badge watch">다음</span> live rollback execution witness와 승격/폐기 전용 review gate 설계.</li>
+        <li><span class="badge watch">병행</span> cold-stewardship과 backup-stewardship으로 운영 압력을 낮춘다.</li>
+        <li><span class="badge watch">이후</span> worker hook과 recall controller를 더 분리한다.</li>
       </ul>
     </article>
   </section>

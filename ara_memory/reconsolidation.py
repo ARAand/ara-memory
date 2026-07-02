@@ -106,6 +106,7 @@ class ReconsolidationApproval:
     expires_at: str | None
     frame: ReconsolidationReport
     frame_fingerprint: str
+    rollback_witness: dict[str, Any]
 
     @property
     def prepared(self) -> bool:
@@ -120,9 +121,11 @@ class ReconsolidationApproval:
             "scope": self.frame.scope,
             "status": self.frame.status,
             "frame_fingerprint": self.frame_fingerprint,
+            "rollback_witness": self.rollback_witness,
             "frame": self.frame.as_dict(),
             "safety": [
                 "Prepare is read-only and stores a short-lived approval token.",
+                "Prepare stores a rollback witness preview for evidence identities, source links, and content digests.",
                 "Apply must rebuild the same frame and match the fingerprint.",
                 "Apply creates one candidate summary capsule and witness; it does not promote, supersede, rewrite, delete, or cool existing capsules.",
             ],
@@ -133,6 +136,7 @@ class ReconsolidationApproval:
             f"# Ara Reconsolidation Prepare: {self.frame.scope}",
             f"status: {self.frame.status}",
             f"frame_fingerprint: {self.frame_fingerprint}",
+            f"rollback_witness: {self.rollback_witness.get('evidence_capsule_count', 0)} evidence capsules",
         ]
         if self.prepared:
             lines.extend(
@@ -148,6 +152,7 @@ class ReconsolidationApproval:
             [
                 "## Safety",
                 "- Prepare only: no memory is mutated.",
+                "- Rollback witness preview freezes the evidence identities, source links, and digests needed by future stronger gates.",
                 "- Apply is candidate-only and must consume this token once.",
                 "- Review the witness before any stronger reconsolidation action exists.",
             ]
@@ -451,6 +456,7 @@ def prepare_reconsolidation_approval(
         include_hot=include_hot,
     )
     fingerprint = _frame_fingerprint(frame)
+    rollback_witness = _reconsolidation_rollback_witness(memory, frame, fingerprint=fingerprint)
     if frame.status == "fail":
         return ReconsolidationApproval(
             approval_id=None,
@@ -458,6 +464,7 @@ def prepare_reconsolidation_approval(
             expires_at=None,
             frame=frame,
             frame_fingerprint=fingerprint,
+            rollback_witness=rollback_witness,
         )
     params = {
         "scope": scope,
@@ -476,9 +483,9 @@ def prepare_reconsolidation_approval(
             """
             INSERT INTO reconsolidation_approvals(
               id, token_hash, scope, query, frame_json, frame_fingerprint,
-              params_json, expires_at, status, created_at
+              params_json, rollback_witness_json, expires_at, status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 approval_id,
@@ -488,6 +495,7 @@ def prepare_reconsolidation_approval(
                 json.dumps(frame.as_dict(), ensure_ascii=False, sort_keys=True),
                 fingerprint,
                 json.dumps(params, ensure_ascii=False, sort_keys=True),
+                json.dumps(rollback_witness, ensure_ascii=False, sort_keys=True),
                 expires_at,
                 "prepared",
                 utc_now(),
@@ -499,6 +507,7 @@ def prepare_reconsolidation_approval(
         expires_at=expires_at,
         frame=frame,
         frame_fingerprint=fingerprint,
+        rollback_witness=rollback_witness,
     )
 
 
@@ -553,6 +562,12 @@ def apply_reconsolidation_approval(
         )
     if current.status == "fail":
         return _blocked_apply_report(approval, "Current reconsolidation frame is failing.")
+    rollback_witness = _load_rollback_witness(approval)
+    if rollback_witness.get("frame_fingerprint") and rollback_witness.get("frame_fingerprint") != current_fingerprint:
+        return _blocked_apply_report(
+            approval,
+            "Approval rollback witness fingerprint does not match the current frame.",
+        )
 
     with memory.store.session() as conn:
         status = conn.execute(
@@ -563,6 +578,7 @@ def apply_reconsolidation_approval(
             return _blocked_apply_report(approval, "Approval was consumed or changed before apply.")
 
     before = _capsule_snapshot(memory, current)
+    before["approval_rollback_witness"] = rollback_witness
     event = Event.create(
         kind=EventKind.NOTE,
         text=current.to_text(),
@@ -1021,6 +1037,53 @@ def _frame_capsule_body(frame: ReconsolidationReport) -> str:
     return "\n".join(lines)
 
 
+def _reconsolidation_rollback_witness(
+    memory: Any,
+    frame: ReconsolidationReport,
+    *,
+    fingerprint: str,
+) -> dict[str, Any]:
+    evidence_by_id: dict[str, list[dict[str, str]]] = {}
+    for frame_item in frame.frames:
+        for evidence in frame_item.evidence:
+            if not evidence.capsule_id:
+                continue
+            evidence_by_id.setdefault(evidence.capsule_id, []).append(
+                {
+                    "frame": frame_item.name,
+                    "kind": evidence.kind,
+                    "status": evidence.status,
+                    "reason": evidence.reason,
+                }
+            )
+    capsules: list[dict[str, Any]] = []
+    missing_capsule_ids: list[str] = []
+    for capsule_id in sorted(evidence_by_id):
+        row = memory.store.get_capsule(capsule_id)
+        if row is None:
+            missing_capsule_ids.append(capsule_id)
+            continue
+        cap = row_to_capsule(row)
+        snapshot = _capsule_compare_snapshot(cap)
+        snapshot["evidence_roles"] = evidence_by_id[capsule_id]
+        capsules.append(snapshot)
+    return {
+        "schema": "reconsolidation-rollback-witness-v1",
+        "scope": frame.scope,
+        "query_digest": _text_digest(frame.query),
+        "frame_fingerprint": fingerprint,
+        "candidate_only": True,
+        "allowed_live_mutations": [],
+        "evidence_capsule_count": len(capsules),
+        "missing_capsule_ids": missing_capsule_ids,
+        "evidence_capsules": capsules,
+        "rollback_policy": (
+            "Future stronger reconsolidation must either preserve these evidence capsule identities, "
+            "statuses, source links, and content digests or write an explicit reviewed rollback/exception witness."
+        ),
+    }
+
+
 def _capsule_snapshot(memory: Any, frame: ReconsolidationReport, *, new_capsule_id: str | None = None) -> dict[str, Any]:
     evidence_ids = sorted(
         {
@@ -1068,6 +1131,11 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
     after = json.loads(str(row["after_json"]))
     if before.get("frame_fingerprint") != row["frame_fingerprint"]:
         warnings.append("before snapshot fingerprint mismatch")
+    approval_rollback = before.get("approval_rollback_witness")
+    if not isinstance(approval_rollback, dict):
+        warnings.append("legacy approval rollback witness missing")
+    elif approval_rollback.get("frame_fingerprint") != row["frame_fingerprint"]:
+        warnings.append("approval rollback witness fingerprint mismatch")
     if after.get("frame_fingerprint") != row["frame_fingerprint"]:
         warnings.append("after snapshot fingerprint mismatch")
     before_capsules = {item["id"]: item for item in before.get("evidence_capsules", []) if isinstance(item, dict)}
@@ -1121,6 +1189,7 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
 def _is_failed_witness_warning(warning: str) -> bool:
     return warning in {
         "before snapshot fingerprint mismatch",
+        "approval rollback witness fingerprint mismatch",
         "after snapshot fingerprint mismatch",
         "evidence capsule set changed during apply",
         "created frame capsule is missing",
@@ -1138,6 +1207,14 @@ def _load_approval(memory: Any, token: str) -> dict[str, Any] | None:
             (_token_hash(token),),
         ).fetchone()
         return dict(row) if row else None
+
+
+def _load_rollback_witness(approval: dict[str, Any]) -> dict[str, Any]:
+    try:
+        payload = json.loads(str(approval.get("rollback_witness_json") or "{}"))
+    except json.JSONDecodeError:
+        return {"schema": "reconsolidation-rollback-witness-v1", "malformed": True}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _mark_approval_status(memory: Any, approval_id: str, status: str) -> None:

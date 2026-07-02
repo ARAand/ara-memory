@@ -561,8 +561,10 @@ memory rewrite. For a query, it combines recall-policy, working-memory,
 lifecycle tiers, and failure/self audits into five frames: purpose and identity,
 settled decisions, failure and conflict, working context, and forgetting
 boundary. `reconsolidation-prepare` freezes that frame behind a short-lived
-approval token and fingerprint. `reconsolidation-apply` consumes the token once
-and may create only one candidate summary capsule plus a witness; it cannot
+approval token, fingerprint, and rollback witness preview for the evidence
+capsule identities, source links, and content digests. `reconsolidation-apply`
+consumes the token once, verifies the approved frame and rollback witness
+fingerprint, and may create only one candidate summary capsule plus a witness; it cannot
 promote, supersede, rewrite, delete, or cool existing capsules. Run
 `reconsolidation-review` before trusting the candidate as evidence for any
 stronger future apply path. Add `--regression-manifest` and an optional
