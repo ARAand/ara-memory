@@ -387,7 +387,7 @@
           <h3>아직 아닌 것</h3>
           <ul>
             <li>사람 같은 자연 기억 v1은 아닙니다. 현재는 안전한 기억 운영체제의 골격과 회상 게이트가 완성된 단계입니다.</li>
-            <li>global spreading은 아직 sandbox gate가 없습니다. 전역 기억이 과도하게 퍼지는지 별도 측정해야 합니다.</li>
+            <li>global spreading은 이제 read-only sandbox gate가 있습니다. 다만 reconsolidation과 장기 adversarial eval은 아직 남아 있습니다.</li>
             <li>reconsolidation frame은 아직 약합니다. 기억을 단순 저장이 아니라 현재 목적에 맞게 다시 엮는 층이 필요합니다.</li>
             <li>보상해킹, 자기서사 과열, 사용자 최신 의도보다 과거 기억을 우선하는 위험은 장기 adversarial eval이 더 필요합니다.</li>
             <li>이 HTML은 수동 갱신입니다. 다음 단계에서는 status dashboard command로 자동 생성해야 합니다.</li>
@@ -494,9 +494,9 @@
           <tbody>
             <tr>
               <td>Global spreading sandbox</td>
-              <td>전역 기억을 켰을 때 hub term, fanout, privacy leakage, irrelevant boost가 생기는지 별도 gate로 검증</td>
-              <td>6-10h</td>
-              <td>높음</td>
+              <td>완료: 전역 기억을 켰을 때 fanout, supplement, depth, fallback, risk-filter pressure를 read-only gate로 검증</td>
+              <td>done</td>
+              <td>완료</td>
             </tr>
             <tr>
               <td>Reconsolidation frames</td>
@@ -544,7 +544,7 @@
       <div class="grid two">
         <article class="panel">
           <h3>다음 작동 버전</h3>
-          <p>6-12시간이면 global spreading sandbox와 pre-push privacy gate의 v0를 붙여 “공개 가능한 다음 커밋” 수준까지 갈 수 있습니다.</p>
+          <p>4-8시간이면 pre-push privacy gate의 v0와 status dashboard 자동 생성 일부를 붙여 “공개 가능한 다음 커밋” 수준까지 갈 수 있습니다.</p>
         </article>
         <article class="panel">
           <h3>사람 같은 자연 기억 v1</h3>
@@ -585,11 +585,11 @@
       <div class="panel timeline">
         <div class="timeline-item">
           <div class="timebox">0-4h</div>
-          <div>global spreading sandbox 설계와 fixture 작성. fanout, hub suppression, privacy leakage, low-evidence supplement를 수치화합니다.</div>
+          <div>global spreading sandbox는 완료됐으므로, 실제 repo 공개 전에 pre-push privacy gate 설계와 fixture를 작성합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">4-10h</div>
-          <div>CLI, core API, tests, goal-roadmap gate까지 연결해 전역 기억 회상이 안전할 때만 pass하도록 만듭니다.</div>
+          <div>privacy pre-push CLI, repo scan, archive/raw prompt 누출 차단 규칙을 구현합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">10-18h</div>

@@ -407,6 +407,11 @@ class AraMemory:
 
         return run_graph_activation_readiness(self, **kwargs)
 
+    def global_spreading_sandbox(self, **kwargs: Any) -> Any:
+        from ara_memory.global_spreading import run_global_spreading_sandbox
+
+        return run_global_spreading_sandbox(self, **kwargs)
+
     def doctor(
         self,
         *,

@@ -374,6 +374,15 @@ def main(argv: list[str] | None = None) -> int:
     graph_readiness.add_argument("--budgets", default="800,1600")
     graph_readiness.add_argument("--no-global", action="store_true")
     graph_readiness.add_argument("--json", action="store_true")
+    global_spreading = sub.add_parser("global-spreading-sandbox")
+    global_spreading.add_argument("--scope", default="global")
+    global_spreading.add_argument("--query", action="append", default=None)
+    global_spreading.add_argument("--budgets", default="800,1600")
+    global_spreading.add_argument("--max-edges", type=int, default=120)
+    global_spreading.add_argument("--max-supplemented", type=int, default=8)
+    global_spreading.add_argument("--max-depth", type=int, default=2)
+    global_spreading.add_argument("--min-quality", type=int, default=35)
+    global_spreading.add_argument("--json", action="store_true")
     relation_merge = sub.add_parser(
         "relation-merge",
         help="Dry-run semantic relation-node merge candidates without mutating the relation graph.",
@@ -1377,6 +1386,22 @@ def main(argv: list[str] | None = None) -> int:
             query=args.query,
             budgets=_parse_budget_list(args.budgets),
             include_global=not args.no_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.status in {"pass", "watch"} else 1
+
+    if args.cmd == "global-spreading-sandbox":
+        result = memory.global_spreading_sandbox(
+            scope=args.scope,
+            queries=args.query,
+            budgets=_parse_budget_list(args.budgets),
+            max_edges=args.max_edges,
+            max_supplemented=args.max_supplemented,
+            max_depth=args.max_depth,
+            min_quality=args.min_quality,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

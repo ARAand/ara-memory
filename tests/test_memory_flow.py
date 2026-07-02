@@ -1929,6 +1929,68 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertGreater(readiness.diagnostics["spreading_activation_boosted_count"], 0)
             self.assertGreater(readiness.diagnostics["visible_capsules"], 0)
 
+    def test_global_spreading_sandbox_gates_global_fanout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: global spreading target",
+                body="Use the cross-scope source capsule only when bounded spreading activation supplies evidence.",
+                scope="global",
+                confidence=0.9,
+                salience=0.18,
+                source_event_ids=[],
+                tags=["sandbox"],
+                status=MemoryStatus.STABLE,
+            )
+            seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Ara identity purpose overview",
+                body="Ara identity and purpose memory should remain available across project scopes.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.84,
+                source_event_ids=[],
+                tags=["ara", "identity", "purpose"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(target)
+            memory.store.upsert_capsule(seed)
+            memory.store.add_edge(
+                subject="Ara identity",
+                predicate="anchors",
+                object_="purpose memory policy",
+                scope="global",
+                source_capsule_id=target.id,
+                confidence=0.95,
+            )
+
+            sandbox = memory.global_spreading_sandbox(
+                scope="alpha",
+                queries=["Ara identity purpose memory policy"],
+                budgets=[900],
+                min_quality=0,
+            )
+            strict = memory.global_spreading_sandbox(
+                scope="alpha",
+                queries=["Ara identity purpose memory policy"],
+                budgets=[900],
+                max_edges=0,
+                min_quality=0,
+            )
+
+            self.assertTrue(sandbox.passed, sandbox.as_dict())
+            self.assertEqual(sandbox.status, "pass")
+            self.assertTrue(sandbox.diagnostics["include_global"])
+            self.assertGreater(sandbox.diagnostics["graph_activation_edges"], 0)
+            self.assertGreater(sandbox.diagnostics["spreading_activation_boosted_count"], 0)
+            self.assertGreater(sandbox.diagnostics["visible_capsules"], 0)
+            self.assertEqual(strict.status, "fail")
+            self.assertFalse(strict.passed)
+            self.assertTrue(any("fanout exceeded" in issue for issue in strict.issues), strict.as_dict())
+            self.assertIn("Ara Global Spreading Sandbox", sandbox.to_text())
+
     def test_recall_plan_recommends_small_useful_budget_and_cost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3256,6 +3318,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "operational health",
                     "milestone readiness",
                     "graph activation readiness",
+                    "global spreading sandbox",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -3270,6 +3333,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("used=", graph_readiness.evidence)
             self.assertIn("edges=", graph_readiness.evidence)
             self.assertIn("boosted=", graph_readiness.evidence)
+            global_spreading = next(item for item in roadmap.items if item.name == "global spreading sandbox")
+            self.assertIn("global=True", global_spreading.evidence)
+            self.assertIn("risk_filtered=", global_spreading.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)

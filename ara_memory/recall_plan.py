@@ -113,6 +113,7 @@ def build_recall_plan(
                 "selected_capsules": int(diagnostics["capsules_selected"]),
                 "rendered_capsules": int(diagnostics.get("capsules_rendered_before_budget", 0)),
                 "visible_capsules": int(diagnostics.get("capsules_rendered_after_budget", 0)),
+                "capsules_filtered_by_risk": int(diagnostics.get("capsules_filtered_by_risk", 0)),
                 "graph_edges": int(diagnostics["graph_edges_considered"]),
                 "graph_activation_edges": int(diagnostics.get("graph_activation_edges_considered", 0)),
                 "graph_activation_expansion_terms": list(
@@ -305,6 +306,7 @@ def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
         "visible_capsules": int(selected.get("visible_capsules", 0)),
         "rendered_capsules": int(selected.get("rendered_capsules", 0)),
         "selected_capsules": int(selected.get("selected_capsules", 0)),
+        "capsules_filtered_by_risk": int(selected.get("capsules_filtered_by_risk", 0)),
         "query_term_count": int(selected.get("query_term_count", 0)),
         "query_terms_visible_count": int(selected.get("query_terms_visible_count", 0)),
         "visible_section_count": int(selected.get("visible_section_count", 0)),

@@ -24,8 +24,10 @@ references, self-loops, duplicate coalescing, and evidence-count preservation
 without mutating memory; with regression inputs, that same review command runs
 the reviewed recall-regression sandbox before returning success. Watch/fail
 items can now be persisted to a relation-specific review queue so later workers
-do not need to infer relation risk from capsule review rows. There is still no
-global spreading layer, automatic relation review worker, or reconsolidation
+do not need to infer relation risk from capsule review rows. A read-only global
+spreading sandbox now probes cross-scope graph activation for bounded fanout,
+supplementation, depth, visible evidence, quality, and risk-filter pressure
+before broader global spreading is trusted. There is still no reconsolidation
 frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
@@ -103,6 +105,12 @@ graph_activation_readiness(scope)
   -> inspect alternatives for live spreading activation, graph edges, boosted capsules, and visible evidence
   -> return pass when at least one probe proves temporal-edge activation actually contributed, otherwise watch with repair guidance
   -> feed milestone-check and goal-roadmap without exposing activation path text as model context
+
+global_spreading_sandbox(scope)
+  -> run bounded recall-plans with include_global=True over representative cross-scope probes
+  -> inspect fanout, graph supplementation, max depth, visible evidence, quality, fallback, and risk-filter diagnostics
+  -> fail only when global spreading becomes unsafe, such as excess fanout, excess supplementation, or paths beyond the configured depth
+  -> return watch when global evidence is absent or low-confidence so roadmap can show capability pressure without inventing safety
 
 recall_policy(query, scope)
   -> classify recall intent: purpose continuity, working context, distant memory, retention safety, or balanced recall
@@ -253,7 +261,9 @@ sleep()
   has no match. A second hop can derive capped expansion terms from first-hop
   edge text and fetch one additional edge layer with depth decay. This is capped,
   risk-filtered, and diagnostic; normal pack output exposes aggregate activation
-  diagnostics rather than raw edge path text. The `relation-merge` command can
+  diagnostics rather than raw edge path text. `global-spreading-sandbox` reuses
+  those aggregate diagnostics with global memory enabled and blocks unsafe
+  global fanout before broader cross-scope spreading policy is trusted. The `relation-merge` command can
   inspect likely relation-node aliases as a dry-run only. The
   `relation-merge-prepare` command stores a hashed approval token, candidate
   snapshot, relation fingerprint, and rollback witness preview for future
@@ -436,11 +446,15 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     affective axes before ranking, and bounded temporal-edge spreading activation
     can add evidence-backed graph-source candidates without rendering raw memory.
     Affective signals are caution/context signals, not reward or promotion scores.
+31. Treat global spreading as sandboxed until proven safe. Missing global
+    activation is a watch signal, but fanout, supplementation, or depth beyond
+    configured limits is a failure because cross-scope recall can otherwise turn
+    old memories into accidental always-on context.
 
 ## Future Extension Points
 
-- Reviewed/apply-mode semantic relation merging, global spreading activation
-  beyond the bounded two-hop prototype, and ESPA-aware path weighting.
+- Global spreading policy beyond the read-only sandbox, reconsolidation frames,
+  and ESPA-aware path weighting.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

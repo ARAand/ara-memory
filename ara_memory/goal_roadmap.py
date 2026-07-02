@@ -75,6 +75,7 @@ def build_goal_roadmap(
         repair_hot=repair_hot,
     )
     graph_readiness = memory.graph_activation_readiness(scope=scope)
+    global_spreading = memory.global_spreading_sandbox(scope=scope)
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -164,6 +165,12 @@ def build_goal_roadmap(
             "Consolidate temporal edges that connect lexical seeds to source capsules, then rerun graph activation readiness.",
         ),
         RoadmapItem(
+            "global spreading sandbox",
+            global_spreading.status,
+            _global_spreading_evidence(global_spreading),
+            "Tune global fanout, hub suppression, risk filtering, or representative global evidence before broader spreading.",
+        ),
+        RoadmapItem(
             "cold-memory stewardship",
             "watch" if cold_stewardship.status == "watch" else "pass",
             _cold_evidence(health, cold_stewardship),
@@ -248,6 +255,20 @@ def _graph_readiness_evidence(graph_readiness: Any) -> str:
         f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
         f"visible={diagnostics['visible_capsules']}, "
         f"tokens={diagnostics['estimated_tokens']}, budget={diagnostics['best_budget']}"
+    )
+
+
+def _global_spreading_evidence(global_spreading: Any) -> str:
+    diagnostics = global_spreading.diagnostics
+    return (
+        f"{global_spreading.status}, global={diagnostics['include_global']}, "
+        f"quality={diagnostics['quality_score']}, "
+        f"edges={diagnostics['graph_activation_edges']}, "
+        f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
+        f"depth={diagnostics['max_observed_depth']}, "
+        f"visible={diagnostics['visible_capsules']}, "
+        f"risk_filtered={diagnostics['capsules_filtered_by_risk']}, "
+        f"budget={diagnostics['best_budget']}"
     )
 
 

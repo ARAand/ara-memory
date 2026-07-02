@@ -35,10 +35,12 @@ references were rewired, duplicate evidence was coalesced, and evidence counts
 did not shrink. When given a recall-regression manifest and baseline, the same
 review command also runs a recall-regression sandbox and fails the whole gate if
 either witness review or recall stability fails. The next layers are
-review-worker automation, reconsolidation frames, and broader global graph
-policies. `--record-queue` persists watch/fail relation-review signals into a
-relation-specific review queue without pretending relation witnesses are
-capsules.
+reconsolidation frames and broader global graph policies. `--record-queue`
+persists watch/fail relation-review signals into a relation-specific review
+queue without pretending relation witnesses are capsules. A read-only
+`global-spreading-sandbox` gate now probes global recall fanout,
+supplementation, depth, visible evidence, fallback use, and risk-filter pressure
+before broader cross-scope spreading is trusted.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -361,6 +363,12 @@ path text. `recall` and `recall-candidates` expose `graph_activation_terms`,
 `spreading_activation_depth_counts`, `spreading_activation_boosted_count`,
 `spreading_activation_supplemented_count`, and capped boosted/supplemented
 capsule id lists.
+`global-spreading-sandbox` reuses these recall-plan diagnostics with
+`include_global=True` and checks whether global graph expansion stayed bounded:
+fanout, supplementation, depth, visible evidence, quality, fallback use, and
+risk-filter activity are reported without mutating memory. It is intended as a
+sandbox before broader cross-scope spreading policies, not as permission to
+render global raw evidence.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
@@ -456,6 +464,7 @@ python -m ara_memory purpose-check --scope ara-memory --repair-hot
 python -m ara_memory identity-check --scope ara-memory --repair-hot
 python -m ara_memory milestone-check --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory graph-readiness --scope ara-memory
+python -m ara_memory global-spreading-sandbox --scope ara-memory
 python -m ara_memory goal-roadmap --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory failure-kind-audit --scope ara-memory
 python -m ara_memory self-kind-audit --scope ara-memory
@@ -529,8 +538,9 @@ verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation
-readiness, cold-memory stewardship, distant-memory navigation, purpose-aware
-lifecycle policy, relation-merge dry-run readiness, and purpose-aware recall control plus its feedback loop and
+readiness, global spreading sandbox, cold-memory stewardship, distant-memory
+navigation, purpose-aware lifecycle policy, purpose-aware recall control, recall
+policy feedback, and
 self-directed deliberation. It is deliberately local and deterministic, so it
 can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
