@@ -1174,6 +1174,26 @@ class MemoryFlowTests(unittest.TestCase):
             failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
             self.assertEqual(failures, [])
 
+    def test_reconsolidation_gate_decision_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text=(
+                    "Decision: stronger reconsolidation remains blocked until candidate witness review, "
+                    "created-capsule provenance CAS, recall-regression sandbox, and rollback gates all pass."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            decisions = memory.list_capsules(scope="alpha", status="candidate", kind="decision")
+            self.assertEqual(failures, [])
+            self.assertEqual(len(decisions), 1)
+
     def test_always_on_progress_update_is_not_procedure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

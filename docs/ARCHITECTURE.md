@@ -82,6 +82,7 @@ spool_turn(envelope)
 consolidate()
   -> episode capsule
   -> optional decision/preference/procedure/failure/project/self capsule
+  -> explicit Decision: evidence stays decision context, not failure memory just because it names blocked gates or recall regression
   -> temporal edges with provenance
 
 recall(query, scope, budget)

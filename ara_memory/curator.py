@@ -227,6 +227,8 @@ def _has_any(text: str, hints: tuple[str, ...]) -> bool:
 def _is_failure_memory(text: str, *, lowered: str, operational: bool) -> bool:
     if not _has_any(lowered, FAILURE_HINTS):
         return False
+    if text.lstrip().startswith("Decision:"):
+        return False
     if _looks_like_progress_update(lowered):
         return False
     if operational and _looks_like_successful_command(text, lowered=lowered):

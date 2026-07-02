@@ -633,6 +633,10 @@ recall indexes until export/prune gates prove it is safe to clean up.
 evidence, and progress updates that were misfiled as `failure` capsules. It is
 dry-run by default; use `--apply` only after reviewing the proposed
 reclassifications.
+Explicit `Decision:` captures are not duplicated into `failure` memories merely
+because they mention blocked gates, recall regression, or failure taxonomy;
+actual failing commands still require concrete failure evidence such as nonzero
+exit codes or error output.
 `self-kind-audit` finds technical identity strings, worktree evidence, and
 commands that were misfiled as Ara `self` memory. It is dry-run by default; use
 `--apply` only after reviewing the proposed reclassifications.

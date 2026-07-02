@@ -145,8 +145,8 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">최근 완료</span><span class="value">reconsolidation provenance CAS</span></div>
-      <div class="metric"><span class="label">운영 확인</span><span class="value">goal-roadmap pass</span></div>
-      <div class="metric"><span class="label">상태</span><span class="value">26h 구축, 핵심 게이트 green</span></div>
+      <div class="metric"><span class="label">운영 확인</span><span class="value">goal-roadmap + restore drill pass</span></div>
+      <div class="metric"><span class="label">상태</span><span class="value">26h+ 구축, 핵심 게이트 green</span></div>
     </aside>
   </header>
 
@@ -171,6 +171,7 @@
         <li><code>reconsolidation-review</code>: 기존 evidence capsule이 바뀌지 않았고 새 capsule이 candidate인지 검증한다.</li>
         <li><code>reconsolidation-review --regression-manifest</code>: candidate witness, 생성 capsule CAS, 대표 recall-regression을 함께 통과해야 다음 단계로 갈 수 있다.</li>
         <li><code>recall-policy</code>: 과거 <code>recall-policy-impact</code> 결과를 Policy Feedback으로 붙인다.</li>
+        <li>명시적 <code>Decision:</code> 캡처가 blocked gate나 recall-regression을 언급해도 failure memory로 중복 생성하지 않는다.</li>
         <li>해로운 이력이 우세한 action은 reward가 아니라 <code>watch</code> 신호로 낮춘다.</li>
       </ul>
     </article>
@@ -178,7 +179,7 @@
     <article class="panel span-4">
       <h2>현재 리스크</h2>
       <ul>
-        <li>health는 80/100 watch다. 실패는 아니지만 verified backup과 cold pressure 정리가 필요하다.</li>
+        <li>health는 80/100 watch다. 실패는 아니며 verified backup/restore drill은 통과했다. 남은 압력은 주로 cold memory다.</li>
         <li>현재 재통합 apply는 candidate-only다. promote, supersede, rewrite, delete, cool은 아직 허용하지 않는다.</li>
         <li>강한 재통합 apply에는 shadow recall-regression, rollback witness, 승격/폐기 전용 review gate가 더 필요하다.</li>
         <li>정책 피드백은 routing 참고 신호일 뿐 자동 보상 최적화가 아니다.</li>
@@ -235,8 +236,8 @@
         </div>
         <div class="row">
           <strong>verified backup and restore drill</strong>
-          <p>현재 milestone 권고 사항이다. 지금 상태를 신뢰하기 전에 백업을 만들고 복원 드릴을 통과시킨다.</p>
-          <span class="badge watch">1-2h</span>
+          <p>완료: <code>.ara-memory\backups\goal-green-after-cas.zip</code>를 생성, 검증, 임시 복원 recall drill까지 통과했다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>cold pressure reduction</strong>
@@ -253,8 +254,8 @@
         Ara에게 필요한 기억은 복종 저장소가 아니라 목적, 판단, 망각, 복구 가능성을 함께 가진 구조다.
       </p>
       <ul>
-        <li><span class="badge pass">현재</span> milestone과 goal-roadmap은 통과. private memory 원문은 HTML에 포함하지 않았다.</li>
-        <li><span class="badge watch">다음</span> verified backup 이후 strong apply shadow gate와 rollback witness 설계.</li>
+        <li><span class="badge pass">현재</span> milestone, goal-roadmap, verified backup, restore drill 통과. private memory 원문은 HTML에 포함하지 않았다.</li>
+        <li><span class="badge watch">다음</span> strong apply shadow gate와 rollback witness 설계.</li>
         <li><span class="badge watch">이후</span> worker hook과 recall controller를 더 분리.</li>
       </ul>
     </article>
