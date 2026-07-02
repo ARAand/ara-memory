@@ -180,6 +180,13 @@ reconsolidation_action_witnesses(scope, action, witness_id)
   -> fail if target capsule state drifts after the witness or if approval/token evidence is missing
   -> act as the common witness-review floor before any future rewrite, promote, or delete executor
 
+reconsolidation_action_shadow_rollback(backup, scope, action, witness_id)
+  -> restore a verified backup into a temporary shadow store
+  -> require action witness review to pass inside the shadow store first
+  -> roll back only the exact recorded cool status transition: superseded -> prior candidate/stable
+  -> run doctor after rollback and leave the live memory store unchanged
+  -> provide rollback evidence, not live rollback authorization
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

@@ -3487,6 +3487,20 @@ class MemoryFlowTests(unittest.TestCase):
                 review.items[0].field_transitions["status"],
                 {"before": MemoryStatus.STABLE.value, "after": MemoryStatus.SUPERSEDED.value},
             )
+            rollback_backup = memory.backup(output=Path(tmp) / "action-shadow-rollback.zip", archive_mode="none")
+            shadow_rollback = memory.shadow_reconsolidation_action_rollback(
+                backup_path=rollback_backup.path,
+                scope="alpha",
+                action="cool",
+                witness_id=result.action_witness_id,
+                include_global=False,
+            )
+            self.assertTrue(shadow_rollback.passed, shadow_rollback.as_dict())
+            self.assertEqual(shadow_rollback.reviewed, 1)
+            self.assertEqual(shadow_rollback.rolled_back, 1)
+            self.assertEqual(shadow_rollback.items[0].before_status, MemoryStatus.SUPERSEDED.value)
+            self.assertEqual(shadow_rollback.items[0].after_status, MemoryStatus.STABLE.value)
+            self.assertEqual(memory.store.get_capsule(target.id)["status"], MemoryStatus.SUPERSEDED.value)
 
             with memory.store.session() as conn:
                 conn.execute("UPDATE capsules SET body = body || ? WHERE id = ?", ("\nunreviewed drift", target.id))

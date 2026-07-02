@@ -828,6 +828,102 @@ class ReconsolidationActionWitnessReview:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class ReconsolidationActionShadowRollbackItem:
+    action_witness_id: str
+    action_approval_id: str
+    capsule_id: str
+    action: str
+    status: str
+    rolled_back: bool
+    before_status: str | None
+    after_status: str | None
+    warnings: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status == "pass"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "action_witness_id": self.action_witness_id,
+            "action_approval_id": self.action_approval_id,
+            "capsule_id": self.capsule_id,
+            "action": self.action,
+            "status": self.status,
+            "rolled_back": self.rolled_back,
+            "before_status": self.before_status,
+            "after_status": self.after_status,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class ReconsolidationActionShadowRollbackReport:
+    scope: str | None
+    action: str | None
+    backup_path: str
+    passed: bool
+    backup_verification: dict[str, Any]
+    restore: dict[str, Any] | None
+    reviewed: int
+    rolled_back: int
+    fail_count: int
+    items: list[ReconsolidationActionShadowRollbackItem]
+    doctor: dict[str, Any] | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "action": self.action,
+            "backup_path": self.backup_path,
+            "passed": self.passed,
+            "backup_verification": self.backup_verification,
+            "restore": self.restore,
+            "reviewed": self.reviewed,
+            "rolled_back": self.rolled_back,
+            "fail_count": self.fail_count,
+            "items": [item.as_dict() for item in self.items],
+            "doctor": self.doctor,
+            "recommendations": self.recommendations,
+            "safety": [
+                "Runs only inside a temporary restored backup.",
+                "Does not mutate the live memory store.",
+                "Rolls back only the exact capsule/status transition recorded by a live action witness.",
+                "Preserves source events, capsule text, approvals, and action witnesses for audit.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        action = self.action or "all"
+        lines = [
+            f"# Ara Reconsolidation Action Shadow Rollback: {self.scope or 'all'}",
+            f"action: {action}",
+            f"status: {'pass' if self.passed else 'fail'}",
+            f"backup: {self.backup_path}",
+            f"backup_verified: {self.backup_verification.get('passed')}",
+            f"reviewed={self.reviewed}, rolled_back={self.rolled_back}, fail={self.fail_count}",
+        ]
+        if self.restore is not None:
+            lines.append(f"restore: {self.restore.get('passed')}")
+        if self.doctor is not None:
+            lines.append(f"doctor: {self.doctor.get('passed')}")
+        if not self.items:
+            lines.append("- No action witnesses matched the rollback filter.")
+        for item in self.items[:20]:
+            warning = "; ".join(item.warnings) if item.warnings else "action rollback invariants hold"
+            lines.append(
+                f"- [{item.status}] {item.action_witness_id} action={item.action} "
+                f"capsule={item.capsule_id}: {item.before_status or 'missing'} -> "
+                f"{item.after_status or 'missing'}; {warning}"
+            )
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def build_reconsolidation_frame(
     memory: Any,
     query: str,
@@ -1965,6 +2061,143 @@ def review_reconsolidation_action_witnesses(
         items=items,
         recommendations=recommendations,
     )
+
+
+def shadow_reconsolidation_action_rollback(
+    memory: Any,
+    *,
+    backup_path: Path,
+    scope: str | None = None,
+    action: str | None = None,
+    witness_id: str | None = None,
+    limit: int = 20,
+    doctor_query: str = "current memory state after reconsolidation action rollback",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationActionShadowRollbackReport:
+    backup_path = backup_path.resolve()
+    clean_action = _normalize_strong_reconsolidation_actions([action])[0] if action else None
+    backup_verification = memory.verify_backup(backup_path)
+    if not backup_verification.get("passed"):
+        return ReconsolidationActionShadowRollbackReport(
+            scope=scope,
+            action=clean_action,
+            backup_path=str(backup_path),
+            passed=False,
+            backup_verification=backup_verification,
+            restore=None,
+            reviewed=0,
+            rolled_back=0,
+            fail_count=1,
+            items=[],
+            doctor=None,
+            recommendations=["Verify the backup before running action shadow rollback."],
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target_root = Path(tmp) / "shadow-memory"
+        restore = memory.restore_backup(backup_path, target_root)
+        if not restore.get("passed"):
+            return ReconsolidationActionShadowRollbackReport(
+                scope=scope,
+                action=clean_action,
+                backup_path=str(backup_path),
+                passed=False,
+                backup_verification=backup_verification,
+                restore=restore,
+                reviewed=0,
+                rolled_back=0,
+                fail_count=1,
+                items=[],
+                doctor=None,
+                recommendations=["Restore the backup cleanly before trusting action shadow rollback."],
+            )
+        shadow = memory.__class__(target_root)
+        review = review_reconsolidation_action_witnesses(
+            shadow,
+            scope=scope,
+            action=clean_action,
+            witness_id=witness_id,
+            limit=limit,
+        )
+        if not review.passed:
+            items = [
+                ReconsolidationActionShadowRollbackItem(
+                    action_witness_id=item.action_witness_id,
+                    action_approval_id=item.action_approval_id,
+                    capsule_id=item.capsule_id,
+                    action=item.action,
+                    status="fail",
+                    rolled_back=False,
+                    before_status=None,
+                    after_status=None,
+                    warnings=list(item.warnings),
+                )
+                for item in review.items
+            ]
+            return ReconsolidationActionShadowRollbackReport(
+                scope=scope,
+                action=clean_action,
+                backup_path=str(backup_path),
+                passed=False,
+                backup_verification=backup_verification,
+                restore=restore,
+                reviewed=len(items),
+                rolled_back=0,
+                fail_count=max(1, sum(1 for item in items if item.status == "fail")),
+                items=items,
+                doctor=None,
+                recommendations=["Do not prepare live action rollback until action witness review passes in shadow."],
+            )
+        rows = _select_reconsolidation_action_witness_rows(
+            shadow,
+            scope=scope,
+            action=clean_action,
+            witness_id=witness_id,
+            limit=limit,
+        )
+        items = [_shadow_rollback_action_witness(shadow, row) for row in rows]
+        doctor_payload: dict[str, Any] | None = None
+        if items:
+            doctor = shadow.doctor(
+                scope=scope or rows[0]["scope"],
+                recall_query=doctor_query,
+                recall_budget=recall_budget,
+                hot_budget=hot_budget,
+                include_global=include_global,
+            )
+            doctor_payload = doctor.as_dict()
+        fail_count = sum(1 for item in items if not item.passed)
+        rolled_back = sum(1 for item in items if item.rolled_back)
+        passed = bool(items) and fail_count == 0 and rolled_back == len(items) and (
+            doctor_payload is None or bool(doctor_payload.get("passed"))
+        )
+        recommendations: list[str] = []
+        if not items:
+            recommendations.append("No live action witness was available for shadow rollback.")
+        if fail_count:
+            recommendations.append("Do not open live action rollback until shadow rollback warnings are repaired.")
+        if doctor_payload is not None and not doctor_payload.get("passed"):
+            recommendations.append("Action shadow rollback changed the restored store into a failing doctor state.")
+        if passed:
+            recommendations.append(
+                "Action shadow rollback passed; any live action rollback still needs a separate one-use approval gate."
+            )
+        return ReconsolidationActionShadowRollbackReport(
+            scope=scope,
+            action=clean_action,
+            backup_path=str(backup_path),
+            passed=passed,
+            backup_verification=backup_verification,
+            restore=restore,
+            reviewed=len(items),
+            rolled_back=rolled_back,
+            fail_count=fail_count,
+            items=items,
+            doctor=doctor_payload,
+            recommendations=recommendations,
+        )
 
 
 def shadow_reconsolidation_rollback(
@@ -3265,6 +3498,116 @@ def _select_reconsolidation_witness_rows(
                 args,
             )
         ]
+
+
+def _select_reconsolidation_action_witness_rows(
+    memory: Any,
+    *,
+    scope: str | None,
+    action: str | None,
+    witness_id: str | None,
+    limit: int,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    if action:
+        clauses.append("action = ?")
+        args.append(action)
+    if witness_id:
+        clauses.append("id = ?")
+        args.append(witness_id)
+    args.append(max(1, int(limit)))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with memory.store.session() as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM reconsolidation_action_witnesses
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+
+
+def _shadow_rollback_action_witness(
+    memory: Any,
+    row: dict[str, Any],
+) -> ReconsolidationActionShadowRollbackItem:
+    action = str(row["action"])
+    action_witness_id = str(row["id"])
+    action_approval_id = str(row["action_approval_id"])
+    capsule_id = str(row["capsule_id"])
+    warnings: list[str] = []
+    before_status: str | None = None
+    after_status: str | None = None
+    rolled_back = False
+    try:
+        before = json.loads(str(row["before_json"]))
+        after = json.loads(str(row["after_json"]))
+    except json.JSONDecodeError:
+        warnings.append("action witness JSON is malformed")
+        return ReconsolidationActionShadowRollbackItem(
+            action_witness_id=action_witness_id,
+            action_approval_id=action_approval_id,
+            capsule_id=capsule_id,
+            action=action,
+            status="fail",
+            rolled_back=False,
+            before_status=None,
+            after_status=None,
+            warnings=warnings,
+        )
+    before_capsule = before.get("capsule")
+    after_capsule = after.get("capsule")
+    if not isinstance(before_capsule, dict) or not isinstance(after_capsule, dict):
+        warnings.append("action witness capsule snapshot missing")
+    elif action != "cool":
+        warnings.append(f"action rollback policy is not implemented for {action}")
+    else:
+        before_status = str(after_capsule.get("status") or "")
+        target_status = str(before_capsule.get("status") or "")
+        if before_status != MemoryStatus.SUPERSEDED.value:
+            warnings.append("cool action rollback must start from superseded status")
+        if target_status not in {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}:
+            warnings.append("cool action rollback target must be candidate or stable")
+        current = _capsule_snapshot_for_id(memory, capsule_id)
+        if current.get("missing"):
+            warnings.append("target capsule is missing before action rollback")
+        elif current != after_capsule:
+            warnings.append("target capsule changed before action rollback")
+        if not warnings:
+            rolled_back = memory.store.update_capsule_status_if_current(
+                capsule_id,
+                MemoryStatus.SUPERSEDED,
+                MemoryStatus(target_status),
+                actor="reconsolidation-action-shadow-rollback",
+                reason=f"shadow rollback of reconsolidation action witness {action_witness_id}",
+            )
+            if not rolled_back:
+                warnings.append("action rollback compare-and-set failed")
+            updated = memory.store.get_capsule(capsule_id)
+            after_status = str(updated["status"]) if updated is not None else None
+            if after_status != target_status:
+                warnings.append("target capsule was not restored to the action witness before status")
+    return ReconsolidationActionShadowRollbackItem(
+        action_witness_id=action_witness_id,
+        action_approval_id=action_approval_id,
+        capsule_id=capsule_id,
+        action=action,
+        status="pass" if rolled_back and not warnings else "fail",
+        rolled_back=rolled_back,
+        before_status=before_status,
+        after_status=after_status,
+        warnings=warnings,
+    )
 
 
 def _inspect_rollback_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationShadowRollbackItem:

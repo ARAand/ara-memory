@@ -610,6 +610,11 @@ preserving the capsule text and source events in a
 reviews those live action witnesses against an explicit field-transition policy:
 the current `cool` policy permits only `status: candidate|stable -> superseded`
 and fails if later drift changes the target capsule after the witness.
+`reconsolidation-action-shadow-rollback` restores a verified backup into a
+temporary shadow store and proves that a reviewed action witness can be rolled
+back there without touching live memory. The current implementation rolls back
+only `cool` witnesses from `superseded` to the exact recorded prior active
+status; passing it is rollback evidence, not live rollback authorization.
 `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in
