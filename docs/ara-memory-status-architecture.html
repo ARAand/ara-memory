@@ -136,8 +136,8 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v19</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">exception witness gate</span></div>
-      <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap has hygiene gates</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">semantic hygiene + milestone pass</span></div>
+      <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap watch</span></div>
     </aside>
   </header>
 
@@ -171,7 +171,8 @@
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
         <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
         <li>exception witness는 설명 장치일 뿐 권한 상승 장치가 아니다.</li>
-        <li>roadmap은 semantic hygiene 1건과 milestone readiness 때문에 아직 fail이다.</li>
+        <li>semantic hygiene false failure는 재분류했고 milestone readiness는 pass다.</li>
+        <li>roadmap의 남은 watch 항목은 reconsolidation rollback review queue 1건이다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
       </ul>
     </article>
@@ -216,8 +217,13 @@
         </div>
         <div class="row">
           <strong>semantic hygiene</strong>
-          <p>남음: false failure 1건을 dry-run 검토 후 재분류해야 roadmap fail이 줄어든다.</p>
-          <span class="badge watch">1-2h</span>
+          <p>완료: 성공 turn episode가 failure로 잘못 분류된 1건을 dry-run 검토 후 project로 재분류했고 audit changed=0 상태를 확인했다.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
+          <strong>rollback review queue</strong>
+          <p>남음: legacy approval rollback witness missing 경고를 해소해 roadmap watch를 pass로 낮춰야 한다.</p>
+          <span class="badge watch">2-4h</span>
         </div>
         <div class="row">
           <strong>strong action gate</strong>
@@ -236,7 +242,7 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 semantic hygiene과 milestone readiness 실패 신호를 줄이는 것이다.</li>
+        <li>다음 1순위는 reconsolidation rollback review queue의 watch 항목을 해소하는 것이다.</li>
         <li>그 다음 strong reconsolidation action을 preflight/rollback/exception gate에 연결해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
@@ -245,7 +251,7 @@
   </section>
 
   <footer>
-    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, and exception witness gate.
+    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, and milestone pass.
     Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>
