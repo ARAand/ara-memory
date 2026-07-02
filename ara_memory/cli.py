@@ -263,6 +263,21 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_review.add_argument("--regression-manifest", type=Path, default=None)
     reconsolidation_review.add_argument("--regression-baseline", type=Path, default=None)
     reconsolidation_review.add_argument("--json", action="store_true")
+    reconsolidation_strong_preflight = sub.add_parser(
+        "reconsolidation-strong-preflight",
+        help="Run prepare/apply/review/recall-regression inside a restored backup shadow store before stronger reconsolidation design.",
+    )
+    reconsolidation_strong_preflight.add_argument("query", nargs="?", default=None)
+    reconsolidation_strong_preflight.add_argument("--backup", type=Path, required=True)
+    reconsolidation_strong_preflight.add_argument("--scope", default="global")
+    reconsolidation_strong_preflight.add_argument("--budgets", default="800,1600,2500")
+    reconsolidation_strong_preflight.add_argument("--working-budget", type=int, default=900)
+    reconsolidation_strong_preflight.add_argument("--recall-budget", type=int, default=1600)
+    reconsolidation_strong_preflight.add_argument("--no-global", action="store_true")
+    reconsolidation_strong_preflight.add_argument("--no-hot", action="store_true")
+    reconsolidation_strong_preflight.add_argument("--regression-manifest", type=Path, default=None)
+    reconsolidation_strong_preflight.add_argument("--regression-baseline", type=Path, default=None)
+    reconsolidation_strong_preflight.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
@@ -1265,6 +1280,28 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             approval_id=args.approval_id,
             limit=args.limit,
+            regression_cases=cases,
+            regression_baseline=baseline,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-strong-preflight":
+        query = args.query if args.query is not None else sys.stdin.read().strip()
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
+        result = memory.strong_reconsolidation_preflight(
+            query,
+            backup_path=args.backup,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
             regression_cases=cases,
             regression_baseline=baseline,
         )

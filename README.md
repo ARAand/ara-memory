@@ -570,6 +570,12 @@ stronger future apply path. Add `--regression-manifest` and an optional
 candidate witness, created-capsule provenance compare-and-set, and
 representative recall cases must all pass before any future stronger apply gate
 can be considered.
+`reconsolidation-strong-preflight` is the next non-destructive gate: it verifies
+a backup, restores it into a temporary shadow store, runs prepare/apply/review
+and optional recall-regression there, and redacts the shadow approval token from
+output. Passing preflight is not permission to mutate live memory; it is evidence
+that a stronger live gate can be designed without relying on the live store as
+the test bed.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

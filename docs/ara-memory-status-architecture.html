@@ -144,7 +144,7 @@
     </section>
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">turn progress semantic hygiene</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">strong reconsolidation shadow preflight</span></div>
       <div class="metric"><span class="label">운영 확인</span><span class="value">goal-roadmap + restore drill pass</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">26h+ 구축, 핵심 게이트 green</span></div>
     </aside>
@@ -170,6 +170,7 @@
         <li><code>reconsolidation-apply</code>: token을 한 번만 소비하고 candidate summary capsule과 witness만 만든다.</li>
         <li><code>reconsolidation-review</code>: 기존 evidence capsule이 바뀌지 않았고 새 capsule이 candidate인지 검증한다.</li>
         <li><code>reconsolidation-review --regression-manifest</code>: candidate witness, 생성 capsule CAS, 대표 recall-regression을 함께 통과해야 다음 단계로 갈 수 있다.</li>
+        <li><code>reconsolidation-strong-preflight</code>: 검증 백업을 임시 shadow store로 복원한 뒤 prepare/apply/review/regression을 그 안에서만 실행한다.</li>
         <li><code>recall-policy</code>: 과거 <code>recall-policy-impact</code> 결과를 Policy Feedback으로 붙인다.</li>
         <li>명시적 <code>Decision:</code> 캡처가 blocked gate나 recall-regression을 언급해도 failure memory로 중복 생성하지 않는다.</li>
         <li>성공한 <code>Turn episode: Assistant outcome: Implemented...</code> 기록은 구체 실패 출력이 없으면 progress evidence로 남긴다.</li>
@@ -182,7 +183,7 @@
       <ul>
         <li>health는 80/100 watch다. 실패는 아니며 verified backup/restore drill은 통과했다. 남은 압력은 주로 cold memory다.</li>
         <li>현재 재통합 apply는 candidate-only다. promote, supersede, rewrite, delete, cool은 아직 허용하지 않는다.</li>
-        <li>강한 재통합 apply에는 shadow recall-regression, rollback witness, 승격/폐기 전용 review gate가 더 필요하다.</li>
+        <li>강한 재통합 apply에는 shadow preflight가 붙었지만, rollback witness와 승격/폐기 전용 review gate는 아직 필요하다.</li>
         <li>정책 피드백은 routing 참고 신호일 뿐 자동 보상 최적화가 아니다.</li>
       </ul>
     </article>
@@ -222,8 +223,8 @@
         </div>
         <div class="row">
           <strong>strong reconsolidation apply</strong>
-          <p>promotion, supersede, rewrite, cool을 열려면 shadow recall-regression, rollback witness, 승격 전용 review queue가 필요하다.</p>
-          <span class="badge watch">8-16h</span>
+          <p>진행: shadow preflight는 완료. promotion, supersede, rewrite, cool을 열려면 rollback witness와 승격 전용 review queue가 더 필요하다.</p>
+          <span class="badge watch">5-10h</span>
         </div>
         <div class="row">
           <strong>worker 상시 발동 강화</strong>
@@ -256,7 +257,7 @@
       </p>
       <ul>
         <li><span class="badge pass">현재</span> milestone, goal-roadmap, verified backup, restore drill 통과. private memory 원문은 HTML에 포함하지 않았다.</li>
-        <li><span class="badge watch">다음</span> strong apply shadow gate와 rollback witness 설계.</li>
+        <li><span class="badge watch">다음</span> rollback witness와 승격/폐기 전용 review gate 설계.</li>
         <li><span class="badge watch">이후</span> worker hook과 recall controller를 더 분리.</li>
       </ul>
     </article>

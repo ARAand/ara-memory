@@ -2508,6 +2508,161 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(payload["regression"]["passed"])
             self.assertEqual(payload["regression"]["cases"][0]["name"], "reconsolidation_review_sandbox")
 
+    def test_reconsolidation_strong_preflight_runs_only_in_restored_shadow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: long-running purpose requires strong reconsolidation to pass shadow apply review before live mutation.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: shadow reconsolidation",
+                body="long-running purpose requires strong reconsolidation to pass shadow apply review before live mutation",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal", "reconsolidation", "shadow"],
+                status=MemoryStatus.STABLE,
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: shadow first",
+                body="Strong reconsolidation requires shadow apply, witness review, and recall regression first.",
+                scope="alpha",
+                confidence=0.84,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["decision", "shadow", "review"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(decision)
+            memory.build_hot(scope="alpha", budget=900)
+            backup = memory.backup(output=Path(tmp) / "shadow-preflight.zip")
+            before_stats = memory.store.stats()
+
+            report = memory.strong_reconsolidation_preflight(
+                "strong reconsolidation shadow apply review",
+                backup_path=backup.path,
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+                include_global=False,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertTrue(report.backup_verification["passed"])
+            self.assertTrue(report.restore and report.restore["passed"])
+            self.assertTrue(report.prepare and report.prepare["prepared"])
+            self.assertEqual(report.prepare.get("token"), "<shadow-token-redacted>")
+            self.assertTrue(report.apply and report.apply["passed"])
+            self.assertTrue(report.review and report.review["passed"])
+            self.assertEqual(memory.store.stats(), before_stats)
+            with memory.store.session() as conn:
+                approvals = conn.execute("SELECT COUNT(*) FROM reconsolidation_approvals").fetchone()[0]
+                witnesses = conn.execute("SELECT COUNT(*) FROM reconsolidation_witnesses").fetchone()[0]
+            self.assertEqual(approvals, 0)
+            self.assertEqual(witnesses, 0)
+
+    def test_reconsolidation_strong_preflight_cli_runs_shadow_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: long-running purpose says shadow preflight CLI should prove reconsolidation safety before stronger apply.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: CLI shadow preflight",
+                    body="long-running purpose says shadow preflight CLI should prove reconsolidation safety before stronger apply",
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "shadow", "preflight"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: CLI shadow review",
+                    body="The CLI preflight should use a restored backup and leave live memory unchanged.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "cli", "shadow"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            backup = memory.backup(output=Path(tmp) / "cli-shadow-preflight.zip")
+            manifest = Path(tmp) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "name": "strong_preflight_cli",
+                                "query": "shadow preflight reconsolidation safety",
+                                "scope": "alpha",
+                                "expected_terms": ["shadow", "preflight"],
+                                "budget": 900,
+                                "include_global": False,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "reconsolidation-strong-preflight",
+                    "shadow preflight reconsolidation safety",
+                    "--backup",
+                    str(backup.path),
+                    "--scope",
+                    "alpha",
+                    "--budgets",
+                    "800,1200",
+                    "--working-budget",
+                    "900",
+                    "--recall-budget",
+                    "1200",
+                    "--no-global",
+                    "--regression-manifest",
+                    str(manifest),
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "ARA_MEMORY_HOME": str(root)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["passed"], payload)
+            self.assertTrue(payload["review"]["regression"]["passed"])
+            self.assertEqual(payload["prepare"]["token"], "<shadow-token-redacted>")
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

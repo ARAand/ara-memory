@@ -362,6 +362,11 @@ class AraMemory:
 
         return review_reconsolidation_witnesses(self, **kwargs)
 
+    def strong_reconsolidation_preflight(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import strong_reconsolidation_preflight
+
+        return strong_reconsolidation_preflight(self, query, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

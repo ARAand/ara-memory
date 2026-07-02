@@ -144,6 +144,13 @@ reconsolidation_review(scope)
   -> optionally run recall-regression as a sandbox over representative recall cases
   -> block stronger reconsolidation when witness review or recall regression fails
 
+reconsolidation_strong_preflight(backup, query, scope)
+  -> verify backup and restore into a temporary shadow memory root
+  -> run prepare/apply/review and optional recall-regression only in the restored copy
+  -> redact the shadow approval token from output
+  -> never mutate the live memory store
+  -> treat pass as design evidence for a future stronger gate, not live mutation approval
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack
@@ -479,15 +486,16 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     `reconsolidation-apply` may create only one candidate summary capsule and a
     witness after matching the approved fingerprint. It must not promote,
     supersede, rewrite, delete, or cool existing capsules. Any future stronger
-    apply path must prove recall-regression stability and preserve source-event
-    provenance.
+    apply path must first pass `reconsolidation-strong-preflight` in a restored
+    backup shadow store, prove recall-regression stability, and preserve
+    source-event provenance.
 
 ## Future Extension Points
 
 - Global spreading policy beyond the read-only sandbox and ESPA-aware path
   weighting.
-- Stronger reviewed reconsolidation apply paths after candidate-only witnesses
-  prove useful.
+- Stronger reviewed reconsolidation apply paths after shadow preflight and
+  candidate-only witnesses prove useful.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

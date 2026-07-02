@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import secrets
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens
@@ -260,6 +262,65 @@ class ReconsolidationReviewReport:
                     f"cases: {_passed_count(cases)}",
                     f"baseline: {_passed_count(baseline)}",
                 ]
+            )
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationStrongPreflightReport:
+    scope: str
+    query: str
+    backup_path: str
+    passed: bool
+    backup_verification: dict[str, Any]
+    restore: dict[str, Any] | None
+    prepare: dict[str, Any] | None
+    apply: dict[str, Any] | None
+    review: dict[str, Any] | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "query": self.query,
+            "backup_path": self.backup_path,
+            "passed": self.passed,
+            "backup_verification": self.backup_verification,
+            "restore": self.restore,
+            "prepare": self.prepare,
+            "apply": self.apply,
+            "review": self.review,
+            "recommendations": self.recommendations,
+            "safety": [
+                "Runs only inside a temporary restored backup.",
+                "Does not mutate the live memory store.",
+                "Passing preflight is evidence for designing stronger gates, not permission to promote, supersede, rewrite, delete, or cool live memory.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Strong Preflight: {self.scope}",
+            f"status: {'pass' if self.passed else 'fail'}",
+            f"query: {compact_text(self.query, limit=260)}",
+            f"backup: {self.backup_path}",
+            f"backup_verified: {self.backup_verification.get('passed')}",
+        ]
+        if self.restore is not None:
+            lines.append(f"restore: {self.restore.get('passed')}")
+        if self.prepare is not None:
+            lines.append(f"prepared: {self.prepare.get('prepared')}")
+        if self.apply is not None:
+            lines.append(f"shadow_apply: {self.apply.get('passed')}")
+        if self.review is not None:
+            lines.append(
+                "shadow_review: "
+                f"{self.review.get('passed')} "
+                f"reviewed={self.review.get('reviewed')} "
+                f"fail={self.review.get('fail_count')}"
             )
         if self.recommendations:
             lines.append("## Recommendations")
@@ -653,6 +714,136 @@ def review_reconsolidation_witnesses(
     )
 
 
+def strong_reconsolidation_preflight(
+    memory: Any,
+    query: str,
+    *,
+    backup_path: Path,
+    scope: str = "global",
+    budgets: list[int] | None = None,
+    working_budget: int = 900,
+    recall_budget: int = 1600,
+    include_global: bool = True,
+    include_hot: bool = True,
+    regression_cases: list[Any] | None = None,
+    regression_baseline: dict[str, Any] | None = None,
+) -> ReconsolidationStrongPreflightReport:
+    clean_query = query.strip()
+    if not clean_query:
+        raise ValueError("query is required.")
+    backup_path = backup_path.resolve()
+    backup_verification = memory.verify_backup(backup_path)
+    recommendations: list[str] = []
+    if not backup_verification.get("passed"):
+        return ReconsolidationStrongPreflightReport(
+            scope=scope,
+            query=clean_query,
+            backup_path=str(backup_path),
+            passed=False,
+            backup_verification=backup_verification,
+            restore=None,
+            prepare=None,
+            apply=None,
+            review=None,
+            recommendations=["Verify the backup before running strong reconsolidation preflight."],
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target_root = Path(tmp) / "shadow-memory"
+        restore = memory.restore_backup(backup_path, target_root)
+        if not restore.get("passed"):
+            return ReconsolidationStrongPreflightReport(
+                scope=scope,
+                query=clean_query,
+                backup_path=str(backup_path),
+                passed=False,
+                backup_verification=backup_verification,
+                restore=restore,
+                prepare=None,
+                apply=None,
+                review=None,
+                recommendations=["Restore the backup cleanly before trusting any stronger reconsolidation preflight."],
+            )
+        shadow = memory.__class__(target_root)
+        approval = prepare_reconsolidation_approval(
+            shadow,
+            clean_query,
+            scope=scope,
+            budgets=budgets,
+            working_budget=working_budget,
+            recall_budget=recall_budget,
+            include_global=include_global,
+            include_hot=include_hot,
+            ttl_minutes=15,
+        )
+        prepare_payload = approval.as_dict()
+        if not approval.prepared:
+            return ReconsolidationStrongPreflightReport(
+                scope=scope,
+                query=clean_query,
+                backup_path=str(backup_path),
+                passed=False,
+                backup_verification=backup_verification,
+                restore=restore,
+                prepare=_without_shadow_token(prepare_payload),
+                apply=None,
+                review=None,
+                recommendations=[
+                    "Shadow prepare did not produce an approval token; repair the frame before stronger reconsolidation.",
+                ],
+            )
+        applied = apply_reconsolidation_approval(
+            shadow,
+            approval_token=approval.token or "",
+            confirmation=RECONSOLIDATION_APPLY_CONFIRMATION,
+        )
+        apply_payload = applied.as_dict()
+        if not applied.passed:
+            return ReconsolidationStrongPreflightReport(
+                scope=scope,
+                query=clean_query,
+                backup_path=str(backup_path),
+                passed=False,
+                backup_verification=backup_verification,
+                restore=restore,
+                prepare=_without_shadow_token(prepare_payload),
+                apply=apply_payload,
+                review=None,
+                recommendations=[
+                    "Shadow candidate apply failed; do not design stronger live mutation from this frame.",
+                ],
+            )
+        review = review_reconsolidation_witnesses(
+            shadow,
+            scope=scope,
+            approval_id=applied.approval_id,
+            regression_cases=regression_cases,
+            regression_baseline=regression_baseline,
+        )
+        review_payload = review.as_dict()
+        passed = bool(review.passed and review.reviewed > 0 and review.fail_count == 0)
+        if passed:
+            recommendations.append(
+                "Shadow preflight passed; stronger reconsolidation still needs a separate reviewed live gate and rollback witness design."
+            )
+        else:
+            recommendations.append(
+                "Block stronger reconsolidation: shadow witness review or recall-regression failed."
+            )
+        return ReconsolidationStrongPreflightReport(
+            scope=scope,
+            query=clean_query,
+            backup_path=str(backup_path),
+            passed=passed,
+            backup_verification=backup_verification,
+            restore=restore,
+            prepare=_without_shadow_token(prepare_payload),
+            apply=apply_payload,
+            review=review_payload,
+            recommendations=recommendations,
+        )
+
+
 def _evidence_from_working_item(item: Any) -> ReconsolidationEvidence:
     return ReconsolidationEvidence(
         capsule_id=item.capsule_id,
@@ -987,3 +1178,10 @@ def _passed_count(items: object) -> str:
         return "0/0"
     passed = sum(1 for item in items if isinstance(item, dict) and item.get("passed"))
     return f"{passed}/{len(items)}"
+
+
+def _without_shadow_token(payload: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(payload)
+    if redacted.get("token"):
+        redacted["token"] = "<shadow-token-redacted>"
+    return redacted
