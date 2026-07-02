@@ -361,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
 
     graph_readiness = sub.add_parser("graph-readiness")
     graph_readiness.add_argument("--scope", default="global")
-    graph_readiness.add_argument("--query", default="next natural memory architecture graph activation temporal edge recall")
+    graph_readiness.add_argument("--query", default=None)
     graph_readiness.add_argument("--budgets", default="800,1600")
     graph_readiness.add_argument("--no-global", action="store_true")
     graph_readiness.add_argument("--json", action="store_true")

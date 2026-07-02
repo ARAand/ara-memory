@@ -468,11 +468,12 @@ identity query can retrieve that self memory.
 pressure, failure-kind audit, self-kind audit, recall-context budget selection,
 and graph-activation readiness into one readiness report. The recall-context
 gate requires a budgeted pack with visible direct evidence and sufficient
-quality, not just a plausible salience fallback. The graph readiness gate is a
-warning gate: it proves bounded temporal-edge spreading activation has live
-evidence when graph recall is expected, but it does not turn an otherwise
-healthy small scope into a hard failure. Use milestone-check before declaring a
-memory milestone clean, then create a verified backup.
+quality, not just a plausible salience fallback. The graph readiness gate runs
+representative probes and is a warning gate: it proves bounded temporal-edge
+spreading activation has live evidence when graph recall is expected, but it
+does not turn an otherwise healthy small scope into a hard failure. Use
+milestone-check before declaring a memory milestone clean, then create a
+verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation

@@ -4,7 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 
 
-DEFAULT_GRAPH_READINESS_QUERY = "next natural memory architecture graph activation temporal edge recall"
+DEFAULT_GRAPH_READINESS_QUERIES = [
+    "next natural memory architecture graph activation temporal edge recall",
+    "how should Ara run backup restore before destructive memory cleanup",
+]
 
 
 @dataclass(slots=True)
@@ -32,6 +35,7 @@ class GraphActivationReadiness:
             f"# Ara Graph Activation Readiness: {self.scope}",
             f"status: {self.status}",
             f"query: {self.query}",
+            f"probes_evaluated: {diagnostics['probes_evaluated']}",
             "## Evidence",
             (
                 "- "
@@ -55,30 +59,16 @@ def run_graph_activation_readiness(
     memory: Any,
     *,
     scope: str = "global",
-    query: str = DEFAULT_GRAPH_READINESS_QUERY,
+    query: str | None = None,
     budgets: list[int] | None = None,
     include_global: bool = True,
 ) -> GraphActivationReadiness:
-    plan = memory.recall_plan(
-        query,
-        scope=scope,
-        budgets=budgets or [800, 1600],
-        include_hot=False,
-        include_global=include_global,
-    )
-    alternatives = plan.as_dict()["alternatives"]
-    best = max(
-        alternatives,
-        key=lambda item: (
-            bool(item.get("spreading_activation_used", False)),
-            int(item.get("spreading_activation_boosted_count", 0)),
-            int(item.get("spreading_activation_supplemented_count", 0)),
-            int(item.get("graph_activation_edges", 0)),
-            int(item.get("visible_capsules", 0)),
-        ),
-    )
+    probe_queries = [query] if query else DEFAULT_GRAPH_READINESS_QUERIES
+    evaluated = [_evaluate_probe(memory, probe, scope=scope, budgets=budgets, include_global=include_global) for probe in probe_queries]
+    best_probe = max(evaluated, key=lambda item: _probe_rank(item["best"]))
+    best = best_probe["best"]
     diagnostics = {
-        "recommended_budget": int(plan.recommended_budget),
+        "recommended_budget": int(best_probe["recommended_budget"]),
         "best_budget": int(best.get("budget", 0)),
         "estimated_tokens": int(best.get("estimated_tokens", 0)),
         "selected_capsules": int(best.get("selected_capsules", 0)),
@@ -88,6 +78,21 @@ def run_graph_activation_readiness(
         "spreading_activation_used": bool(best.get("spreading_activation_used", False)),
         "spreading_activation_boosted_count": int(best.get("spreading_activation_boosted_count", 0)),
         "spreading_activation_supplemented_count": int(best.get("spreading_activation_supplemented_count", 0)),
+        "probes_evaluated": len(evaluated),
+        "probe_results": [
+            {
+                "query": item["query"],
+                "best_budget": int(item["best"].get("budget", 0)),
+                "graph_activation_edges": int(item["best"].get("graph_activation_edges", 0)),
+                "spreading_activation_used": bool(item["best"].get("spreading_activation_used", False)),
+                "spreading_activation_boosted_count": int(item["best"].get("spreading_activation_boosted_count", 0)),
+                "spreading_activation_supplemented_count": int(
+                    item["best"].get("spreading_activation_supplemented_count", 0)
+                ),
+                "visible_capsules": int(item["best"].get("visible_capsules", 0)),
+            }
+            for item in evaluated
+        ],
     }
     passed = (
         diagnostics["spreading_activation_used"]
@@ -103,9 +108,44 @@ def run_graph_activation_readiness(
         )
     return GraphActivationReadiness(
         scope=scope,
-        query=query,
+        query=str(best_probe["query"]),
         passed=passed,
         status="pass" if passed else "watch",
         diagnostics=diagnostics,
         recommendations=recommendations,
+    )
+
+
+def _evaluate_probe(
+    memory: Any,
+    query: str,
+    *,
+    scope: str,
+    budgets: list[int] | None,
+    include_global: bool,
+) -> dict[str, Any]:
+    plan = memory.recall_plan(
+        query,
+        scope=scope,
+        budgets=budgets or [800, 1600],
+        include_hot=False,
+        include_global=include_global,
+    )
+    alternatives = plan.as_dict()["alternatives"]
+    best = max(alternatives, key=_probe_rank)
+    return {
+        "query": query,
+        "recommended_budget": int(plan.recommended_budget),
+        "best": best,
+    }
+
+
+def _probe_rank(item: dict[str, Any]) -> tuple[bool, int, int, int, int, int]:
+    return (
+        bool(item.get("spreading_activation_used", False)),
+        int(item.get("spreading_activation_boosted_count", 0)),
+        int(item.get("spreading_activation_supplemented_count", 0)),
+        int(item.get("graph_activation_edges", 0)),
+        int(item.get("visible_capsules", 0)),
+        int(item.get("quality_score", 0)),
     )

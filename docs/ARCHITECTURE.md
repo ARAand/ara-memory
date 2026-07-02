@@ -87,9 +87,9 @@ recall_candidates(query, scope)
   -> ranked capsule ids and diagnostics without rendering a pack
 
 graph_activation_readiness(scope)
-  -> run a bounded recall-plan over a graph-readiness query
+  -> run bounded recall-plans over representative graph-readiness probes
   -> inspect alternatives for live spreading activation, graph edges, boosted capsules, and visible evidence
-  -> return pass when temporal-edge activation actually contributed, otherwise watch with repair guidance
+  -> return pass when at least one probe proves temporal-edge activation actually contributed, otherwise watch with repair guidance
   -> feed milestone-check and goal-roadmap without exposing activation path text as model context
 
 recall_policy(query, scope)
