@@ -398,6 +398,20 @@ def main(argv: list[str] | None = None) -> int:
     prepare_live_recon_action_rollback.add_argument("--hot-budget", type=int, default=900)
     prepare_live_recon_action_rollback.add_argument("--no-global", action="store_true")
     prepare_live_recon_action_rollback.add_argument("--json", action="store_true")
+    recon_action_rollback_approvals = sub.add_parser(
+        "reconsolidation-action-rollback-approvals",
+        help=(
+            "Review prepared reconsolidation action rollback approvals without consuming tokens "
+            "or mutating live memory."
+        ),
+    )
+    recon_action_rollback_approvals.add_argument("--scope", default=None)
+    recon_action_rollback_approvals.add_argument("--action", choices=STRONG_RECONSOLIDATION_ACTIONS, default=None)
+    recon_action_rollback_approvals.add_argument("--approval-id", default=None)
+    recon_action_rollback_approvals.add_argument("--witness-id", default=None)
+    recon_action_rollback_approvals.add_argument("--prepared-only", action="store_true")
+    recon_action_rollback_approvals.add_argument("--limit", type=int, default=50)
+    recon_action_rollback_approvals.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1635,6 +1649,21 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "reconsolidation-action-rollback-approvals":
+        result = memory.review_reconsolidation_action_rollback_approvals(
+            scope=args.scope,
+            action=args.action,
+            approval_id=args.approval_id,
+            witness_id=args.witness_id,
+            include_non_prepared=not args.prepared_only,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "reconsolidation-shadow-rollback":
         result = memory.shadow_reconsolidation_rollback(

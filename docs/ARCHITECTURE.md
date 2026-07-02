@@ -194,6 +194,12 @@ prepare_live_reconsolidation_action_rollback(backup, action_witness_id)
   -> never mutate live capsules and never consume the token itself
   -> leave live action rollback execution closed until a future compare-and-set witness writer exists
 
+reconsolidation_action_rollback_approvals(scope, action, approval_id, witness_id)
+  -> review prepared action rollback approvals without consuming their tokens
+  -> recheck approval status/expiry, backup identity, backup verification, live witness review, and target snapshot drift
+  -> fail stale approvals before any future live action rollback executor can trust them
+  -> never mutate live capsules and never write rollback witnesses
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

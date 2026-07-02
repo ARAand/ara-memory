@@ -974,6 +974,91 @@ class ReconsolidationActionLiveRollbackApproval:
         )
 
 
+@dataclass(slots=True)
+class ReconsolidationActionRollbackApprovalReviewItem:
+    approval_id: str
+    scope: str
+    action: str
+    action_witness_id: str
+    action_approval_id: str
+    capsule_id: str
+    approval_status: str
+    status: str
+    warnings: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status == "pass"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "scope": self.scope,
+            "action": self.action,
+            "action_witness_id": self.action_witness_id,
+            "action_approval_id": self.action_approval_id,
+            "capsule_id": self.capsule_id,
+            "approval_status": self.approval_status,
+            "status": self.status,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class ReconsolidationActionRollbackApprovalReview:
+    scope: str | None
+    action: str | None
+    status: str
+    reviewed: int
+    fail_count: int
+    items: list[ReconsolidationActionRollbackApprovalReviewItem]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "action": self.action,
+            "status": self.status,
+            "reviewed": self.reviewed,
+            "fail_count": self.fail_count,
+            "items": [item.as_dict() for item in self.items],
+            "recommendations": self.recommendations,
+            "safety": [
+                "This is a read-only approval review.",
+                "It does not consume approval tokens.",
+                "It does not mutate memory capsules.",
+                "Live action rollback still requires a separate executor and rollback witness.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Action Rollback Approval Review: {self.scope or 'all'}",
+            f"action: {self.action or 'all'}",
+            f"status: {self.status}",
+            f"reviewed: {self.reviewed}",
+            f"fail_count: {self.fail_count}",
+        ]
+        if not self.items:
+            lines.append("- No action rollback approvals matched the filter.")
+        for item in self.items[:30]:
+            lines.append(
+                f"- [{item.status}] approval={item.approval_id} action={item.action} "
+                f"witness={item.action_witness_id} capsule={item.capsule_id} "
+                f"approval_status={item.approval_status}"
+            )
+            for warning in item.warnings[:4]:
+                lines.append(f"  warning: {warning}")
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def build_reconsolidation_frame(
     memory: Any,
     query: str,
@@ -2353,6 +2438,53 @@ def prepare_live_reconsolidation_action_rollback(
     )
 
 
+def review_reconsolidation_action_rollback_approvals(
+    memory: Any,
+    *,
+    scope: str | None = None,
+    action: str | None = None,
+    approval_id: str | None = None,
+    witness_id: str | None = None,
+    include_non_prepared: bool = True,
+    limit: int = 50,
+) -> ReconsolidationActionRollbackApprovalReview:
+    if action is not None and action not in STRONG_RECONSOLIDATION_ACTIONS:
+        raise ValueError(f"Unsupported reconsolidation action: {action}")
+    memory.store.init()
+    rows = _select_reconsolidation_action_rollback_approval_rows(
+        memory,
+        scope=scope,
+        action=action,
+        approval_id=approval_id,
+        witness_id=witness_id,
+        include_non_prepared=include_non_prepared,
+        limit=limit,
+    )
+    items = [_review_action_rollback_approval(memory, row) for row in rows]
+    fail_count = sum(1 for item in items if not item.passed)
+    status = "fail" if fail_count else "pass"
+    recommendations: list[str] = []
+    if not items:
+        recommendations.append("No action rollback approval records matched this review filter.")
+    elif fail_count:
+        recommendations.append(
+            "Do not open or run live action rollback until failing approval review warnings are repaired."
+        )
+    else:
+        recommendations.append(
+            "Action rollback approvals still match their backup, live witness, and target capsule snapshots."
+        )
+    return ReconsolidationActionRollbackApprovalReview(
+        scope=scope,
+        action=action,
+        status=status,
+        reviewed=len(items),
+        fail_count=fail_count,
+        items=items,
+        recommendations=recommendations,
+    )
+
+
 def shadow_reconsolidation_rollback(
     memory: Any,
     *,
@@ -3688,6 +3820,146 @@ def _select_reconsolidation_action_witness_rows(
                 args,
             )
         ]
+
+
+def _select_reconsolidation_action_rollback_approval_rows(
+    memory: Any,
+    *,
+    scope: str | None,
+    action: str | None,
+    approval_id: str | None,
+    witness_id: str | None,
+    include_non_prepared: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    if action:
+        clauses.append("action = ?")
+        args.append(action)
+    if approval_id:
+        clauses.append("id = ?")
+        args.append(approval_id)
+    if witness_id:
+        clauses.append("action_witness_id = ?")
+        args.append(witness_id)
+    if not include_non_prepared:
+        clauses.append("status = 'prepared'")
+    args.append(max(1, int(limit)))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with memory.store.session() as conn:
+        return [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM reconsolidation_action_rollback_approvals
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+
+
+def _review_action_rollback_approval(
+    memory: Any,
+    row: dict[str, Any],
+) -> ReconsolidationActionRollbackApprovalReviewItem:
+    warnings: list[str] = []
+    approval_id = str(row["id"])
+    approval_status = str(row["status"])
+    action = str(row["action"])
+    action_witness_id = str(row["action_witness_id"])
+    capsule_id = str(row["capsule_id"])
+    if approval_status != "prepared":
+        warnings.append(f"approval status is {approval_status}, not prepared")
+    if _is_expired(str(row["expires_at"])):
+        warnings.append("action rollback approval is expired")
+
+    shadow_payload: dict[str, Any] = {}
+    approved_backup_identity: dict[str, Any] = {}
+    approved_capsule_snapshot: dict[str, Any] = {}
+    try:
+        loaded = json.loads(str(row["shadow_json"]))
+        if isinstance(loaded, dict):
+            shadow_payload = loaded
+        else:
+            warnings.append("action rollback approval shadow payload is not an object")
+    except json.JSONDecodeError:
+        warnings.append("action rollback approval shadow JSON is malformed")
+    try:
+        loaded = json.loads(str(row["backup_identity_json"]))
+        if isinstance(loaded, dict):
+            approved_backup_identity = loaded
+        else:
+            warnings.append("action rollback approval backup identity is not an object")
+    except json.JSONDecodeError:
+        warnings.append("action rollback approval backup identity JSON is malformed")
+    try:
+        loaded = json.loads(str(row["capsule_snapshot_json"]))
+        if isinstance(loaded, dict):
+            approved_capsule_snapshot = loaded
+        else:
+            warnings.append("action rollback approval capsule snapshot is not an object")
+    except json.JSONDecodeError:
+        warnings.append("action rollback approval capsule snapshot JSON is malformed")
+
+    if shadow_payload and not shadow_payload.get("passed"):
+        warnings.append("approved action shadow rollback did not pass")
+    backup_path = Path(str(row["backup_path"])).resolve()
+    try:
+        current_backup_identity = _file_identity(backup_path)
+        if approved_backup_identity and current_backup_identity != approved_backup_identity:
+            warnings.append("approved backup changed after action rollback approval")
+    except OSError:
+        warnings.append("approved backup is missing or unreadable")
+    try:
+        backup_verification = memory.verify_backup(backup_path)
+        if not backup_verification.get("passed"):
+            warnings.append("approved backup no longer verifies")
+    except Exception as exc:  # pragma: no cover - defensive around external backup readers.
+        warnings.append(f"approved backup verification failed: {exc}")
+
+    rows = _select_reconsolidation_action_witness_rows(
+        memory,
+        scope=str(row["scope"]),
+        action=action,
+        witness_id=action_witness_id,
+        limit=1,
+    )
+    if len(rows) != 1:
+        warnings.append("approved live action witness is missing")
+    else:
+        live_item = _review_action_witness(memory, rows[0])
+        if not live_item.passed:
+            warnings.append(
+                "approved live action witness no longer passes review: " + "; ".join(live_item.warnings)
+            )
+        if live_item.action_approval_id != str(row["action_approval_id"]):
+            warnings.append("approved live action witness points to a different action approval")
+        if live_item.capsule_id != capsule_id:
+            warnings.append("approved live action witness points to a different capsule")
+
+    current_capsule_snapshot = _capsule_snapshot_for_id(memory, capsule_id)
+    if approved_capsule_snapshot and current_capsule_snapshot != approved_capsule_snapshot:
+        warnings.append("approved target capsule changed after action rollback approval")
+
+    return ReconsolidationActionRollbackApprovalReviewItem(
+        approval_id=approval_id,
+        scope=str(row["scope"]),
+        action=action,
+        action_witness_id=action_witness_id,
+        action_approval_id=str(row["action_approval_id"]),
+        capsule_id=capsule_id,
+        approval_status=approval_status,
+        status="fail" if warnings else "pass",
+        warnings=warnings,
+    )
 
 
 def _shadow_rollback_action_witness(

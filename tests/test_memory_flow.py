@@ -3523,6 +3523,14 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(action_rb_approval["action_witness_id"], result.action_witness_id)
             self.assertEqual(action_rb_approval["capsule_id"], target.id)
             self.assertNotEqual(action_rb_approval["token_hash"], live_rollback_approval.token)
+            rollback_approval_review = memory.review_reconsolidation_action_rollback_approvals(
+                scope="alpha",
+                action="cool",
+                approval_id=live_rollback_approval.approval_id,
+            )
+            self.assertTrue(rollback_approval_review.passed, rollback_approval_review.as_dict())
+            self.assertEqual(rollback_approval_review.reviewed, 1)
+            self.assertEqual(rollback_approval_review.fail_count, 0)
 
             with memory.store.session() as conn:
                 conn.execute("UPDATE capsules SET body = body || ? WHERE id = ?", ("\nunreviewed drift", target.id))
@@ -3530,6 +3538,17 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(drifted.passed, drifted.as_dict())
             self.assertEqual(drifted.fail_count, 1)
             self.assertIn("target capsule changed after action witness", drifted.items[0].warnings)
+            drifted_rollback_approval = memory.review_reconsolidation_action_rollback_approvals(
+                scope="alpha",
+                action="cool",
+                approval_id=live_rollback_approval.approval_id,
+            )
+            self.assertFalse(drifted_rollback_approval.passed, drifted_rollback_approval.as_dict())
+            self.assertEqual(drifted_rollback_approval.fail_count, 1)
+            self.assertIn(
+                "approved target capsule changed after action rollback approval",
+                drifted_rollback_approval.items[0].warnings,
+            )
 
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

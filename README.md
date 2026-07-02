@@ -621,6 +621,11 @@ live witness to still pass review, freezes backup identity and capsule snapshot,
 and stores a short-lived one-use approval record. No live executor consumes that
 token yet; live action rollback remains closed until a future command can
 compare-and-set the target state and write its own rollback witness.
+`reconsolidation-action-rollback-approvals` is the read-only review layer for
+those prepared approvals. It consumes no token and mutates no capsule; it
+rechecks approval status/expiry, backup identity, backup verification, live
+action witness review, and target capsule snapshot drift before any future live
+rollback executor is allowed to trust an older approval.
 `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in
