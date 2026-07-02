@@ -585,8 +585,16 @@ the test bed. `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in
 that restored copy, preserves evidence capsules/source events/witnesses, and
-runs doctor before reporting success. It never touches the live store; a future
-live rollback still needs a separate approval token and witness table.
+runs doctor before reporting success. It never touches the live store.
+`prepare-live-reconsolidation-rollback` turns one passing shadow rollback for
+one explicit witness into a short-lived one-use approval token. Then
+`live-reconsolidation-rollback` requires that token plus the exact confirmation
+`ROLLBACK RECONSOLIDATION CANDIDATE`; it rechecks the backup identity, backup
+verification, witness invariants, and candidate capsule digest before a
+compare-and-set rejection of that single candidate frame capsule. It writes a
+`reconsolidation_rollback_witnesses` row and leaves evidence capsules, source
+events, original reconsolidation approvals, and original reconsolidation
+witnesses intact.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

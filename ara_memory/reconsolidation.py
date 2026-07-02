@@ -12,10 +12,11 @@ from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens
 from ara_memory.models import Capsule, CapsuleKind, Event, EventKind, MemoryStatus, new_id, utc_now
-from ara_memory.storage import row_to_capsule
+from ara_memory.storage import _invalidate_hot_scope, _sync_capsule_fts_row, row_to_capsule
 
 
 RECONSOLIDATION_APPLY_CONFIRMATION = "APPLY RECONSOLIDATION FRAME"
+RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION = "ROLLBACK RECONSOLIDATION CANDIDATE"
 
 
 @dataclass(slots=True)
@@ -450,6 +451,93 @@ class ReconsolidationShadowRollbackReport:
                 f"- [{item.status}] {item.witness_id} capsule={item.capsule_id}: "
                 f"{item.before_status or 'missing'} -> {item.after_status or 'missing'}; {warning}"
             )
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationLiveRollbackApproval:
+    approval_id: str
+    token: str
+    expires_at: str
+    shadow: ReconsolidationShadowRollbackReport
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "token": self.token,
+            "expires_at": self.expires_at,
+            "scope": self.shadow.scope,
+            "witness_id": self.shadow.items[0].witness_id if self.shadow.items else None,
+            "capsule_id": self.shadow.items[0].capsule_id if self.shadow.items else None,
+            "shadow": self.shadow.as_dict(),
+            "safety": [
+                "Approval is short-lived and one-use.",
+                "Live rollback is limited to one explicit reconsolidation witness.",
+                "Live rollback may only reject the candidate frame capsule created by that witness.",
+                "Evidence capsules, source events, approvals, and reconsolidation witnesses are preserved.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        item = self.shadow.items[0] if self.shadow.items else None
+        return "\n".join(
+            [
+                "# Ara Reconsolidation Live Rollback Prepare",
+                f"approval_id: {self.approval_id}",
+                f"expires_at: {self.expires_at}",
+                f"approval_token: {self.token}",
+                f"witness_id: {item.witness_id if item else 'none'}",
+                f"capsule_id: {item.capsule_id if item else 'none'}",
+                "## Safety",
+                "- Shadow rollback already passed on a verified restored backup.",
+                "- Live execution still requires exact confirmation.",
+                "- The only allowed live mutation is candidate frame capsule rejection.",
+            ]
+        )
+
+
+@dataclass(slots=True)
+class ReconsolidationLiveRollbackReport:
+    scope: str | None
+    passed: bool
+    rollback_approval_id: str | None
+    rollback_witness_id: str | None
+    reconsolidation_witness_id: str | None
+    capsule_id: str | None
+    before_status: str | None
+    after_status: str | None
+    doctor: dict[str, Any] | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "passed": self.passed,
+            "rollback_approval_id": self.rollback_approval_id,
+            "rollback_witness_id": self.rollback_witness_id,
+            "reconsolidation_witness_id": self.reconsolidation_witness_id,
+            "capsule_id": self.capsule_id,
+            "before_status": self.before_status,
+            "after_status": self.after_status,
+            "doctor": self.doctor,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Live Rollback: {self.scope or 'unknown'}",
+            f"status: {'pass' if self.passed else 'blocked'}",
+            f"rollback_approval_id: {self.rollback_approval_id or 'none'}",
+            f"rollback_witness_id: {self.rollback_witness_id or 'none'}",
+            f"reconsolidation_witness_id: {self.reconsolidation_witness_id or 'none'}",
+            f"capsule_id: {self.capsule_id or 'none'}",
+            f"status_change: {self.before_status or 'none'} -> {self.after_status or 'none'}",
+        ]
+        if self.doctor is not None:
+            lines.append(f"doctor: {self.doctor.get('passed')}")
         if self.recommendations:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
@@ -1161,6 +1249,249 @@ def shadow_reconsolidation_rollback(
         )
 
 
+def prepare_live_reconsolidation_rollback(
+    memory: Any,
+    *,
+    backup_path: Path,
+    witness_id: str,
+    scope: str | None = None,
+    ttl_minutes: int = 30,
+    doctor_query: str = "current memory state after reconsolidation rollback",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationLiveRollbackApproval:
+    clean_witness_id = witness_id.strip()
+    if not clean_witness_id:
+        raise ValueError("witness_id is required for live rollback approval.")
+    memory.store.init()
+    backup_path = backup_path.resolve()
+    backup_identity_before = _file_identity(backup_path)
+    shadow = shadow_reconsolidation_rollback(
+        memory,
+        backup_path=backup_path,
+        scope=scope,
+        witness_id=clean_witness_id,
+        limit=1,
+        doctor_query=doctor_query,
+        recall_budget=recall_budget,
+        hot_budget=hot_budget,
+        include_global=include_global,
+    )
+    if not shadow.passed or len(shadow.items) != 1:
+        raise ValueError("Cannot prepare live rollback because shadow rollback did not pass for exactly one witness.")
+    backup_identity_after = _file_identity(backup_path)
+    if backup_identity_before != backup_identity_after:
+        raise ValueError("Cannot prepare live rollback because backup changed during shadow rollback.")
+    row = _select_reconsolidation_witness_rows(
+        memory,
+        scope=scope,
+        approval_id=None,
+        witness_id=clean_witness_id,
+        limit=1,
+    )
+    if len(row) != 1:
+        raise ValueError("Cannot prepare live rollback because live reconsolidation witness is missing.")
+    live_scope = str(row[0]["scope"])
+    live_item = _inspect_rollback_witness(memory, row[0])
+    if not live_item.passed:
+        raise ValueError("Cannot prepare live rollback because live witness no longer matches rollback invariants.")
+    shadow_payload = shadow.as_dict()
+    shadow_payload["backup_identity"] = backup_identity_after
+    token = secrets.token_urlsafe(24)
+    approval_id = new_id("recon_rb_approval")
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+    capsule_snapshot = _capsule_snapshot_for_id(memory, live_item.capsule_id)
+    with memory.store.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_rollback_approvals(
+              id, token_hash, scope, backup_path, witness_id, approval_id, capsule_id,
+              shadow_json, backup_identity_json, capsule_snapshot_json, expires_at, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                _token_hash(token),
+                live_scope,
+                str(backup_path),
+                live_item.witness_id,
+                live_item.approval_id,
+                live_item.capsule_id,
+                json.dumps(shadow_payload, ensure_ascii=False, sort_keys=True),
+                json.dumps(backup_identity_after, ensure_ascii=False, sort_keys=True),
+                json.dumps(capsule_snapshot, ensure_ascii=False, sort_keys=True),
+                expires_at,
+                "prepared",
+                utc_now(),
+            ),
+        )
+    return ReconsolidationLiveRollbackApproval(
+        approval_id=approval_id,
+        token=token,
+        expires_at=expires_at,
+        shadow=shadow,
+    )
+
+
+def live_reconsolidation_rollback(
+    memory: Any,
+    *,
+    approval_token: str,
+    confirmation: str,
+    doctor_query: str = "current memory state after reconsolidation rollback",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationLiveRollbackReport:
+    memory.store.init()
+    if confirmation != RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION:
+        return ReconsolidationLiveRollbackReport(
+            scope=None,
+            passed=False,
+            rollback_approval_id=None,
+            rollback_witness_id=None,
+            reconsolidation_witness_id=None,
+            capsule_id=None,
+            before_status=None,
+            after_status=None,
+            doctor=None,
+            recommendations=[f"Confirmation must exactly match: {RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION}"],
+        )
+    approval = _load_live_rollback_approval(memory, approval_token)
+    if approval is None:
+        return _blocked_live_rollback_report(None, "Approval token was not found.")
+    if approval["status"] != "prepared":
+        return _blocked_live_rollback_report(approval, f"Approval status is {approval['status']}, not prepared.")
+    if _is_expired(str(approval["expires_at"])):
+        _mark_live_rollback_approval(memory, str(approval["id"]), "expired")
+        return _blocked_live_rollback_report(approval, "Approval token is expired.")
+    if _file_identity(Path(str(approval["backup_path"])).resolve()) != json.loads(str(approval["backup_identity_json"])):
+        return _blocked_live_rollback_report(approval, "Approved backup changed after rollback approval.")
+    backup_verification = memory.verify_backup(Path(str(approval["backup_path"])).resolve())
+    if not backup_verification.get("passed"):
+        return _blocked_live_rollback_report(approval, "Approved backup no longer verifies.")
+
+    rows = _select_reconsolidation_witness_rows(
+        memory,
+        scope=str(approval["scope"]),
+        approval_id=str(approval["approval_id"]),
+        witness_id=str(approval["witness_id"]),
+        limit=1,
+    )
+    if len(rows) != 1:
+        return _blocked_live_rollback_report(approval, "Approved reconsolidation witness is missing.")
+    live_scope = str(rows[0]["scope"])
+    item = _inspect_rollback_witness(memory, rows[0])
+    if not item.passed:
+        return _blocked_live_rollback_report(
+            approval,
+            "Approved reconsolidation witness no longer matches rollback invariants: " + "; ".join(item.warnings),
+        )
+    approved_snapshot = json.loads(str(approval["capsule_snapshot_json"]))
+    current_snapshot = _capsule_snapshot_for_id(memory, item.capsule_id)
+    if current_snapshot != approved_snapshot:
+        return _blocked_live_rollback_report(approval, "Approved candidate capsule changed after rollback approval.")
+
+    rollback_witness_id = new_id("recon_rb_witness")
+    now = utc_now()
+    before = {
+        "schema": "reconsolidation-live-rollback-before-v1",
+        "rollback_approval_id": approval["id"],
+        "reconsolidation_witness_id": item.witness_id,
+        "capsule": current_snapshot,
+        "shadow": json.loads(str(approval["shadow_json"])),
+    }
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM capsules WHERE id = ? AND status = ?",
+            (item.capsule_id, MemoryStatus.CANDIDATE.value),
+        ).fetchone()
+        if row is None:
+            return _blocked_live_rollback_report(approval, "Candidate capsule changed before live rollback.")
+        cur = conn.execute(
+            "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+            (MemoryStatus.REJECTED.value, now, item.capsule_id, MemoryStatus.CANDIDATE.value),
+        )
+        if cur.rowcount != 1:
+            return _blocked_live_rollback_report(approval, "Candidate rollback compare-and-set failed.")
+        updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (item.capsule_id,)).fetchone()
+        if updated is None:
+            return _blocked_live_rollback_report(approval, "Candidate capsule disappeared during live rollback.")
+        _sync_capsule_fts_row(conn, updated)
+        after_snapshot = _capsule_compare_snapshot(row_to_capsule(updated))
+        after = {
+            "schema": "reconsolidation-live-rollback-after-v1",
+            "rollback_approval_id": approval["id"],
+            "reconsolidation_witness_id": item.witness_id,
+            "capsule": after_snapshot,
+        }
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_rollback_witnesses(
+              id, rollback_approval_id, reconsolidation_witness_id, scope, capsule_id,
+              action, reason, before_json, after_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rollback_witness_id,
+                approval["id"],
+                item.witness_id,
+                live_scope,
+                item.capsule_id,
+                "reject-reconsolidation-candidate-frame",
+                "approved live rollback of candidate-only reconsolidation frame",
+                json.dumps(before, ensure_ascii=False, sort_keys=True),
+                json.dumps(after, ensure_ascii=False, sort_keys=True),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "reject-reconsolidation-candidate-frame",
+                item.capsule_id,
+                live_scope,
+                f"live rollback of reconsolidation witness {item.witness_id}",
+                "reconsolidation-live-rollback",
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE reconsolidation_rollback_approvals SET status = ?, used_at = ? WHERE id = ?",
+            ("used", now, approval["id"]),
+        )
+    _invalidate_hot_scope(memory.store.hot_dir, live_scope)
+    doctor = memory.doctor(
+        scope=live_scope,
+        recall_query=doctor_query,
+        recall_budget=recall_budget,
+        hot_budget=hot_budget,
+        include_global=include_global,
+    )
+    doctor_payload = doctor.as_dict()
+    return ReconsolidationLiveRollbackReport(
+        scope=live_scope,
+        passed=bool(doctor_payload.get("passed")),
+        rollback_approval_id=str(approval["id"]),
+        rollback_witness_id=rollback_witness_id,
+        reconsolidation_witness_id=item.witness_id,
+        capsule_id=item.capsule_id,
+        before_status=item.before_status,
+        after_status=MemoryStatus.REJECTED.value,
+        doctor=doctor_payload,
+        recommendations=[
+            "Live rollback rejected only the candidate frame capsule and preserved source events and witnesses.",
+            "Run health, recall-regression, backup, and restore-drill after live rollback.",
+        ],
+    )
+
+
 def _evidence_from_working_item(item: Any) -> ReconsolidationEvidence:
     return ReconsolidationEvidence(
         capsule_id=item.capsule_id,
@@ -1660,6 +1991,41 @@ def _blocked_apply_report(approval: dict[str, Any], message: str) -> Reconsolida
     )
 
 
+def _load_live_rollback_approval(memory: Any, token: str) -> dict[str, Any] | None:
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM reconsolidation_rollback_approvals WHERE token_hash = ?",
+            (_token_hash(token),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _mark_live_rollback_approval(memory: Any, approval_id: str, status: str) -> None:
+    with memory.store.session() as conn:
+        conn.execute(
+            "UPDATE reconsolidation_rollback_approvals SET status = ? WHERE id = ?",
+            (status, approval_id),
+        )
+
+
+def _blocked_live_rollback_report(
+    approval: dict[str, Any] | None,
+    message: str,
+) -> ReconsolidationLiveRollbackReport:
+    return ReconsolidationLiveRollbackReport(
+        scope=approval.get("scope") if approval else None,
+        passed=False,
+        rollback_approval_id=approval.get("id") if approval else None,
+        rollback_witness_id=None,
+        reconsolidation_witness_id=approval.get("witness_id") if approval else None,
+        capsule_id=approval.get("capsule_id") if approval else None,
+        before_status=None,
+        after_status=None,
+        doctor=None,
+        recommendations=[message],
+    )
+
+
 def _select_reconsolidation_witness_rows(
     memory: Any,
     *,
@@ -1697,12 +2063,10 @@ def _select_reconsolidation_witness_rows(
         ]
 
 
-def _shadow_rollback_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationShadowRollbackItem:
+def _inspect_rollback_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationShadowRollbackItem:
     capsule_id = str(row["capsule_id"])
     warnings: list[str] = []
     before_status: str | None = None
-    after_status: str | None = None
-    rolled_back = False
     try:
         before = json.loads(str(row["before_json"]))
         after = json.loads(str(row["after_json"]))
@@ -1717,7 +2081,6 @@ def _shadow_rollback_witness(memory: Any, row: dict[str, Any]) -> Reconsolidatio
             after_status=None,
             warnings=["malformed witness snapshot json"],
         )
-
     if before.get("frame_fingerprint") != row["frame_fingerprint"]:
         warnings.append("before snapshot fingerprint mismatch")
     if after.get("frame_fingerprint") != row["frame_fingerprint"]:
@@ -1731,28 +2094,47 @@ def _shadow_rollback_witness(memory: Any, row: dict[str, Any]) -> Reconsolidatio
         warnings.append("created frame capsule is missing")
     else:
         before_status = str(row_capsule["status"])
-        expected = _capsule_compare_snapshot(row_to_capsule(row_capsule))
+        current = _capsule_compare_snapshot(row_to_capsule(row_capsule))
         if isinstance(after_new, dict):
             for key in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
-                if expected.get(key) != after_new.get(key):
+                if current.get(key) != after_new.get(key):
                     warnings.append(f"created frame capsule changed field {key} before rollback")
                     break
         if before_status != MemoryStatus.CANDIDATE.value:
             warnings.append(f"created frame capsule status is {before_status}, not candidate")
-        if not warnings:
-            rolled_back = memory.store.update_capsule_status_if_current(
-                capsule_id,
-                MemoryStatus.CANDIDATE,
-                MemoryStatus.REJECTED,
-                actor="reconsolidation-shadow-rollback",
-                reason=f"shadow rollback of reconsolidation witness {row['id']}",
-            )
-            if not rolled_back:
-                warnings.append("candidate rollback compare-and-set failed")
-            updated = memory.store.get_capsule(capsule_id)
-            after_status = str(updated["status"]) if updated is not None else None
-            if after_status != MemoryStatus.REJECTED.value:
-                warnings.append("created frame capsule was not rejected by rollback")
+    return ReconsolidationShadowRollbackItem(
+        witness_id=str(row["id"]),
+        approval_id=str(row["approval_id"]),
+        capsule_id=capsule_id,
+        status="pass" if not warnings else "fail",
+        rolled_back=False,
+        before_status=before_status,
+        after_status=None,
+        warnings=warnings,
+    )
+
+
+def _shadow_rollback_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationShadowRollbackItem:
+    inspected = _inspect_rollback_witness(memory, row)
+    capsule_id = inspected.capsule_id
+    warnings = list(inspected.warnings)
+    before_status = inspected.before_status
+    after_status: str | None = inspected.after_status
+    rolled_back = False
+    if not warnings:
+        rolled_back = memory.store.update_capsule_status_if_current(
+            capsule_id,
+            MemoryStatus.CANDIDATE,
+            MemoryStatus.REJECTED,
+            actor="reconsolidation-shadow-rollback",
+            reason=f"shadow rollback of reconsolidation witness {row['id']}",
+        )
+        if not rolled_back:
+            warnings.append("candidate rollback compare-and-set failed")
+        updated = memory.store.get_capsule(capsule_id)
+        after_status = str(updated["status"]) if updated is not None else None
+        if after_status != MemoryStatus.REJECTED.value:
+            warnings.append("created frame capsule was not rejected by rollback")
     status = "pass" if rolled_back and not warnings else "fail"
     return ReconsolidationShadowRollbackItem(
         witness_id=str(row["id"]),
@@ -1781,6 +2163,27 @@ def _evidence_snapshot_warnings(memory: Any, snapshot: dict[str, Any]) -> list[s
                 warnings.append(f"evidence capsule {item['id']} changed field {key}")
                 break
     return warnings
+
+
+def _capsule_snapshot_for_id(memory: Any, capsule_id: str) -> dict[str, Any]:
+    row = memory.store.get_capsule(capsule_id)
+    if row is None:
+        return {"id": capsule_id, "missing": True}
+    return _capsule_compare_snapshot(row_to_capsule(row))
+
+
+def _file_identity(path: Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    digest = sha256()
+    with resolved.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": str(resolved),
+        "size": stat.st_size,
+        "sha256": digest.hexdigest(),
+    }
 
 
 def _is_expired(expires_at: str) -> bool:

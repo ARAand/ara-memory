@@ -2527,6 +2527,181 @@ class MemoryFlowTests(unittest.TestCase):
                 MemoryStatus.CANDIDATE.value,
             )
 
+    def test_live_reconsolidation_rollback_requires_shadow_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs approved live rollback after shadow proof.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural memory live rollback",
+                body="Ara's long-running natural memory purpose needs approved live rollback after shadow proof.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal", "natural-memory", "rollback"],
+                status=MemoryStatus.STABLE,
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: live rollback is token gated",
+                body="Live reconsolidation rollback requires a shadow proof, one-use token, and exact confirmation.",
+                scope="alpha",
+                confidence=0.84,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["decision", "rollback"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(decision)
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "approved live rollback after shadow proof",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            backup_path = Path(tmp) / "live-rollback.zip"
+            memory.backup(output=backup_path, archive_mode="none")
+
+            rollback_approval = memory.prepare_live_reconsolidation_rollback(
+                backup_path=backup_path,
+                witness_id=applied.witness_id or "",
+                scope="alpha",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            blocked = memory.live_reconsolidation_rollback(
+                approval_token=rollback_approval.token,
+                confirmation="WRONG",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            self.assertFalse(blocked.passed)
+            self.assertEqual(memory.store.get_capsule(applied.capsule_id or "")["status"], MemoryStatus.CANDIDATE.value)
+
+            result = memory.live_reconsolidation_rollback(
+                approval_token=rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION CANDIDATE",
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertTrue(result.passed, result.as_dict())
+            self.assertEqual(result.before_status, MemoryStatus.CANDIDATE.value)
+            self.assertEqual(result.after_status, MemoryStatus.REJECTED.value)
+            self.assertIsNotNone(result.rollback_witness_id)
+            self.assertEqual(memory.store.get_capsule(applied.capsule_id or "")["status"], MemoryStatus.REJECTED.value)
+            self.assertEqual(memory.store.get_capsule(goal.id)["status"], MemoryStatus.STABLE.value)
+            with memory.store.session() as conn:
+                rb_approval = conn.execute(
+                    "SELECT status FROM reconsolidation_rollback_approvals WHERE id = ?",
+                    (rollback_approval.approval_id,),
+                ).fetchone()
+                rb_witness = conn.execute(
+                    "SELECT * FROM reconsolidation_rollback_witnesses WHERE id = ?",
+                    (result.rollback_witness_id,),
+                ).fetchone()
+            self.assertEqual(rb_approval["status"], "used")
+            self.assertIsNotNone(rb_witness)
+            self.assertEqual(rb_witness["capsule_id"], applied.capsule_id)
+            reused = memory.live_reconsolidation_rollback(
+                approval_token=rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION CANDIDATE",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            self.assertFalse(reused.passed)
+            self.assertIn("not prepared", " ".join(reused.recommendations))
+
+    def test_live_reconsolidation_rollback_blocks_when_candidate_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs live rollback to block changed candidate frames.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: natural memory rollback drift",
+                    body="Ara's long-running natural memory purpose needs live rollback to block changed candidate frames.",
+                    scope="alpha",
+                    confidence=0.9,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "natural-memory", "rollback"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: block rollback drift",
+                    body="Live rollback must stop if the approved candidate frame changes after approval.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "rollback"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "live rollback block changed candidate frame",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            backup_path = Path(tmp) / "live-rollback-drift.zip"
+            memory.backup(output=backup_path, archive_mode="none")
+            rollback_approval = memory.prepare_live_reconsolidation_rollback(
+                backup_path=backup_path,
+                witness_id=applied.witness_id or "",
+                scope="alpha",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE capsules SET body = body || ? WHERE id = ?",
+                    ("\nchanged after rollback approval", applied.capsule_id),
+                )
+
+            result = memory.live_reconsolidation_rollback(
+                approval_token=rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION CANDIDATE",
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertFalse(result.passed, result.as_dict())
+            self.assertIn("changed", " ".join(result.recommendations))
+            self.assertEqual(memory.store.get_capsule(applied.capsule_id or "")["status"], MemoryStatus.CANDIDATE.value)
+
     def test_reconsolidation_review_queue_records_and_resolves_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -4881,9 +5056,25 @@ class MemoryFlowTests(unittest.TestCase):
                     WHERE type = 'table' AND name = 'reconsolidation_review_queue'
                     """
                 ).fetchone()
+                rollback_approval_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_rollback_approvals'
+                    """
+                ).fetchone()
+                rollback_witness_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_rollback_witnesses'
+                    """
+                ).fetchone()
             self.assertIn("rollback_witness_json", columns)
             self.assertEqual(row["rollback_witness_json"], "{}")
             self.assertIsNotNone(queue_table)
+            self.assertIsNotNone(rollback_approval_table)
+            self.assertIsNotNone(rollback_witness_table)
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:

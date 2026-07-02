@@ -382,6 +382,16 @@ class AraMemory:
 
         return shadow_reconsolidation_rollback(self, **kwargs)
 
+    def prepare_live_reconsolidation_rollback(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import prepare_live_reconsolidation_rollback
+
+        return prepare_live_reconsolidation_rollback(self, **kwargs)
+
+    def live_reconsolidation_rollback(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import live_reconsolidation_rollback
+
+        return live_reconsolidation_rollback(self, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

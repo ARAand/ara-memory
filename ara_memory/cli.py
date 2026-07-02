@@ -26,6 +26,7 @@ from ara_memory.relation_merge import (
 )
 from ara_memory.reconsolidation import (
     RECONSOLIDATION_APPLY_CONFIRMATION,
+    RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION,
     list_reconsolidation_review_queue,
     record_reconsolidation_review_queue,
 )
@@ -308,6 +309,39 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_shadow_rollback.add_argument("--hot-budget", type=int, default=900)
     reconsolidation_shadow_rollback.add_argument("--no-global", action="store_true")
     reconsolidation_shadow_rollback.add_argument("--json", action="store_true")
+    prepare_live_recon_rollback = sub.add_parser(
+        "prepare-live-reconsolidation-rollback",
+        help="Prepare a short-lived one-use token for live rollback of one reconsolidation candidate frame.",
+    )
+    prepare_live_recon_rollback.add_argument("--backup", type=Path, required=True)
+    prepare_live_recon_rollback.add_argument("--witness-id", required=True)
+    prepare_live_recon_rollback.add_argument("--scope", default=None)
+    prepare_live_recon_rollback.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_live_recon_rollback.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation rollback",
+    )
+    prepare_live_recon_rollback.add_argument("--recall-budget", type=int, default=1200)
+    prepare_live_recon_rollback.add_argument("--hot-budget", type=int, default=900)
+    prepare_live_recon_rollback.add_argument("--no-global", action="store_true")
+    prepare_live_recon_rollback.add_argument("--json", action="store_true")
+    live_recon_rollback = sub.add_parser(
+        "live-reconsolidation-rollback",
+        help=(
+            "Use a prepared one-use token to reject one reconsolidation candidate frame. "
+            f"Requires exact confirmation: {RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION!r}."
+        ),
+    )
+    live_recon_rollback.add_argument("--approval-token", required=True)
+    live_recon_rollback.add_argument("--confirm", required=True)
+    live_recon_rollback.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation rollback",
+    )
+    live_recon_rollback.add_argument("--recall-budget", type=int, default=1200)
+    live_recon_rollback.add_argument("--hot-budget", type=int, default=900)
+    live_recon_rollback.add_argument("--no-global", action="store_true")
+    live_recon_rollback.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
@@ -1370,6 +1404,42 @@ def main(argv: list[str] | None = None) -> int:
             approval_id=args.approval_id,
             witness_id=args.witness_id,
             limit=args.limit,
+            doctor_query=args.doctor_query,
+            recall_budget=args.recall_budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "prepare-live-reconsolidation-rollback":
+        try:
+            result = memory.prepare_live_reconsolidation_rollback(
+                backup_path=args.backup,
+                witness_id=args.witness_id,
+                scope=args.scope,
+                ttl_minutes=args.ttl_minutes,
+                doctor_query=args.doctor_query,
+                recall_budget=args.recall_budget,
+                hot_budget=args.hot_budget,
+                include_global=not args.no_global,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "live-reconsolidation-rollback":
+        result = memory.live_reconsolidation_rollback(
+            approval_token=args.approval_token,
+            confirmation=args.confirm,
             doctor_query=args.doctor_query,
             recall_budget=args.recall_budget,
             hot_budget=args.hot_budget,

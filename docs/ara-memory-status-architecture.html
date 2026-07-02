@@ -139,14 +139,15 @@
       <p class="lead">
         현재 시스템은 26시간 이상 제작 중인 장기 기억 저장소다. 목표는 모든 원문을 매번 읽는 구조가 아니라,
         목적, 정체성, 결정, 실패, 작업 맥락, 망각 경계를 분리하고 필요한 맥락만 불러오는 자연스러운 기억 구조다.
-        이번 단계에서는 candidate-only 재통합 경로 위에 rollback witness와 review queue를 붙여,
-        더 강한 live memory 변형 전에 시스템 스스로 blocker를 볼 수 있게 만들었다.
+        이번 단계에서는 candidate-only 재통합 경로 위에 rollback witness, review queue,
+        shadow rollback, live rollback approval gate를 붙여 더 강한 live memory 변형 전에
+        시스템 스스로 되돌릴 수 있는 경계를 갖게 만들었다.
       </p>
     </section>
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v17</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">shadow rollback executor</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v18</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">live rollback gate</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">core pass, stronger mutation still gated</span></div>
     </aside>
   </header>
@@ -167,12 +168,12 @@
     <article class="panel span-4">
       <h2>이번 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>을 17로 올리고 <code>reconsolidation_review_queue</code>를 추가했다.</li>
+        <li><code>SCHEMA_VERSION</code>을 18로 올리고 live rollback approval/witness table을 추가했다.</li>
         <li><code>reconsolidation-review --record-queue</code>가 fail/watch witness를 영속 큐로 기록한다.</li>
         <li>fail 항목은 <code>block-strong-reconsolidation</code>으로 저장되어 강한 live 변형을 막는 신호가 된다.</li>
-        <li>witness가 다시 pass하면 같은 witness의 open queue가 resolved로 닫힌다.</li>
-        <li><code>health</code>와 <code>goal-roadmap</code>이 open reconsolidation blocker pressure를 표시한다.</li>
-        <li><code>reconsolidation-review-queue</code> 명령으로 open/resolved 큐를 조회할 수 있다.</li>
+        <li><code>prepare-live-reconsolidation-rollback</code>은 passing shadow rollback 하나를 one-use token으로 고정한다.</li>
+        <li><code>live-reconsolidation-rollback</code>은 backup, witness, capsule digest를 재검증한 뒤 candidate frame capsule 하나만 rejected로 바꾼다.</li>
+        <li>live rollback은 별도 witness row를 남기며 evidence capsule, source event, 원래 witness는 보존한다.</li>
       </ul>
     </article>
 
@@ -180,8 +181,8 @@
       <h2>현재 리스크</h2>
       <ul>
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
-        <li>rollback witness는 shadow rollback executor까지 왔다. 다만 실제 live rollback 실행기는 아직 열지 않았다.</li>
-        <li>worker는 reconsolidation review queue를 자동 기록한다. 다만 강한 live mutation 실행 권한은 아직 열지 않았다.</li>
+        <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
+        <li>worker는 reconsolidation review queue를 자동 기록한다. 다만 promote/rewrite/delete/cool 같은 강한 live mutation 권한은 아직 열지 않았다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
         <li>보상해킹 방지는 시작됐지만, recall-policy feedback을 자동 정책 변경으로 연결하지 않는 제한이 유지되어야 한다.</li>
       </ul>
@@ -217,8 +218,8 @@
         </div>
         <div class="row">
           <strong>live rollback gate</strong>
-          <p>shadow rollback 증거를 live approval token과 rollback witness table에 연결한 뒤에만 실제 store에서 실행한다.</p>
-          <span class="badge watch">4-6h</span>
+          <p>완료: shadow rollback 증거를 one-use approval token과 rollback witness table에 연결하고, candidate frame capsule 하나만 live에서 rejected로 되돌린다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>exception witness</strong>
@@ -242,8 +243,8 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 shadow rollback을 live approval gate와 rollback witness table에 연결하는 것이다.</li>
-        <li>그 다음 exception witness를 붙여 의도된 증거 변경과 위험한 drift를 분리해야 한다.</li>
+        <li>다음 1순위는 exception witness를 붙여 의도된 증거 변경과 위험한 drift를 분리하는 것이다.</li>
+        <li>그 다음 강한 reconsolidation action을 작은 권한 단위로 나누어 preflight/rollback/exception gate에 연결해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
       </ul>
@@ -251,7 +252,7 @@
   </section>
 
   <footer>
-    Updated for schema v17 reconsolidation rollback review queue, worker recording, and shadow rollback executor. Open this file locally:
+    Updated for schema v18 reconsolidation rollback review queue, worker recording, shadow rollback, and live rollback gate. Open this file locally:
     <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>
