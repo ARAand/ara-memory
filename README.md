@@ -1163,12 +1163,19 @@ supersession so a concurrent status change cannot be silently overwritten.
 Inspect candidate memories before promoting:
 
 ```powershell
+python -m ara_memory promotion-candidates --scope ara-memory
 python -m ara_memory list --status candidate --limit 10
 python -m ara_memory list --status quarantined --limit 10
 python -m ara_memory actions
 python -m ara_memory risk --scope project
 python -m ara_memory review --scope project
 ```
+
+`promotion-candidates` is read-only. It reuses the quality score and shared
+promotion gate to split high-quality candidate capsules into `ready` and
+`blocked` groups before any `review-worker --apply` or manual promotion path is
+opened. A blocked result is evidence to improve provenance or risk handling, not
+permission to bypass the gate.
 
 The default advisor is deterministic and local. To route review decisions
 through an external AI or local model wrapper, set:

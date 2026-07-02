@@ -481,6 +481,12 @@ the task is installed or recently succeeded.
 candidate promotion is a boundary, not just a score threshold.
 
 ```text
+promotion_candidates(scope)
+  -> quality score candidate capsules
+  -> rerun shared deterministic promotion gate
+  -> split ready versus blocked high-quality candidates
+  -> read-only report; no capsule status mutation
+
 promotion recommendation
   -> reload capsule and source events
   -> deterministic risk gate

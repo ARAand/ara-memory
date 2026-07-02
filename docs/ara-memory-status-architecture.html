@@ -177,20 +177,21 @@
         <li><code>working-memory-impact-eval</code>은 작업기억 피드백을 capsule/source별로 읽기 전용 평가한다.</li>
         <li><code>health --compact</code>는 worker log와 상태 handoff용 저토큰 건강 보고를 낸다.</li>
         <li><code>review-compact --compact</code>는 대량 review marker를 action/reason별로 묶어 검토한다.</li>
+        <li><code>promotion-candidates</code>는 high-quality candidate를 ready/blocked로 나누는 읽기 전용 promotion gate다.</li>
       </ul>
     </article>
 
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,643</li>
-        <li>capsules: 3,610</li>
-        <li>relation nodes: 6,753</li>
-        <li>relation edges: 26,252</li>
+        <li>source events: 1,654</li>
+        <li>capsules: 3,629</li>
+        <li>relation nodes: 6,785</li>
+        <li>relation edges: 26,389</li>
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue: open 0</li>
         <li>distant-memory raw-to-map reduction: 907.6x</li>
-        <li>storage: 339,311,796 bytes, backups: 119,917,259 bytes</li>
+        <li>storage: 339,740,488 bytes, backups: 119,917,259 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -247,6 +248,11 @@
         <div class="row">
           <strong>Review compact summary</strong>
           <p>Completed: review-compact --compact groups non-destructive review markers by action and reason; 223 open markers were resolved without mutating capsules.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
+          <strong>Promotion candidate gate</strong>
+          <p>Completed: promotion-candidates reports ready versus blocked high-quality candidate memories without mutating capsule status.</p>
           <span class="badge pass">done</span>
         </div>
         <div class="row">

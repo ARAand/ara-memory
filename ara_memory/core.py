@@ -216,6 +216,13 @@ class AraMemory:
         scope = _canonical_scope(scope)
         return QualityScorer(self.store).run(scope=scope, limit=limit, persist=persist)
 
+    def promotion_candidates(self, *, scope: str | None = None, limit: int = 500, threshold: float | None = None) -> Any:
+        scope = _canonical_scope(scope)
+        kwargs: dict[str, Any] = {"scope": scope, "limit": limit}
+        if threshold is not None:
+            kwargs["threshold"] = threshold
+        return QualityScorer(self.store).promotion_candidates(**kwargs)
+
     def review_queue(self, *, scope: str | None = None, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
         scope = _canonical_scope(scope)
         return QualityScorer(self.store).list_queue(scope=scope, status=status, limit=limit)

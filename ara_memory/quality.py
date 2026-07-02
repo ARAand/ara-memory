@@ -88,6 +88,83 @@ class QualityReport:
 
 
 @dataclass(slots=True)
+class PromotionCandidateItem:
+    capsule_id: str
+    scope: str
+    status: str
+    kind: str
+    title: str
+    quality_score: float
+    priority: float
+    gate: str
+    reasons: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "capsule_id": self.capsule_id,
+            "scope": self.scope,
+            "status": self.status,
+            "kind": self.kind,
+            "title": self.title,
+            "quality_score": round(self.quality_score, 3),
+            "priority": round(self.priority, 3),
+            "gate": self.gate,
+            "reasons": self.reasons,
+        }
+
+
+@dataclass(slots=True)
+class PromotionCandidateReport:
+    scope: str | None
+    limit: int
+    threshold: float
+    scanned: int
+    ready: list[PromotionCandidateItem]
+    blocked: list[PromotionCandidateItem]
+
+    @property
+    def passed(self) -> bool:
+        return True
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "limit": self.limit,
+            "threshold": round(self.threshold, 3),
+            "scanned": self.scanned,
+            "ready_count": len(self.ready),
+            "blocked_count": len(self.blocked),
+            "ready": [item.as_dict() for item in self.ready],
+            "blocked": [item.as_dict() for item in self.blocked],
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Promotion Candidates: {scope}",
+            f"scanned={self.scanned}, threshold={self.threshold:.2f}, ready={len(self.ready)}, blocked={len(self.blocked)}",
+        ]
+        lines.append("## Ready")
+        if self.ready:
+            for item in self.ready[:20]:
+                lines.append(
+                    f"- {item.capsule_id} [{item.kind}] quality={item.quality_score:.2f}: {item.title}"
+                )
+        else:
+            lines.append("- None.")
+        lines.append("## Blocked")
+        if self.blocked:
+            for item in self.blocked[:20]:
+                lines.append(
+                    f"- {item.capsule_id} [{item.kind}] quality={item.quality_score:.2f}: "
+                    f"{'; '.join(item.reasons[:2])}"
+                )
+        else:
+            lines.append("- None.")
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
 class ReviewWorkerItem:
     queue_id: str
     capsule_id: str
@@ -397,6 +474,38 @@ class QualityScorer:
             queue = self._persist(items)
         totals = _totals(items)
         return QualityReport(scope=scope, persisted=persist, totals=totals, items=items, queue=queue)
+
+    def promotion_candidates(
+        self,
+        *,
+        scope: str | None = None,
+        limit: int = 500,
+        threshold: float = PROMOTE_THRESHOLD,
+    ) -> PromotionCandidateReport:
+        self.store.init()
+        capsules = self._capsules(scope=scope, limit=limit)
+        ready: list[PromotionCandidateItem] = []
+        blocked: list[PromotionCandidateItem] = []
+        for cap in capsules:
+            if cap["status"] != MemoryStatus.CANDIDATE.value:
+                continue
+            item = self._score(cap)
+            if item.quality_score < threshold:
+                continue
+            if item.action == "promote":
+                ready.append(_promotion_candidate_item(item, gate="ready"))
+            elif any(str(reason).startswith("promotion gate blocked") for reason in item.reasons):
+                blocked.append(_promotion_candidate_item(item, gate="blocked"))
+        ready.sort(key=lambda item: (item.priority, item.quality_score), reverse=True)
+        blocked.sort(key=lambda item: (item.priority, item.quality_score), reverse=True)
+        return PromotionCandidateReport(
+            scope=scope,
+            limit=limit,
+            threshold=threshold,
+            scanned=len(capsules),
+            ready=ready,
+            blocked=blocked,
+        )
 
     def list_queue(self, *, scope: str | None = None, status: str = "open", limit: int = 50) -> list[dict[str, Any]]:
         self.store.init()
@@ -943,6 +1052,20 @@ def _action_for(cap: dict[str, Any], *, quality: float, decay: float) -> tuple[s
         reasons.append("low quality score")
         return "review", reasons
     return "keep", ["quality is acceptable"]
+
+
+def _promotion_candidate_item(item: QualityItem, *, gate: str) -> PromotionCandidateItem:
+    return PromotionCandidateItem(
+        capsule_id=item.capsule_id,
+        scope=item.scope,
+        status=item.status,
+        kind=item.kind,
+        title=item.title,
+        quality_score=item.quality_score,
+        priority=item.priority,
+        gate=gate,
+        reasons=list(item.reasons),
+    )
 
 
 def _priority(action: str, *, quality: float, decay: float, risk_score: float) -> float:

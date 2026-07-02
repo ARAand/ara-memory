@@ -805,6 +805,11 @@ def main(argv: list[str] | None = None) -> int:
     quality.add_argument("--limit", type=int, default=500)
     quality.add_argument("--persist", action="store_true")
     quality.add_argument("--json", action="store_true")
+    promotion_candidates = sub.add_parser("promotion-candidates")
+    promotion_candidates.add_argument("--scope", default=None)
+    promotion_candidates.add_argument("--limit", type=int, default=500)
+    promotion_candidates.add_argument("--threshold", type=float, default=None)
+    promotion_candidates.add_argument("--json", action="store_true")
     review_queue = sub.add_parser("review-queue")
     review_queue.add_argument("--scope", default=None)
     review_queue.add_argument("--status", default="open")
@@ -2276,6 +2281,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "quality":
         result = memory.quality(scope=args.scope, limit=args.limit, persist=args.persist)
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "promotion-candidates":
+        result = memory.promotion_candidates(scope=args.scope, limit=args.limit, threshold=args.threshold)
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:

@@ -13662,6 +13662,87 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.promoted, 0)
             self.assertEqual(memory.store.get_capsule(orphan.id)["status"], MemoryStatus.CANDIDATE.value)
 
+    def test_promotion_candidates_report_ready_and_blocked_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            first = memory.retain(
+                kind="note",
+                text="Independent evidence: project alpha should promote corroborated memory.",
+                source="test-a",
+                scope="alpha",
+            )
+            second = memory.retain(
+                kind="note",
+                text="Independent evidence: project alpha should promote corroborated memory.",
+                source="test-b",
+                scope="alpha",
+            )
+            weak = memory.retain(
+                kind="note",
+                text="Single weak evidence: project alpha should not promote yet.",
+                source="test-c",
+                scope="alpha",
+            )
+            ready = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="corroborated promotion candidate",
+                body="Project alpha should promote corroborated memory.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[first.id, second.id],
+                tags=["promotion", "candidate"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            blocked = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="single source blocked promotion candidate",
+                body="Project alpha should not promote yet.",
+                scope="alpha",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[weak.id],
+                tags=["promotion", "candidate"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(ready)
+            memory.store.upsert_capsule(blocked)
+
+            report = memory.promotion_candidates(scope="alpha", threshold=0.70)
+
+            self.assertEqual([item.capsule_id for item in report.ready], [ready.id], report.as_dict())
+            self.assertEqual([item.capsule_id for item in report.blocked], [blocked.id], report.as_dict())
+            self.assertIn("promotion gate blocked", report.blocked[0].reasons[0])
+            self.assertEqual(memory.store.get_capsule(ready.id)["status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(memory.store.get_capsule(blocked.id)["status"], MemoryStatus.CANDIDATE.value)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "promotion-candidates",
+                    "--scope",
+                    "alpha",
+                    "--threshold",
+                    "0.70",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["ready_count"], 1)
+            self.assertEqual(payload["blocked_count"], 1)
+            self.assertEqual(payload["ready"][0]["capsule_id"], ready.id)
+            self.assertEqual(payload["blocked"][0]["capsule_id"], blocked.id)
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
