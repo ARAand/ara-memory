@@ -352,6 +352,15 @@ def main(argv: list[str] | None = None) -> int:
     live_recon_cool.add_argument("--hot-budget", type=int, default=900)
     live_recon_cool.add_argument("--no-global", action="store_true")
     live_recon_cool.add_argument("--json", action="store_true")
+    recon_action_witnesses = sub.add_parser(
+        "reconsolidation-action-witnesses",
+        help="Review live reconsolidation action witnesses against their allowed field-transition policy.",
+    )
+    recon_action_witnesses.add_argument("--scope", default=None)
+    recon_action_witnesses.add_argument("--action", choices=STRONG_RECONSOLIDATION_ACTIONS, default=None)
+    recon_action_witnesses.add_argument("--witness-id", default=None)
+    recon_action_witnesses.add_argument("--limit", type=int, default=50)
+    recon_action_witnesses.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1530,6 +1539,19 @@ def main(argv: list[str] | None = None) -> int:
             recall_budget=args.recall_budget,
             hot_budget=args.hot_budget,
             include_global=not args.no_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-action-witnesses":
+        result = memory.review_reconsolidation_action_witnesses(
+            scope=args.scope,
+            action=args.action,
+            witness_id=args.witness_id,
+            limit=args.limit,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

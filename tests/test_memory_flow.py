@@ -3479,6 +3479,21 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIsNotNone(witness_row)
             self.assertEqual(witness_row["action"], "cool")
             self.assertEqual(witness_row["capsule_id"], target.id)
+            review = memory.review_reconsolidation_action_witnesses(scope="alpha", action="cool")
+            self.assertTrue(review.passed, review.as_dict())
+            self.assertEqual(review.reviewed, 1)
+            self.assertEqual(set(review.items[0].field_transitions), {"status"})
+            self.assertEqual(
+                review.items[0].field_transitions["status"],
+                {"before": MemoryStatus.STABLE.value, "after": MemoryStatus.SUPERSEDED.value},
+            )
+
+            with memory.store.session() as conn:
+                conn.execute("UPDATE capsules SET body = body || ? WHERE id = ?", ("\nunreviewed drift", target.id))
+            drifted = memory.review_reconsolidation_action_witnesses(scope="alpha", action="cool")
+            self.assertFalse(drifted.passed, drifted.as_dict())
+            self.assertEqual(drifted.fail_count, 1)
+            self.assertIn("target capsule changed after action witness", drifted.items[0].warnings)
 
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

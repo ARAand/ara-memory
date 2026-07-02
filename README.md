@@ -606,7 +606,10 @@ narrow: it consumes one prepared `cool` approval, requires the exact future
 confirmation from the action gate, blocks core purpose/identity/preference
 anchors, and can only compare-and-set one active capsule to `superseded` while
 preserving the capsule text and source events in a
-`reconsolidation_action_witnesses` row.
+`reconsolidation_action_witnesses` row. `reconsolidation-action-witnesses`
+reviews those live action witnesses against an explicit field-transition policy:
+the current `cool` policy permits only `status: candidate|stable -> superseded`
+and fails if later drift changes the target capsule after the witness.
 `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in

@@ -387,6 +387,11 @@ class AraMemory:
 
         return live_reconsolidation_cool(self, **kwargs)
 
+    def review_reconsolidation_action_witnesses(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import review_reconsolidation_action_witnesses
+
+        return review_reconsolidation_action_witnesses(self, **kwargs)
+
     def shadow_reconsolidation_rollback(self, **kwargs: Any) -> Any:
         from ara_memory.reconsolidation import shadow_reconsolidation_rollback
 

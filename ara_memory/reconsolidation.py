@@ -756,6 +756,78 @@ class ReconsolidationExceptionWitnessList:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class ReconsolidationActionWitnessItem:
+    action_witness_id: str
+    action_approval_id: str
+    scope: str
+    action: str
+    capsule_id: str
+    status: str
+    field_transitions: dict[str, dict[str, Any]]
+    warnings: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "action_witness_id": self.action_witness_id,
+            "action_approval_id": self.action_approval_id,
+            "scope": self.scope,
+            "action": self.action,
+            "capsule_id": self.capsule_id,
+            "status": self.status,
+            "field_transitions": self.field_transitions,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class ReconsolidationActionWitnessReview:
+    scope: str | None
+    action: str | None
+    status: str
+    reviewed: int
+    fail_count: int
+    items: list[ReconsolidationActionWitnessItem]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "action": self.action,
+            "status": self.status,
+            "reviewed": self.reviewed,
+            "fail_count": self.fail_count,
+            "items": [item.as_dict() for item in self.items],
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        action = self.action or "all"
+        lines = [
+            f"# Ara Reconsolidation Action Witness Review: {self.scope or 'all'}",
+            f"action: {action}",
+            f"status: {self.status}",
+            f"reviewed: {self.reviewed}",
+            f"fail_count: {self.fail_count}",
+        ]
+        for item in self.items[:30]:
+            changed = ",".join(sorted(item.field_transitions)) or "none"
+            lines.append(
+                f"- [{item.status}] {item.action_witness_id} action={item.action} "
+                f"capsule={item.capsule_id} changed={changed}"
+            )
+            for warning in item.warnings[:3]:
+                lines.append(f"  warning: {warning}")
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def build_reconsolidation_frame(
     memory: Any,
     query: str,
@@ -1834,6 +1906,64 @@ def live_reconsolidation_cool(
             "Live cool consumed one prepared action approval and wrote an action witness.",
             "Only the target capsule status changed to superseded; source events and capsule text were preserved.",
         ],
+    )
+
+
+def review_reconsolidation_action_witnesses(
+    memory: Any,
+    *,
+    scope: str | None = None,
+    action: str | None = None,
+    witness_id: str | None = None,
+    limit: int = 50,
+) -> ReconsolidationActionWitnessReview:
+    memory.store.init()
+    clauses: list[str] = []
+    args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    if action:
+        clean_action = _normalize_strong_reconsolidation_actions([action])[0]
+        clauses.append("action = ?")
+        args.append(clean_action)
+    else:
+        clean_action = None
+    if witness_id:
+        clauses.append("id = ?")
+        args.append(witness_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    args.append(max(1, int(limit)))
+    with memory.store.session() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM reconsolidation_action_witnesses
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+    items = [_review_action_witness(memory, row) for row in rows]
+    fail_count = sum(1 for item in items if item.status == "fail")
+    status = "fail" if fail_count else "pass"
+    recommendations = (
+        ["Repair or roll back failed live action witnesses before opening rewrite, promote, or delete executors."]
+        if fail_count
+        else ["Live action witnesses match their recorded field-transition policy."]
+    )
+    return ReconsolidationActionWitnessReview(
+        scope=scope,
+        action=clean_action,
+        status=status,
+        reviewed=len(items),
+        fail_count=fail_count,
+        items=items,
+        recommendations=recommendations,
     )
 
 
@@ -2980,6 +3110,106 @@ def _blocked_live_action_report(
         doctor=None,
         recommendations=[message],
     )
+
+
+def _review_action_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationActionWitnessItem:
+    warnings: list[str] = []
+    try:
+        before = json.loads(str(row["before_json"]))
+        after = json.loads(str(row["after_json"]))
+    except json.JSONDecodeError:
+        return ReconsolidationActionWitnessItem(
+            action_witness_id=str(row["id"]),
+            action_approval_id=str(row["action_approval_id"]),
+            scope=str(row["scope"]),
+            action=str(row["action"]),
+            capsule_id=str(row["capsule_id"]),
+            status="fail",
+            field_transitions={},
+            warnings=["action witness JSON is malformed"],
+        )
+    if before.get("schema") != "reconsolidation-live-action-before-v1":
+        warnings.append("before snapshot schema mismatch")
+    if after.get("schema") != "reconsolidation-live-action-after-v1":
+        warnings.append("after snapshot schema mismatch")
+    if before.get("action_approval_id") != row["action_approval_id"]:
+        warnings.append("before snapshot approval mismatch")
+    if after.get("action_approval_id") != row["action_approval_id"]:
+        warnings.append("after snapshot approval mismatch")
+    if before.get("action") != row["action"] or after.get("action") != row["action"]:
+        warnings.append("action snapshot mismatch")
+    before_capsule = before.get("capsule")
+    after_capsule = after.get("capsule")
+    if not isinstance(before_capsule, dict) or not isinstance(after_capsule, dict):
+        warnings.append("action witness capsule snapshot missing")
+        before_capsule = before_capsule if isinstance(before_capsule, dict) else {}
+        after_capsule = after_capsule if isinstance(after_capsule, dict) else {}
+    if before_capsule.get("id") != row["capsule_id"] or after_capsule.get("id") != row["capsule_id"]:
+        warnings.append("capsule id snapshot mismatch")
+    if before_capsule.get("scope") != row["scope"] or after_capsule.get("scope") != row["scope"]:
+        warnings.append("scope snapshot mismatch")
+    transitions = _snapshot_field_transitions(before_capsule, after_capsule)
+    warnings.extend(_action_transition_warnings(str(row["action"]), transitions, before_capsule, after_capsule))
+    current = _capsule_snapshot_for_id(memory, str(row["capsule_id"]))
+    if current.get("missing"):
+        warnings.append("target capsule is missing after live action")
+    elif current != after_capsule:
+        warnings.append("target capsule changed after action witness")
+    with memory.store.session() as conn:
+        approval = conn.execute(
+            "SELECT status FROM reconsolidation_action_approvals WHERE id = ?",
+            (row["action_approval_id"],),
+        ).fetchone()
+    if approval is None:
+        warnings.append("action approval is missing")
+    elif approval["status"] != "used":
+        warnings.append(f"action approval status is {approval['status']}, not used")
+    return ReconsolidationActionWitnessItem(
+        action_witness_id=str(row["id"]),
+        action_approval_id=str(row["action_approval_id"]),
+        scope=str(row["scope"]),
+        action=str(row["action"]),
+        capsule_id=str(row["capsule_id"]),
+        status="fail" if warnings else "pass",
+        field_transitions=transitions,
+        warnings=warnings,
+    )
+
+
+def _snapshot_field_transitions(
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    transitions: dict[str, dict[str, Any]] = {}
+    for field in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
+        before_value = before_snapshot.get(field)
+        after_value = after_snapshot.get(field)
+        if before_value != after_value:
+            transitions[field] = {"before": before_value, "after": after_value}
+    return transitions
+
+
+def _action_transition_warnings(
+    action: str,
+    transitions: dict[str, dict[str, Any]],
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+) -> list[str]:
+    if action != "cool":
+        return [f"live action witness review has no policy for action {action}"]
+    warnings: list[str] = []
+    if set(transitions) != {"status"}:
+        warnings.append("cool action changed fields other than status")
+    status_change = transitions.get("status")
+    if not status_change:
+        warnings.append("cool action did not record a status transition")
+    elif status_change.get("before") not in {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}:
+        warnings.append("cool action started from a non-active status")
+    elif status_change.get("after") != MemoryStatus.SUPERSEDED.value:
+        warnings.append("cool action did not end in superseded status")
+    if before_snapshot.get("id") != after_snapshot.get("id"):
+        warnings.append("cool action changed capsule identity")
+    return warnings
 
 
 def _blocked_live_rollback_report(

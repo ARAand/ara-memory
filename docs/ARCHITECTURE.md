@@ -174,6 +174,12 @@ live_reconsolidation_cool(approval_token, capsule_id, confirm)
   -> compare-and-set exactly one active target capsule to superseded
   -> preserve capsule text and source events and write reconsolidation_action_witnesses
 
+reconsolidation_action_witnesses(scope, action, witness_id)
+  -> review live action witnesses against an explicit per-action field-transition policy
+  -> require current cool witnesses to show only status: candidate|stable -> superseded
+  -> fail if target capsule state drifts after the witness or if approval/token evidence is missing
+  -> act as the common witness-review floor before any future rewrite, promote, or delete executor
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

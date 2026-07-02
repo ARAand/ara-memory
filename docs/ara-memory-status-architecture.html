@@ -136,7 +136,7 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v19</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">rollback backfill + roadmap pass</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">live cool + action witness review</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap pass</span></div>
     </aside>
   </header>
@@ -236,7 +236,7 @@
         </div>
         <div class="row">
           <strong>strong action gate</strong>
-          <p>진행: promote/rewrite/delete/cool capability matrix, action approval record, live cool executor를 추가했다. 남음: rewrite/promote/delete executor는 아직 닫혀 있으며 더 강한 rollback witness가 필요하다.</p>
+          <p>진행: promote/rewrite/delete/cool capability matrix, action approval record, live cool executor, live action witness review를 추가했다. 남음: rewrite/promote/delete executor는 아직 닫혀 있으며 더 강한 rollback witness가 필요하다.</p>
           <span class="badge watch">3-6h</span>
         </div>
         <div class="row">
@@ -251,7 +251,7 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 live cool과 같은 구조를 rewrite/promote/delete로 확장하기 전에 더 강한 before/after field witness와 shadow rollback을 설계하는 것이다.</li>
+        <li>다음 1순위는 live cool과 같은 구조를 rewrite/promote/delete로 확장하기 전에 action witness review 위에 더 강한 before/after field witness와 shadow rollback을 붙이는 것이다.</li>
         <li>live mutation은 promote/rewrite/delete/cool 권한마다 별도 confirmation, target snapshot, witness를 요구해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
@@ -260,7 +260,7 @@
   </section>
 
   <footer>
-    Updated for schema v21 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, strong action gate matrix, action approval records, and live cool action witnesses.
+    Updated for schema v21 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, strong action gate matrix, action approval records, live cool action witnesses, and live action witness review.
     Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>
