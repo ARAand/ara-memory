@@ -39,6 +39,7 @@ from ara_memory.relation_merge import (
     RELATION_MERGE_CONFIRMATION,
     apply_relation_merge_approval,
     prepare_relation_merge_approval,
+    review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
 from ara_memory.regression import RecallRegressionCase
@@ -719,6 +720,17 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("candidate_node", witness["before_json"])
             self.assertEqual(edge["evidence_count"], 2)
             self.assertEqual(edge["confidence"], 0.8)
+            review = review_relation_merge_witnesses(
+                memory.store,
+                scope="alpha",
+                approval_id=str(approval.approval_id),
+            )
+            self.assertTrue(review.passed, review.as_dict())
+            self.assertEqual(review.reviewed, 1)
+            self.assertEqual(review.pass_count, 1)
+            self.assertEqual(review.items[0].before_evidence_count, 2)
+            self.assertEqual(review.items[0].after_evidence_count, 2)
+            self.assertEqual(review.items[0].duplicate_edges_coalesced, 1)
             reused = apply_relation_merge_approval(
                 memory.store,
                 approval_token=str(approval.token),
@@ -726,6 +738,73 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertFalse(reused.passed)
             self.assertIn("not prepared", " ".join(reused.recommendations))
+
+    def test_relation_merge_review_fails_when_witness_keeps_candidate_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: relation merge review",
+                body="Relation merge review should catch unsafe witness state.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["relation", "review"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="backup restore procedure",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="backup restore drill",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.7,
+            )
+            approval = prepare_relation_merge_approval(
+                memory.store,
+                scope="alpha",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+                ttl_minutes=5,
+            )
+            applied = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation=RELATION_MERGE_CONFIRMATION,
+            )
+            self.assertTrue(applied.passed)
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM relation_merge_witnesses WHERE approval_id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                after = json.loads(row["after_json"])
+                before = json.loads(row["before_json"])
+                after["candidate_node"] = before["candidate_node"]
+                after["edges"] = before["edges"]
+                conn.execute(
+                    "UPDATE relation_merge_witnesses SET after_json = ? WHERE id = ?",
+                    (json.dumps(after, ensure_ascii=False, sort_keys=True), row["id"]),
+                )
+
+            review = review_relation_merge_witnesses(memory.store, scope="alpha")
+
+            self.assertFalse(review.passed)
+            self.assertEqual(review.fail_count, 1)
+            self.assertIn("candidate node still exists after merge", review.items[0].warnings)
+            self.assertIn("candidate edge references remain after merge", review.items[0].warnings)
 
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [

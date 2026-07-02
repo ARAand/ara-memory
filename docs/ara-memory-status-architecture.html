@@ -370,15 +370,15 @@
         </p>
         <div class="meta" aria-label="현재 빌드 메타데이터">
           <span class="pill">branch: codex/ara-memory-natural-memory-gates</span>
-          <span class="pill">base commit: fbc7177</span>
-          <span class="pill">state: uncommitted v13 apply work</span>
+          <span class="pill">base commit: 16d3102</span>
+          <span class="pill">state: uncommitted relation review work</span>
           <span class="pill">scope: ara-memory</span>
           <span class="pill">elapsed: 26h</span>
         </div>
       </div>
       <aside class="stamp">
-        <strong>2026-07-02 16:18 +09:00</strong>
-        증거 기반 스냅샷. 테스트, 헬스, 로드맵, 백업 검증을 현재 작업트리에서 재확인했습니다.
+        <strong>2026-07-02 16:27 +09:00</strong>
+        증거 기반 스냅샷. relation merge witness review work가 진행 중이며 전체 테스트는 현재 작업트리 기준 통과했습니다.
       </aside>
     </header>
 
@@ -388,11 +388,11 @@
         <article class="card">
           <div class="label">작업트리</div>
           <div class="value watch">ready</div>
-          <p class="detail">브랜치는 원격과 맞춰져 있고, schema v13 relation merge apply 변경이 커밋 대기 중입니다.</p>
+          <p class="detail">브랜치는 원격과 맞춰져 있고, relation merge witness review 변경이 커밋 대기 중입니다.</p>
         </article>
         <article class="card">
           <div class="label">테스트</div>
-          <div class="value ok">336</div>
+          <div class="value ok">337</div>
           <p class="detail"><code>python -m unittest discover -s tests</code> 통과, skipped=1.</p>
         </article>
         <article class="card">
@@ -419,7 +419,7 @@
             <li>purpose continuity, identity continuity, semantic hygiene, milestone readiness 통과.</li>
             <li>schema v13 기준 relation_nodes 5623개, relation_edges 21145개가 temporal edge에서 정규화됐습니다.</li>
             <li>temporal edge를 normalized relation_nodes / relation_edges로 정규화하고, bounded 2-hop graph spreading activation이 relation graph를 우선 사용합니다.</li>
-            <li>semantic relation merge는 dry-run, prepare approval, one-use apply까지 생겼고 apply는 fingerprint 재검사와 rollback witness를 요구합니다.</li>
+            <li>semantic relation merge는 dry-run, prepare approval, one-use apply, witness review까지 생겼고 apply는 fingerprint 재검사와 rollback witness를 요구합니다.</li>
             <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
           </ul>
         </article>
@@ -427,7 +427,7 @@
           <h3>아직 아닌 것</h3>
           <ul>
             <li>사람 같은 기억의 핵심인 재구성, 망각, 감정적 salience, 자기 목적성은 아직 v0 단계입니다.</li>
-            <li>relation node 의미 병합은 one-use apply까지 들어갔지만 review automation, global spreading, reconsolidation은 남아 있습니다.</li>
+            <li>relation node 의미 병합은 witness review까지 들어갔지만 review queue/worker 연결, global spreading, reconsolidation은 남아 있습니다.</li>
             <li>cold memory가 70%라 비파괴 retention evidence는 통과했지만, protected-only drift와 실제 prunable drift를 계속 구분해야 합니다.</li>
             <li>보상해킹 방어는 테스트와 게이트가 있으나, 장기 자기평가 루프는 아직 충분히 적대적으로 검증되지 않았습니다.</li>
           </ul>
@@ -538,9 +538,9 @@
               <td>완료</td>
             </tr>
             <tr>
-              <td>Relation merge review automation</td>
-              <td>one-use apply 결과를 review queue, regression sandbox, recall impact audit와 연결</td>
-              <td>6-12h</td>
+              <td>Relation merge review integration</td>
+              <td>witness review 결과를 review queue, regression sandbox, recall impact audit와 연결</td>
+              <td>4-8h</td>
               <td>높음</td>
             </tr>
             <tr>
@@ -584,7 +584,7 @@
         <article class="panel">
           <h3>최소 다음 버전</h3>
           <p>
-            8-16시간이면 relation merge review automation, global spreading policy, privacy gate 일부까지 넣은
+            8-16시간이면 relation merge review integration, global spreading policy, privacy gate 일부까지 넣은
             “사용 가능한 v0.2”로 갈 수 있습니다.
           </p>
         </article>
@@ -597,7 +597,7 @@
         </article>
       </div>
       <div class="callout watch-border" style="margin-top:14px;">
-        Ara 판단: 운영 게이트는 초록이고 relation merge는 one-use apply까지 올라왔습니다. 다음 작업은 review automation, global spreading sandbox, reconsolidation frame입니다.
+        Ara 판단: 운영 게이트는 초록이고 relation merge는 witness review까지 올라왔습니다. 다음 작업은 review queue/worker 연결, global spreading sandbox, reconsolidation frame입니다.
         이제는 기억을 보존하는 능력에서 기억을 재구성하는 능력으로 넘어가야 합니다.
       </div>
     </section>

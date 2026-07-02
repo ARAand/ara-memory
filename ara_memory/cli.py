@@ -19,6 +19,7 @@ from ara_memory.relation_merge import (
     RELATION_MERGE_CONFIRMATION,
     apply_relation_merge_approval,
     prepare_relation_merge_approval,
+    review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
@@ -402,6 +403,14 @@ def main(argv: list[str] | None = None) -> int:
     relation_merge_apply.add_argument("--approval-token", required=True)
     relation_merge_apply.add_argument("--confirm", required=True)
     relation_merge_apply.add_argument("--json", action="store_true")
+    relation_merge_review = sub.add_parser(
+        "relation-merge-review",
+        help="Review applied relation-node merge witnesses for non-destructive recall-impact safety signals.",
+    )
+    relation_merge_review.add_argument("--scope", default=None)
+    relation_merge_review.add_argument("--approval-id", default=None)
+    relation_merge_review.add_argument("--limit", type=int, default=50)
+    relation_merge_review.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -1398,6 +1407,19 @@ def main(argv: list[str] | None = None) -> int:
             memory.store,
             approval_token=args.approval_token,
             confirmation=args.confirm,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "relation-merge-review":
+        result = review_relation_merge_witnesses(
+            memory.store,
+            scope=args.scope,
+            approval_id=args.approval_id,
+            limit=args.limit,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

@@ -214,6 +214,94 @@ class RelationMergeApplyReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RelationMergeReviewItem:
+    witness_id: str
+    approval_id: str
+    scope: str
+    canonical_node_id: str
+    candidate_node_id: str
+    status: str
+    before_edge_count: int
+    after_edge_count: int
+    before_evidence_count: int
+    after_evidence_count: int
+    duplicate_edges_coalesced: int
+    self_loops_removed: int
+    warnings: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status == "pass"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "witness_id": self.witness_id,
+            "approval_id": self.approval_id,
+            "scope": self.scope,
+            "canonical_node_id": self.canonical_node_id,
+            "candidate_node_id": self.candidate_node_id,
+            "status": self.status,
+            "passed": self.passed,
+            "before_edge_count": self.before_edge_count,
+            "after_edge_count": self.after_edge_count,
+            "before_evidence_count": self.before_evidence_count,
+            "after_evidence_count": self.after_evidence_count,
+            "duplicate_edges_coalesced": self.duplicate_edges_coalesced,
+            "self_loops_removed": self.self_loops_removed,
+            "warnings": self.warnings,
+        }
+
+
+@dataclass(slots=True)
+class RelationMergeReviewReport:
+    scope: str | None
+    approval_id: str | None
+    passed: bool
+    reviewed: int
+    pass_count: int
+    watch_count: int
+    fail_count: int
+    items: list[RelationMergeReviewItem]
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "approval_id": self.approval_id,
+            "passed": self.passed,
+            "reviewed": self.reviewed,
+            "pass_count": self.pass_count,
+            "watch_count": self.watch_count,
+            "fail_count": self.fail_count,
+            "items": [item.as_dict() for item in self.items],
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        status = "pass" if self.passed else "watch"
+        lines = [
+            f"# Ara Relation Merge Review: {scope}",
+            f"status: {status}",
+            f"reviewed={self.reviewed}, pass={self.pass_count}, watch={self.watch_count}, fail={self.fail_count}",
+        ]
+        if not self.items:
+            lines.append("- No relation merge witnesses matched the review filter.")
+        for item in self.items[:20]:
+            warning = "; ".join(item.warnings) if item.warnings else "witness invariants hold"
+            lines.append(
+                "- "
+                f"[{item.status}] {item.witness_id} approval={item.approval_id} "
+                f"edges {item.before_edge_count}->{item.after_edge_count}, "
+                f"evidence {item.before_evidence_count}->{item.after_evidence_count}: {warning}"
+            )
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def run_relation_merge_dry_run(
     store: MemoryStore,
     *,
@@ -442,6 +530,65 @@ def apply_relation_merge_approval(
             "Relation merge apply consumed the approval token and wrote rollback witnesses.",
             "Run doctor, recall-regression, context-eval, backup, and restore-drill after reviewed relation merges.",
         ],
+    )
+
+
+def review_relation_merge_witnesses(
+    store: MemoryStore,
+    *,
+    scope: str | None = None,
+    approval_id: str | None = None,
+    limit: int = 50,
+) -> RelationMergeReviewReport:
+    store.init()
+    clauses: list[str] = []
+    args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    if approval_id:
+        clauses.append("approval_id = ?")
+        args.append(approval_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    args.append(limit)
+    with store.session() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM relation_merge_witnesses
+                {where}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+    items = [_review_witness(row) for row in rows]
+    pass_count = sum(1 for item in items if item.status == "pass")
+    watch_count = sum(1 for item in items if item.status == "watch")
+    fail_count = sum(1 for item in items if item.status == "fail")
+    recommendations = [
+        "Run recall-regression and context-eval after any watch/fail relation merge review.",
+        "Use rollback witnesses for manual repair if a merge loses evidence or leaves candidate references.",
+    ]
+    if not items:
+        recommendations = ["Run relation-merge-apply before reviewing applied merge witnesses."]
+    elif fail_count:
+        recommendations.insert(0, "Block further relation-merge-apply until failed witnesses are repaired or explained.")
+    elif watch_count:
+        recommendations.insert(0, "Inspect watched witnesses before applying more relation-node merges.")
+    return RelationMergeReviewReport(
+        scope=scope,
+        approval_id=approval_id,
+        passed=fail_count == 0,
+        reviewed=len(items),
+        pass_count=pass_count,
+        watch_count=watch_count,
+        fail_count=fail_count,
+        items=items,
+        recommendations=recommendations,
     )
 
 
@@ -836,3 +983,115 @@ def _relation_edge_id(
         f"{subject_node_id}\0{predicate_norm}\0{object_node_id}\0{scope}\0{source}".encode("utf-8")
     ).hexdigest()[:18]
     return f"rel_edge_{digest}"
+
+
+def _review_witness(row: dict[str, Any]) -> RelationMergeReviewItem:
+    warnings: list[str] = []
+    before = json.loads(str(row["before_json"]))
+    after = json.loads(str(row["after_json"]))
+    before_edges = _json_edges(before)
+    after_edges = _json_edges(after)
+    before_evidence = _edge_evidence_total(before_edges)
+    after_evidence = _edge_evidence_total(after_edges)
+    candidate_id = str(row["candidate_node_id"])
+    canonical_id = str(row["canonical_node_id"])
+    before_candidate_refs = _edge_node_refs(before_edges, candidate_id)
+    after_candidate_refs = _edge_node_refs(after_edges, candidate_id)
+    after_canonical_refs = _edge_node_refs(after_edges, canonical_id)
+    duplicate_edges_coalesced = max(
+        0,
+        _edge_signature_duplicate_count(before_edges, candidate_id=candidate_id, canonical_id=canonical_id)
+        - _edge_signature_duplicate_count(after_edges, candidate_id=candidate_id, canonical_id=canonical_id),
+    )
+    after_self_loops = _self_loop_count(after_edges)
+    self_loops_removed = max(0, _self_loop_count(before_edges) - after_self_loops)
+    if not before.get("candidate_node"):
+        warnings.append("before snapshot is missing candidate_node")
+    if after.get("candidate_node") is not None:
+        warnings.append("candidate node still exists after merge")
+    if before_candidate_refs <= 0:
+        warnings.append("before snapshot had no candidate edge references")
+    if after_candidate_refs > 0:
+        warnings.append("candidate edge references remain after merge")
+    if after_canonical_refs <= 0 and before_edges:
+        warnings.append("canonical node has no affected edges after merge")
+    if after_evidence < before_evidence:
+        warnings.append("relation evidence_count decreased")
+    if after_self_loops > 0:
+        warnings.append("self-loop relation edge remained after merge")
+    status = "pass"
+    if warnings:
+        status = "fail" if any(_is_failed_review_warning(item) for item in warnings) else "watch"
+    return RelationMergeReviewItem(
+        witness_id=str(row["id"]),
+        approval_id=str(row["approval_id"]),
+        scope=str(row["scope"]),
+        canonical_node_id=canonical_id,
+        candidate_node_id=candidate_id,
+        status=status,
+        before_edge_count=len(before_edges),
+        after_edge_count=len(after_edges),
+        before_evidence_count=before_evidence,
+        after_evidence_count=after_evidence,
+        duplicate_edges_coalesced=duplicate_edges_coalesced,
+        self_loops_removed=self_loops_removed,
+        warnings=warnings,
+    )
+
+
+def _json_edges(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    edges = snapshot.get("edges")
+    if not isinstance(edges, list):
+        return []
+    return [dict(item) for item in edges if isinstance(item, dict)]
+
+
+def _edge_evidence_total(edges: list[dict[str, Any]]) -> int:
+    total = 0
+    for edge in edges:
+        try:
+            total += int(edge.get("evidence_count") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _edge_node_refs(edges: list[dict[str, Any]], node_id: str) -> int:
+    return sum(
+        1
+        for edge in edges
+        if str(edge.get("subject_node_id")) == node_id or str(edge.get("object_node_id")) == node_id
+    )
+
+
+def _edge_signature_duplicate_count(
+    edges: list[dict[str, Any]],
+    *,
+    candidate_id: str,
+    canonical_id: str,
+) -> int:
+    seen: dict[tuple[str, str, str, str], int] = {}
+    for edge in edges:
+        subject = canonical_id if str(edge.get("subject_node_id")) == candidate_id else str(edge.get("subject_node_id"))
+        object_ = canonical_id if str(edge.get("object_node_id")) == candidate_id else str(edge.get("object_node_id"))
+        key = (
+            subject,
+            str(edge.get("predicate_norm")),
+            object_,
+            str(edge.get("source_capsule_id") or ""),
+        )
+        seen[key] = seen.get(key, 0) + 1
+    return sum(count - 1 for count in seen.values() if count > 1)
+
+
+def _self_loop_count(edges: list[dict[str, Any]]) -> int:
+    return sum(1 for edge in edges if str(edge.get("subject_node_id")) == str(edge.get("object_node_id")))
+
+
+def _is_failed_review_warning(warning: str) -> bool:
+    return warning in {
+        "candidate node still exists after merge",
+        "candidate edge references remain after merge",
+        "relation evidence_count decreased",
+        "self-loop relation edge remained after merge",
+    }

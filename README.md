@@ -29,8 +29,11 @@ relation nodes for likely aliases without mutating the graph. A separate
 approval token, relation fingerprint, and rollback witness preview.
 `relation-merge-apply` can consume that token once, re-run the same dry-run,
 compare the fingerprint, merge approved relation nodes in one transaction, and
-write rollback witnesses. The next layers are review-queue integration,
-reconsolidation frames, and broader global graph policies.
+write rollback witnesses. `relation-merge-review` audits those witnesses
+without mutating memory: it checks that the candidate node disappeared, edge
+references were rewired, duplicate evidence was coalesced, and evidence counts
+did not shrink. The next layers are review-queue integration, regression
+sandboxing, reconsolidation frames, and broader global graph policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -370,11 +373,14 @@ dry-run parameters, compares the relation fingerprint and candidate snapshot,
 then rewires only the approved candidate node edges into the canonical node. It
 coalesces duplicate relation edges by evidence count and confidence, deletes the
 merged alias node, marks the approval used, and writes
-`relation_merge_witnesses` in the same transaction. On the current operating
-store, the strict default review threshold intentionally returns no
-high-confidence `ara-memory` candidates; fixture tests prove the gates can still
-surface, freeze, and apply real alias candidates when evidence is present,
-including Korean relation labels.
+`relation_merge_witnesses` in the same transaction. `relation-merge-review`
+then reads those witnesses as a non-destructive impact audit and reports
+pass/watch/fail signals for candidate remnants, remaining edge references,
+self-loops, duplicate coalescing, and evidence-count preservation. On the
+current operating store, the strict default review threshold intentionally
+returns no high-confidence `ara-memory` candidates; fixture tests prove the
+gates can still surface, freeze, apply, and review real alias candidates when
+evidence is present, including Korean relation labels.
 
 `working-memory` is the smaller action layer between hot memory and cold
 recall. It turns the current prompt, active files, command errors, constraints,
