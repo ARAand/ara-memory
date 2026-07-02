@@ -146,7 +146,7 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v17</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">reconsolidation rollback review queue</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">shadow rollback executor</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">core pass, stronger mutation still gated</span></div>
     </aside>
   </header>
@@ -180,7 +180,7 @@
       <h2>현재 리스크</h2>
       <ul>
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
-        <li>rollback witness는 preview와 review queue까지 왔지만, 실제 live rollback 실행기는 아직 없다.</li>
+        <li>rollback witness는 shadow rollback executor까지 왔다. 다만 실제 live rollback 실행기는 아직 열지 않았다.</li>
         <li>worker는 reconsolidation review queue를 자동 기록한다. 다만 강한 live mutation 실행 권한은 아직 열지 않았다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
         <li>보상해킹 방지는 시작됐지만, recall-policy feedback을 자동 정책 변경으로 연결하지 않는 제한이 유지되어야 한다.</li>
@@ -211,9 +211,14 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
-          <strong>live rollback executor</strong>
-          <p>rollback witness를 실제 복구 계획으로 바꾸되, shadow restore와 compare-and-set을 통과한 경우에만 live 실행한다.</p>
-          <span class="badge watch">5-8h</span>
+          <strong>shadow rollback executor</strong>
+          <p>완료: 검증된 backup을 임시 shadow store로 복구하고 reconsolidation witness가 만든 candidate frame capsule만 rejected로 되돌린다.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
+          <strong>live rollback gate</strong>
+          <p>shadow rollback 증거를 live approval token과 rollback witness table에 연결한 뒤에만 실제 store에서 실행한다.</p>
+          <span class="badge watch">4-6h</span>
         </div>
         <div class="row">
           <strong>exception witness</strong>
@@ -237,7 +242,7 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 rollback executor를 shadow-first로 구현하는 것이다.</li>
+        <li>다음 1순위는 shadow rollback을 live approval gate와 rollback witness table에 연결하는 것이다.</li>
         <li>그 다음 exception witness를 붙여 의도된 증거 변경과 위험한 drift를 분리해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
@@ -246,7 +251,7 @@
   </section>
 
   <footer>
-    Updated for schema v17 reconsolidation rollback review queue and worker recording. Open this file locally:
+    Updated for schema v17 reconsolidation rollback review queue, worker recording, and shadow rollback executor. Open this file locally:
     <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>

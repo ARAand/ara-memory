@@ -2451,6 +2451,82 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(review.fail_count, 1)
             self.assertIn("created frame capsule changed field body_digest", review.items[0].warnings)
 
+    def test_reconsolidation_shadow_rollback_rejects_candidate_only_in_restored_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs a shadow rollback executor before live reconsolidation mutation opens.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: natural memory shadow rollback",
+                    body=(
+                        "Ara's long-running natural memory purpose needs a shadow rollback executor "
+                        "before live reconsolidation mutation opens."
+                    ),
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "reconsolidation", "rollback"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: rollback starts in shadow",
+                    body="Reconsolidation rollback should be proven in a restored backup before live execution.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "rollback"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "shadow rollback executor before live reconsolidation mutation",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertIsNotNone(applied.capsule_id)
+            backup_path = Path(tmp) / "rollback-shadow.zip"
+            memory.backup(output=backup_path, archive_mode="none")
+
+            report = memory.shadow_reconsolidation_rollback(
+                backup_path=backup_path,
+                scope="alpha",
+                witness_id=applied.witness_id,
+                recall_budget=900,
+                hot_budget=700,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.reviewed, 1)
+            self.assertEqual(report.rolled_back, 1)
+            self.assertEqual(report.fail_count, 0)
+            self.assertEqual(report.items[0].capsule_id, applied.capsule_id)
+            self.assertEqual(report.items[0].before_status, MemoryStatus.CANDIDATE.value)
+            self.assertEqual(report.items[0].after_status, MemoryStatus.REJECTED.value)
+            self.assertEqual(
+                memory.store.get_capsule(applied.capsule_id or "")["status"],
+                MemoryStatus.CANDIDATE.value,
+            )
+
     def test_reconsolidation_review_queue_records_and_resolves_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

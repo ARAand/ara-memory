@@ -377,6 +377,11 @@ class AraMemory:
 
         return strong_reconsolidation_preflight(self, query, **kwargs)
 
+    def shadow_reconsolidation_rollback(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import shadow_reconsolidation_rollback
+
+        return shadow_reconsolidation_rollback(self, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

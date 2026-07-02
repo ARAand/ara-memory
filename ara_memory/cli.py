@@ -291,6 +291,23 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_strong_preflight.add_argument("--regression-manifest", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--regression-baseline", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--json", action="store_true")
+    reconsolidation_shadow_rollback = sub.add_parser(
+        "reconsolidation-shadow-rollback",
+        help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
+    )
+    reconsolidation_shadow_rollback.add_argument("--backup", type=Path, required=True)
+    reconsolidation_shadow_rollback.add_argument("--scope", default=None)
+    reconsolidation_shadow_rollback.add_argument("--approval-id", default=None)
+    reconsolidation_shadow_rollback.add_argument("--witness-id", default=None)
+    reconsolidation_shadow_rollback.add_argument("--limit", type=int, default=20)
+    reconsolidation_shadow_rollback.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation rollback",
+    )
+    reconsolidation_shadow_rollback.add_argument("--recall-budget", type=int, default=1200)
+    reconsolidation_shadow_rollback.add_argument("--hot-budget", type=int, default=900)
+    reconsolidation_shadow_rollback.add_argument("--no-global", action="store_true")
+    reconsolidation_shadow_rollback.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
@@ -1339,6 +1356,24 @@ def main(argv: list[str] | None = None) -> int:
             include_hot=not args.no_hot,
             regression_cases=cases,
             regression_baseline=baseline,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-shadow-rollback":
+        result = memory.shadow_reconsolidation_rollback(
+            backup_path=args.backup,
+            scope=args.scope,
+            approval_id=args.approval_id,
+            witness_id=args.witness_id,
+            limit=args.limit,
+            doctor_query=args.doctor_query,
+            recall_budget=args.recall_budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

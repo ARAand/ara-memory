@@ -581,7 +581,12 @@ a backup, restores it into a temporary shadow store, runs prepare/apply/review
 and optional recall-regression there, and redacts the shadow approval token from
 output. Passing preflight is not permission to mutate live memory; it is evidence
 that a stronger live gate can be designed without relying on the live store as
-the test bed.
+the test bed. `reconsolidation-shadow-rollback` is the rollback executor's
+shadow-first proof: it restores a verified backup, selects applied
+reconsolidation witnesses, rejects only the created candidate frame capsule in
+that restored copy, preserves evidence capsules/source events/witnesses, and
+runs doctor before reporting success. It never touches the live store; a future
+live rollback still needs a separate approval token and witness table.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

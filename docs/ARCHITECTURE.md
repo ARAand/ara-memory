@@ -379,6 +379,16 @@ unsafe. The worker also takes a filesystem lock by default, so overlapping
 scheduler invocations skip safely instead of racing over
 the same spool and SQLite store.
 
+`reconsolidation-shadow-rollback` is the first rollback executor, but it is
+deliberately shadow-only. It verifies a backup, restores it into a temporary
+memory root, selects applied reconsolidation witnesses, checks that evidence
+capsule digests still match the rollback witness, then compare-and-set rejects
+only the candidate frame capsule created by the witness. Source events,
+approvals, evidence capsules, and witness rows remain intact for audit. The
+restored shadow store must still pass doctor before the rollback report passes.
+This proves the rollback plan without giving live memory a destructive mutation
+path.
+
 External advisor providers receive redacted candidate projections when the
 deterministic auditor has already marked a memory as unsafe for promotion or hot
 recall.
