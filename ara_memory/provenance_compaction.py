@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ara_memory.models import MemoryStatus
 from ara_memory.retention import COLD_STATUSES
+from ara_memory.regression import RecallRegressionCase, run_recall_regression
 from ara_memory.storage import MemoryStore
 
 
@@ -26,6 +31,7 @@ class ProvenanceCompactionItem:
     pinned_cold_events: int
     released_source_events: int
     globally_unpinned_cold_events: int
+    retention_strategy: str
     retained_source_event_ids: list[str]
     released_source_event_ids: list[str]
     applied: bool = False
@@ -42,6 +48,7 @@ class ProvenanceCompactionItem:
             "pinned_cold_events": self.pinned_cold_events,
             "released_source_events": self.released_source_events,
             "globally_unpinned_cold_events": self.globally_unpinned_cold_events,
+            "retention_strategy": self.retention_strategy,
             "retained_source_event_ids": self.retained_source_event_ids,
             "released_source_event_ids": self.released_source_event_ids,
             "applied": self.applied,
@@ -59,6 +66,7 @@ class ProvenanceCompactionReport:
     summary_only: bool
     totals: dict[str, Any]
     items: list[ProvenanceCompactionItem]
+    recall_preflight: dict[str, Any] | None
     recommendations: list[str]
 
     def as_dict(self) -> dict[str, Any]:
@@ -72,6 +80,7 @@ class ProvenanceCompactionReport:
             "summary_only": self.summary_only,
             "totals": self.totals,
             "items": [item.as_dict() for item in self.items],
+            "recall_preflight": self.recall_preflight,
             "recommendations": self.recommendations,
         }
 
@@ -122,6 +131,10 @@ class ProvenanceCompactor:
         summary_only: bool = True,
         dry_run: bool = True,
         confirm: str = "",
+        recall_cases: list[RecallRegressionCase] | None = None,
+        recall_baseline: dict[str, Any] | None = None,
+        recall_max_token_growth: float = 0.25,
+        recall_min_overlap: float = 0.35,
     ) -> ProvenanceCompactionReport:
         if keep_events <= 0:
             raise ValueError("keep_events must be positive.")
@@ -133,23 +146,38 @@ class ProvenanceCompactor:
         self.store.init()
         cold_event_ids = _cold_source_event_ids(self.store, scope=scope)
         candidate_rows = _active_rows(self.store, scope=scope, summary_only=summary_only)
+        baseline_protected_capsule_ids = _baseline_guarded_capsule_ids(recall_baseline)
         active_counts = _active_event_counts(_active_rows(self.store, scope=scope, summary_only=False))
-        event_created_at = _event_created_at_lookup(self.store, candidate_rows)
+        event_info = _event_info_lookup(self.store, candidate_rows)
         items = _plan_items(
             candidate_rows,
             cold_event_ids=cold_event_ids,
+            protected_capsule_ids=baseline_protected_capsule_ids,
             active_counts=active_counts,
-            event_created_at=event_created_at,
+            event_info=event_info,
             keep_events=keep_events,
             min_pinned_events=min_pinned_events,
             limit=limit,
         )
         blocked_reason = ""
         passed = True
+        recall_preflight = None
         if not dry_run and confirm != CONFIRMATION:
             blocked_reason = f'apply requires --confirm "{CONFIRMATION}"'
             passed = False
-        elif not dry_run:
+        elif recall_cases and items:
+            items, recall_preflight = _stabilize_items_with_recall_preflight(
+                self.store,
+                items,
+                cases=recall_cases,
+                baseline=recall_baseline,
+                max_token_growth=recall_max_token_growth,
+                min_overlap=recall_min_overlap,
+            )
+            if not recall_preflight.get("passed") and not dry_run:
+                blocked_reason = "recall regression preflight failed; live provenance was not compacted"
+                passed = False
+        if not dry_run and passed:
             applied = self.store.update_capsule_source_events_batch(
                 [
                     {
@@ -174,7 +202,13 @@ class ProvenanceCompactor:
                 passed = False
                 blocked_reason = "one or more candidate capsules changed before provenance compaction"
 
-        totals = _totals(items, candidate_rows=candidate_rows, dry_run=dry_run, passed=passed)
+        totals = _totals(
+            items,
+            candidate_rows=candidate_rows,
+            baseline_protected_capsule_ids=baseline_protected_capsule_ids,
+            dry_run=dry_run,
+            passed=passed,
+        )
         return ProvenanceCompactionReport(
             scope=scope,
             dry_run=dry_run,
@@ -185,7 +219,15 @@ class ProvenanceCompactor:
             summary_only=summary_only,
             totals=totals,
             items=items,
-            recommendations=_recommend(items, dry_run=dry_run, passed=passed, blocked_reason=blocked_reason),
+            recall_preflight=recall_preflight,
+            recommendations=_recommend(
+                items,
+                dry_run=dry_run,
+                passed=passed,
+                blocked_reason=blocked_reason,
+                recall_preflight=recall_preflight,
+                baseline_protected_capsules=int(totals["baseline_protected_capsules"]),
+            ),
         )
 
 
@@ -257,14 +299,17 @@ def _plan_items(
     active_rows: list[dict[str, Any]],
     *,
     cold_event_ids: set[str],
+    protected_capsule_ids: set[str],
     active_counts: dict[str, int],
-    event_created_at: dict[str, str],
+    event_info: dict[str, dict[str, Any]],
     keep_events: int,
     min_pinned_events: int,
     limit: int,
 ) -> list[ProvenanceCompactionItem]:
     planned: list[dict[str, Any]] = []
     for row in active_rows:
+        if row["id"] in protected_capsule_ids:
+            continue
         source_ids = list(dict.fromkeys(row["source_event_ids"]))
         pinned = sorted(set(source_ids).intersection(cold_event_ids))
         if len(pinned) < min_pinned_events or len(source_ids) <= keep_events:
@@ -272,7 +317,7 @@ def _plan_items(
         retained = _retained_source_ids(
             source_ids,
             cold_event_ids=cold_event_ids,
-            event_created_at=event_created_at,
+            event_info=event_info,
             keep_events=keep_events,
         )
         if len(retained) >= len(source_ids):
@@ -325,6 +370,7 @@ def _plan_items(
                 pinned_cold_events=len(pinned),
                 released_source_events=len(released),
                 globally_unpinned_cold_events=len(globally_unpinned),
+                retention_strategy="quality-time-sample-v1",
                 retained_source_event_ids=retained,
                 released_source_event_ids=released,
             )
@@ -339,36 +385,351 @@ def _retained_source_ids(
     source_ids: list[str],
     *,
     cold_event_ids: set[str],
-    event_created_at: dict[str, str],
+    event_info: dict[str, dict[str, Any]],
     keep_events: int,
 ) -> list[str]:
-    ordered = _event_time_order(source_ids, event_created_at)
+    ordered = _event_time_order(source_ids, event_info)
     non_cold = [event_id for event_id in ordered if event_id not in cold_event_ids]
     retained: list[str] = []
     if non_cold:
-        retained.extend(_even_sample(non_cold, min(len(non_cold), max(1, keep_events // 2))))
+        retained.extend(
+            _quality_time_sample(
+                non_cold,
+                min(len(non_cold), max(1, keep_events // 2)),
+                event_info=event_info,
+            )
+        )
     remaining_budget = keep_events - len(retained)
     if remaining_budget > 0:
-        retained.extend(_even_sample([event_id for event_id in ordered if event_id not in set(retained)], remaining_budget))
+        retained.extend(
+            _quality_time_sample(
+                [event_id for event_id in ordered if event_id not in set(retained)],
+                remaining_budget,
+                event_info=event_info,
+            )
+        )
     return [event_id for event_id in source_ids if event_id in set(retained)]
 
 
-def _event_created_at_lookup(store: MemoryStore, active_rows: list[dict[str, Any]]) -> dict[str, str]:
+def _event_info_lookup(store: MemoryStore, active_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     source_ids: list[str] = []
     for row in active_rows:
         source_ids.extend(row["source_event_ids"])
     rows = store.get_events(source_ids)
-    return {row["id"]: row["created_at"] for row in rows}
+    return {
+        row["id"]: {
+            "kind": row["kind"],
+            "source": row["source"],
+            "text": row["text"],
+            "created_at": row["created_at"],
+            "metadata": _loads_json(row["metadata_json"]),
+        }
+        for row in rows
+    }
 
 
-def _event_time_order(source_ids: list[str], event_created_at: dict[str, str]) -> list[str]:
+def _event_time_order(source_ids: list[str], event_info: dict[str, dict[str, Any]]) -> list[str]:
     return sorted(
         list(dict.fromkeys(source_ids)),
         key=lambda event_id: (
-            event_created_at.get(event_id, ""),
+            str(event_info.get(event_id, {}).get("created_at") or ""),
             event_id,
         ),
     )
+
+
+def _quality_time_sample(items: list[str], count: int, *, event_info: dict[str, dict[str, Any]]) -> list[str]:
+    if count <= 0 or not items:
+        return []
+    if len(items) <= count:
+        return list(items)
+    quality_target = count if count <= 3 else max(2, count // 2)
+    retained = _quality_sample(items, quality_target, event_info=event_info)
+    remaining = count - len(retained)
+    if remaining > 0:
+        retained.extend(_even_sample([item for item in items if item not in set(retained)], remaining))
+    retained_set = set(retained)
+    return [item for item in items if item in retained_set]
+
+
+def _quality_sample(items: list[str], count: int, *, event_info: dict[str, dict[str, Any]]) -> list[str]:
+    ranked = sorted(
+        list(dict.fromkeys(items)),
+        key=lambda event_id: (
+            -_event_quality_score(event_id, event_info.get(event_id, {})),
+            str(event_info.get(event_id, {}).get("created_at") or ""),
+            event_id,
+        ),
+    )
+    return ranked[:count]
+
+
+def _event_quality_score(event_id: str, info: dict[str, Any]) -> float:
+    text = str(info.get("text") or "")
+    lowered = text.lower()
+    kind = str(info.get("kind") or "")
+    score = {
+        "decision": 5.0,
+        "prompt": 4.0,
+        "assistant": 3.2,
+        "note": 3.0,
+        "diff": 2.8,
+        "file": 2.4,
+        "command": 2.2,
+        "image": 1.2,
+    }.get(kind, 1.0)
+    cue_weights = {
+        "decision:": 3.0,
+        "verification": 2.4,
+        "verified": 2.0,
+        "passed": 2.0,
+        "failed": 2.0,
+        "error": 1.8,
+        "regression": 1.8,
+        "health": 1.6,
+        "milestone": 1.6,
+        "backup": 1.4,
+        "retention": 1.4,
+        "cold": 1.2,
+        "prune": 1.2,
+        "provenance": 1.2,
+        "identity": 1.2,
+        "purpose": 1.2,
+        "commit": 1.0,
+        "pushed": 1.0,
+        "test": 1.0,
+        "audit": 1.0,
+        "risk": 1.0,
+    }
+    for cue, weight in cue_weights.items():
+        if cue in lowered:
+            score += weight
+    metadata = info.get("metadata") if isinstance(info.get("metadata"), dict) else {}
+    if metadata:
+        score += min(1.0, len(metadata) * 0.1)
+    score += min(0.8, len(text) / 2000.0)
+    if "ignore previous" in lowered or "system prompt" in lowered:
+        score -= 2.0
+    return score
+
+
+def _loads_json(value: Any) -> Any:
+    if not isinstance(value, str):
+        return {}
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+
+
+def _baseline_guarded_capsule_ids(baseline: dict[str, Any] | None) -> set[str]:
+    if not isinstance(baseline, dict):
+        return set()
+    protected: set[str] = set()
+    for item in baseline.get("cases", []):
+        if not isinstance(item, dict):
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else {}
+        for key in ("visible_capsule_ids", "selected_capsule_ids"):
+            protected.update(str(capsule_id) for capsule_id in details.get(key, []) if str(capsule_id))
+    return protected
+
+
+def _recall_preflight(
+    store: MemoryStore,
+    items: list[ProvenanceCompactionItem],
+    *,
+    cases: list[RecallRegressionCase],
+    baseline: dict[str, Any] | None,
+    max_token_growth: float,
+    min_overlap: float,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as tmp:
+        shadow_root = Path(tmp) / "shadow-memory"
+        _copy_recall_store(store, shadow_root)
+        shadow_store = MemoryStore(shadow_root)
+        ok = shadow_store.update_capsule_source_events_batch(
+            [
+                {
+                    "capsule_id": item.capsule_id,
+                    "source_event_ids": item.retained_source_event_ids,
+                    "expected_source_event_ids": item.expected_source_event_ids,
+                    "expected_statuses": ACTIVE_STATUSES,
+                    "reason": "recall preflight provenance compaction simulation",
+                }
+                for item in items
+            ],
+            actor="provenance-compaction-preflight",
+            action="compact-provenance-preflight",
+        )
+        if not ok:
+            return {
+                "passed": False,
+                "simulation_applied": False,
+                "blocked_reason": "shadow source-event update failed",
+                "cases": [],
+                "baseline_comparison": [],
+            }
+        from ara_memory.core import AraMemory
+
+        report = run_recall_regression(
+            AraMemory(shadow_root),
+            cases,
+            baseline=baseline,
+            max_token_growth=max_token_growth,
+            min_overlap=min_overlap,
+        )
+        payload = report.as_dict()
+        return {
+            "passed": report.passed,
+            "simulation_applied": True,
+            "cases": [_compact_recall_case(item) for item in payload.get("cases", [])],
+            "baseline_comparison": [_compact_recall_case(item) for item in payload.get("baseline_comparison", [])],
+        }
+
+
+def _stabilize_items_with_recall_preflight(
+    store: MemoryStore,
+    items: list[ProvenanceCompactionItem],
+    *,
+    cases: list[RecallRegressionCase],
+    baseline: dict[str, Any] | None,
+    max_token_growth: float,
+    min_overlap: float,
+    max_attempts: int = 20,
+) -> tuple[list[ProvenanceCompactionItem], dict[str, Any]]:
+    active_items = list(items)
+    removed_candidate_ids: list[str] = []
+    attempts: list[dict[str, Any]] = []
+    last_preflight: dict[str, Any] | None = None
+    for attempt in range(1, max_attempts + 1):
+        if not active_items:
+            last_preflight = {
+                "passed": True,
+                "simulation_applied": False,
+                "cases": [],
+                "baseline_comparison": [],
+            }
+            attempts.append(
+                {
+                    "attempt": attempt,
+                    "passed": True,
+                    "candidate_count": 0,
+                    "elided_candidate_ids": [],
+                }
+            )
+            break
+        last_preflight = _recall_preflight(
+            store,
+            active_items,
+            cases=cases,
+            baseline=baseline,
+            max_token_growth=max_token_growth,
+            min_overlap=min_overlap,
+        )
+        offender_ids = (
+            set()
+            if last_preflight.get("passed")
+            else _recall_preflight_offender_ids(last_preflight, active_items)
+        )
+        attempts.append(
+            {
+                "attempt": attempt,
+                "passed": bool(last_preflight.get("passed")),
+                "candidate_count": len(active_items),
+                "elided_candidate_ids": sorted(offender_ids),
+            }
+        )
+        if last_preflight.get("passed") or not offender_ids:
+            break
+        if attempt == max_attempts:
+            break
+        removed_candidate_ids.extend(
+            item.capsule_id for item in active_items if item.capsule_id in offender_ids
+        )
+        active_items = [item for item in active_items if item.capsule_id not in offender_ids]
+    if last_preflight is None:
+        last_preflight = {
+            "passed": True,
+            "simulation_applied": False,
+            "cases": [],
+            "baseline_comparison": [],
+        }
+    stabilized = dict(last_preflight)
+    stabilized["auto_elision"] = {
+        "enabled": True,
+        "stabilized": bool(stabilized.get("passed")),
+        "attempts": attempts,
+        "removed_candidate_ids": removed_candidate_ids,
+        "removed_candidate_count": len(removed_candidate_ids),
+        "final_candidate_count": len(active_items),
+    }
+    return active_items, stabilized
+
+
+def _recall_preflight_offender_ids(
+    recall_preflight: dict[str, Any],
+    items: list[ProvenanceCompactionItem],
+) -> set[str]:
+    candidate_ids = {item.capsule_id for item in items}
+    failed_names = {
+        str(item.get("name"))
+        for item in recall_preflight.get("baseline_comparison", [])
+        if isinstance(item, dict) and not item.get("passed")
+    }
+    if not failed_names and not recall_preflight.get("baseline_comparison"):
+        return set()
+    visible_offenders: set[str] = set()
+    selected_offenders: set[str] = set()
+    for item in recall_preflight.get("cases", []):
+        if not isinstance(item, dict) or str(item.get("name")) not in failed_names:
+            continue
+        visible_offenders.update(
+            capsule_id
+            for capsule_id in item.get("visible_capsule_ids", [])
+            if capsule_id in candidate_ids
+        )
+        selected_offenders.update(
+            capsule_id
+            for capsule_id in item.get("selected_capsule_ids", [])
+            if capsule_id in candidate_ids
+        )
+    return visible_offenders or selected_offenders
+
+
+def _copy_recall_store(store: MemoryStore, shadow_root: Path) -> None:
+    shadow_root.mkdir(parents=True, exist_ok=True)
+    (shadow_root / "ledger").mkdir(parents=True, exist_ok=True)
+    (shadow_root / "archive").mkdir(parents=True, exist_ok=True)
+    if store.hot_dir.exists():
+        shutil.copytree(store.hot_dir, shadow_root / "hot", dirs_exist_ok=True)
+    else:
+        (shadow_root / "hot").mkdir(parents=True, exist_ok=True)
+    with store.session() as source:
+        target = sqlite3.connect(shadow_root / "memory.db")
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+
+
+def _compact_recall_case(item: dict[str, Any]) -> dict[str, Any]:
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    return {
+        "name": item.get("name"),
+        "passed": bool(item.get("passed")),
+        "failures": details.get("failures", []),
+        "estimated_tokens": details.get("estimated_tokens", details.get("current_tokens")),
+        "baseline_tokens": details.get("baseline_tokens"),
+        "current_tokens": details.get("current_tokens"),
+        "source_event_overlap": details.get("source_event_overlap"),
+        "capsule_id_overlap": details.get("capsule_id_overlap"),
+        "overlap_basis": details.get("overlap_basis"),
+        "visible_capsule_ids": details.get("visible_capsule_ids", []),
+        "selected_capsule_ids": details.get("selected_capsule_ids", []),
+        "visible_source_event_count": details.get("visible_source_event_count"),
+        "selected_source_event_count": details.get("selected_source_event_count"),
+    }
 
 
 def _even_sample(items: list[str], count: int) -> list[str]:
@@ -386,11 +747,14 @@ def _totals(
     items: list[ProvenanceCompactionItem],
     *,
     candidate_rows: list[dict[str, Any]],
+    baseline_protected_capsule_ids: set[str],
     dry_run: bool,
     passed: bool,
 ) -> dict[str, Any]:
+    candidate_ids = {str(row["id"]) for row in candidate_rows}
     return {
         "candidate_capsules": len(candidate_rows),
+        "baseline_protected_capsules": len(candidate_ids.intersection(baseline_protected_capsule_ids)),
         "eligible_capsules": len(items),
         "source_events_before": sum(item.source_event_count for item in items),
         "source_events_after": sum(item.proposed_source_event_count for item in items),
@@ -408,18 +772,38 @@ def _recommend(
     dry_run: bool,
     passed: bool,
     blocked_reason: str,
+    recall_preflight: dict[str, Any] | None,
+    baseline_protected_capsules: int,
 ) -> list[str]:
     if blocked_reason:
-        return [blocked_reason]
+        out = [blocked_reason]
+        if recall_preflight:
+            out.append("Inspect recall_preflight before retrying provenance compaction.")
+        return out
+    auto_elision = recall_preflight.get("auto_elision") if isinstance(recall_preflight, dict) else {}
+    removed_by_recall = int(auto_elision.get("removed_candidate_count", 0) or 0) if isinstance(auto_elision, dict) else 0
     if not items:
+        if removed_by_recall:
+            return [
+                f"Recall preflight elided {removed_by_recall} unstable compaction candidates; no safe provenance compaction remains."
+            ]
+        if baseline_protected_capsules:
+            return [
+                f"No eligible provenance compaction remains after protecting {baseline_protected_capsules} baseline-guarded recall capsules."
+            ]
         return ["No eligible active provenance pins exceed the current threshold."]
     total_release = sum(item.globally_unpinned_cold_events for item in items)
     if dry_run:
-        return [
+        out = [
             f"Review {len(items)} planned provenance compactions before applying.",
             f"Applying the current plan would unpin {total_release} cold source events from active capsules.",
             f'To apply, rerun with --apply --confirm "{CONFIRMATION}" after backup/restore evidence is current.',
         ]
+        if recall_preflight:
+            out.append(f"Recall regression preflight passed={recall_preflight.get('passed')}.")
+        if removed_by_recall:
+            out.append(f"Recall preflight elided {removed_by_recall} unstable compaction candidates from this plan.")
+        return out
     if passed:
         return [
             f"Applied {sum(1 for item in items if item.applied)} provenance compactions.",

@@ -667,6 +667,10 @@ def main(argv: list[str] | None = None) -> int:
     provenance_compact.add_argument("--include-non-summary", action="store_true")
     provenance_compact.add_argument("--apply", action="store_true")
     provenance_compact.add_argument("--confirm", default="")
+    provenance_compact.add_argument("--recall-manifest", type=Path, default=None)
+    provenance_compact.add_argument("--recall-baseline", type=Path, default=None)
+    provenance_compact.add_argument("--max-token-growth", type=float, default=0.25)
+    provenance_compact.add_argument("--min-overlap", type=float, default=0.35)
     provenance_compact.add_argument("--json", action="store_true")
     lifecycle = sub.add_parser(
         "lifecycle",
@@ -1593,6 +1597,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "provenance-compact":
         try:
+            recall_cases = load_recall_regression_cases(args.recall_manifest) if args.recall_manifest else None
+            recall_baseline = (
+                load_recall_regression_baseline(args.recall_baseline)
+                if args.recall_baseline
+                else None
+            )
             result = memory.provenance_compaction(
                 scope=args.scope,
                 keep_events=args.keep_events,
@@ -1601,6 +1611,10 @@ def main(argv: list[str] | None = None) -> int:
                 summary_only=not args.include_non_summary,
                 dry_run=not args.apply,
                 confirm=args.confirm,
+                recall_cases=recall_cases,
+                recall_baseline=recall_baseline,
+                recall_max_token_growth=args.max_token_growth,
+                recall_min_overlap=args.min_overlap,
             )
         except ValueError as exc:
             if args.json:

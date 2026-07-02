@@ -395,17 +395,26 @@ pressure can pass stewardship only when that evidence is current; otherwise it
 remains a watch item.
 `provenance-compact` is the guarded follow-up when active summary capsules pin
 too many cold source events. It is dry-run by default, ranks eligible active
-summaries by releasable cold provenance, and keeps a bounded time-sampled source
-event set instead of letting one summary cite every raw episode forever. Apply
-mode requires `--apply --confirm "COMPACT PROVENANCE"` and uses atomic
+summaries by releasable cold provenance, and keeps a bounded quality-and-time
+sampled source event set instead of letting one summary cite every raw episode
+forever. The sampler prefers decision, verification, regression, health,
+backup, retention, identity, purpose, and risk evidence while still preserving
+temporal coverage. Apply mode requires `--apply --confirm "COMPACT PROVENANCE"` and uses atomic
 compare-and-set checks on capsule status and source links, so a stale plan does
 not silently overwrite newer provenance. The default scope is summaries only;
 use `--include-non-summary` only after reviewing the dry-run. After applying,
 rerun `cold-stewardship`, `health`, and `recall-regression` before any
-retention-cycle or prune decision. The retained source sample is deterministic
-and time-spaced, not semantic-quality weighted yet, so important scopes should
-keep a reviewed recall-regression manifest until a future quality-aware sampler
-can score retained evidence directly.
+retention-cycle or prune decision. For important scopes, pass
+`--recall-manifest` and `--recall-baseline` with `--apply`; Ara simulates the
+planned source-link rewrite in a shadow store and blocks the live apply if
+recall-regression fails. Capsules that were visible or selected in the supplied
+baseline are protected from that provenance rewrite. If the shadow simulation
+still shifts a reviewed recall path, Ara elides the unstable candidates from the
+plan before apply; live mutation is blocked if no recall-stable plan remains.
+That lets compaction reduce cold pressure without silently rewriting the
+evidence path that a reviewed recall case depends on. Important scopes should keep a reviewed
+recall-regression manifest because quality-aware provenance compaction changes
+which raw source events remain directly linked from active summaries.
 `lifecycle` classifies every selected capsule into `core`, `working`,
 `guarded`, `evidence`, `archive`, or `reject` tiers. This is the deterministic
 policy layer between purpose and storage: hot memory should come from reviewed

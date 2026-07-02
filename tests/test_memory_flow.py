@@ -2274,6 +2274,75 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Ara Provenance Compaction", text)
             self.assertIn("dry_run: True", text)
 
+    def test_provenance_compaction_prefers_quality_events_in_retained_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            boring_start = memory.retain(
+                kind="command",
+                text="Command: routine listing with no durable memory consequence.",
+                source="test",
+                scope="alpha",
+            )
+            decision = memory.retain(
+                kind="decision",
+                text="Decision: quality-aware provenance compaction should preserve policy evidence.",
+                source="test",
+                scope="alpha",
+            )
+            boring_middle = memory.retain(
+                kind="command",
+                text="Command: another routine diagnostic.",
+                source="test",
+                scope="alpha",
+            )
+            verification = memory.retain(
+                kind="assistant",
+                text="Verification passed: recall regression and health stayed green after compaction.",
+                source="test",
+                scope="alpha",
+            )
+            boring_end = memory.retain(
+                kind="command",
+                text="Command: trailing cleanup with no distinctive outcome.",
+                source="test",
+                scope="alpha",
+            )
+            events = [boring_start, decision, boring_middle, verification, boring_end]
+            summary = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated command episode outcomes quality sample",
+                body="A summary should keep the strongest provenance evidence, not only endpoints.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id for event in events],
+                tags=["episode-summary", "command"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(summary)
+            for event in events:
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.EPISODE,
+                        title=f"Command: cold event {event.id}",
+                        body="old command evidence",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["cold"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+
+            report = memory.provenance_compaction(scope="alpha", keep_events=2, min_pinned_events=3)
+
+            retained = report.items[0].retained_source_event_ids
+            self.assertEqual(retained, [decision.id, verification.id])
+            self.assertEqual(report.items[0].retention_strategy, "quality-time-sample-v1")
+            self.assertNotIn(boring_start.id, retained)
+            self.assertNotIn(boring_end.id, retained)
+
     def test_provenance_compaction_apply_requires_confirmation_and_updates_links(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -2354,6 +2423,221 @@ class MemoryFlowTests(unittest.TestCase):
             after_apply = memory.cold_stewardship(scope="alpha", group_limit=2, examples_per_group=0)
             self.assertEqual(after_apply.totals["protected_source_events"], 2)
             self.assertEqual(after_apply.totals["prunable_source_events"], 3)
+
+    def test_provenance_compaction_skips_baseline_guarded_capsules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            events = [
+                memory.retain(
+                    kind="command",
+                    text=f"Command {index}: baseline guarded provenance guard.",
+                    source="test",
+                    scope="alpha",
+                )
+                for index in range(4)
+            ]
+            summary = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated baseline guarded summary",
+                body="baseline guarded summary should not lose source links during guarded compaction",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id for event in events],
+                tags=["episode-summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(summary)
+            for event in events:
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.EPISODE,
+                        title=f"Command: cold event {event.id}",
+                        body="old command evidence",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["cold"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+            case = RecallRegressionCase(
+                name="baseline_guarded_guard",
+                query="baseline guarded summary",
+                scope="alpha",
+                expected_terms=["baseline guarded summary"],
+                budget=1200,
+                include_global=False,
+            )
+            baseline = memory.recall_regression([case]).as_dict()
+
+            report = memory.provenance_compaction(
+                scope="alpha",
+                keep_events=1,
+                min_pinned_events=2,
+                recall_cases=[case],
+                recall_baseline=baseline,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.items, [])
+            self.assertEqual(report.totals["candidate_capsules"], 1)
+            self.assertEqual(report.totals["baseline_protected_capsules"], 1)
+            self.assertIn("baseline-guarded", report.recommendations[0])
+            self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 4)
+
+    def test_provenance_compaction_elides_recall_unstable_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            events = [
+                memory.retain(
+                    kind="command",
+                    text=f"Command {index}: recall preflight provenance guard.",
+                    source="test",
+                    scope="alpha",
+                )
+                for index in range(4)
+            ]
+            summary = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated recall preflight summary",
+                body="compaction recall anchor should stay visible while provenance lineage is guarded",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id for event in events],
+                tags=["episode-summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(summary)
+            for event in events:
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.EPISODE,
+                        title=f"Command: cold event {event.id}",
+                        body="old command evidence",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["cold"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+            case = RecallRegressionCase(
+                name="compaction_preflight",
+                query="compaction recall anchor",
+                scope="alpha",
+                expected_terms=["compaction recall anchor"],
+                budget=1200,
+                include_global=False,
+            )
+            baseline = memory.recall_regression([case]).as_dict()
+            baseline_details = baseline["cases"][0]["details"]
+            for key in (
+                "visible_capsule_ids",
+                "visible_source_event_ids",
+                "visible_source_event_count",
+                "visible_source_event_digest",
+                "visible_source_event_ids_truncated",
+            ):
+                baseline_details.pop(key, None)
+            baseline_details["selected_capsule_ids"] = []
+
+            report = memory.provenance_compaction(
+                scope="alpha",
+                keep_events=1,
+                min_pinned_events=2,
+                dry_run=False,
+                confirm="COMPACT PROVENANCE",
+                recall_cases=[case],
+                recall_baseline=baseline,
+                recall_min_overlap=0.8,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.items, [])
+            self.assertIsNotNone(report.recall_preflight)
+            self.assertTrue(report.recall_preflight["passed"])
+            self.assertEqual(report.recall_preflight["auto_elision"]["removed_candidate_count"], 1)
+            self.assertIn("elided", report.recommendations[0])
+            self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 4)
+            with memory.store.session() as conn:
+                actions = conn.execute(
+                    "SELECT COUNT(*) AS c FROM memory_actions WHERE action = ?",
+                    ("compact-provenance",),
+                ).fetchone()
+            self.assertEqual(actions["c"], 0)
+
+    def test_provenance_compaction_apply_blocks_when_recall_preflight_has_no_safe_elision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            events = [
+                memory.retain(
+                    kind="command",
+                    text=f"Command {index}: no safe recall elision guard.",
+                    source="test",
+                    scope="alpha",
+                )
+                for index in range(4)
+            ]
+            summary = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Consolidated no safe elision summary",
+                body="candidate exists but recall preflight failure has no baseline path to elide",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id for event in events],
+                tags=["episode-summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(summary)
+            for event in events:
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.EPISODE,
+                        title=f"Command: cold event {event.id}",
+                        body="old command evidence",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["cold"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+            case = RecallRegressionCase(
+                name="no_safe_elision",
+                query="no safe elision summary",
+                scope="alpha",
+                expected_terms=["missing recall term"],
+                budget=1200,
+                include_global=False,
+            )
+
+            blocked = memory.provenance_compaction(
+                scope="alpha",
+                keep_events=1,
+                min_pinned_events=2,
+                dry_run=False,
+                confirm="COMPACT PROVENANCE",
+                recall_cases=[case],
+            )
+
+            self.assertFalse(blocked.passed, blocked.as_dict())
+            self.assertIn("recall regression preflight failed", blocked.blocked_reason)
+            self.assertIsNotNone(blocked.recall_preflight)
+            self.assertFalse(blocked.recall_preflight["passed"])
+            self.assertEqual(blocked.recall_preflight["auto_elision"]["removed_candidate_count"], 0)
+            self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 4)
+            with memory.store.session() as conn:
+                actions = conn.execute(
+                    "SELECT COUNT(*) AS c FROM memory_actions WHERE action = ?",
+                    ("compact-provenance",),
+                ).fetchone()
+            self.assertEqual(actions["c"], 0)
 
     def test_provenance_compaction_summary_only_boundary_and_no_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
