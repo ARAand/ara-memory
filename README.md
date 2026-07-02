@@ -15,12 +15,14 @@ preserved but inactive. Current recall is still partly lexical/salience-heavy,
 but the first projection and ESPA routing layers are in place: FTS indexes a
 search projection, recall/working-memory render a bounded model-facing
 projection, and a deterministic episodic/semantic/procedural/affective router
-adds capped local activation before ranking. Recall also runs a bounded one-hop
-spreading activation pass over temporal edges: edge text must overlap the query,
-edge confidence controls a capped boost, graph-source capsules can supplement
-the candidate set after risk filtering, and normal outputs expose only compact
-activation diagnostics rather than graph path text. The next layers are multi-hop
-decay, normalized relation nodes, and reconsolidation frames.
+adds capped local activation before ranking. Recall also runs a bounded two-hop
+spreading activation pass over temporal edges: first-hop edge text must overlap
+the query, second-hop expansion terms are derived from the first hop, edge
+confidence and depth decay control capped boosts, graph-source capsules can
+supplement the candidate set after risk filtering, and normal outputs expose
+only compact activation diagnostics rather than graph path text. The next
+layers are normalized relation nodes, reconsolidation frames, and broader
+global graph policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -329,14 +331,18 @@ status, and does not turn affective/risk signals into reward. `recall` and
 After ESPA, recall applies deterministic spreading activation over temporal
 edges. Low-value graph terms are filtered before SQLite lookup, seed-source
 edges get a reserved bucket, duplicate active edges are de-duplicated during
-activation, and every boost requires query overlap in the edge subject,
-predicate, or object. Graph-supplemented capsules render only when they have a
-positive spreading score and an internal activation path; normal pack output does
-not print that path text. `recall` and `recall-candidates` expose
-`graph_activation_terms`,
-`graph_activation_edges_considered`, `spreading_activation_used`,
-`spreading_activation_boosted_count`, `spreading_activation_supplemented_count`,
-and capped boosted/supplemented capsule id lists.
+activation, and every first-hop boost requires query overlap in the edge
+subject, predicate, or object. A bounded second hop can derive up to six
+expansion terms from the first-hop subject/object text, fetch one additional
+edge layer, and apply depth decay before scoring. Graph-supplemented capsules
+render only when they have a positive spreading score and an internal activation
+path; normal pack output does not print that path text. `recall` and
+`recall-candidates` expose `graph_activation_terms`,
+`graph_activation_expansion_terms`, `graph_activation_edges_considered`,
+`spreading_activation_used`, `spreading_activation_multi_hop_used`,
+`spreading_activation_depth_counts`, `spreading_activation_boosted_count`,
+`spreading_activation_supplemented_count`, and capped boosted/supplemented
+capsule id lists.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
@@ -892,9 +898,9 @@ timestamp, and final verification result.
 - Lifecycle tiers separate long-running purpose, identity, and preference
   anchors from working, guarded, evidence, archive, and reject memory so token
   reduction is a policy choice rather than accidental truncation.
-- Retrieval is graph/symbol/BM25 plus deterministic ESPA and bounded temporal-edge
-  spreading activation first, with optional embeddings left as a later extension
-  point.
+- Retrieval is graph/symbol/BM25 plus deterministic ESPA and bounded two-hop
+  temporal-edge spreading activation first, with optional embeddings left as a
+  later extension point.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/SECURITY.md](docs/SECURITY.md) for the technical model and threat model.

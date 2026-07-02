@@ -115,7 +115,16 @@ def build_recall_plan(
                 "visible_capsules": int(diagnostics.get("capsules_rendered_after_budget", 0)),
                 "graph_edges": int(diagnostics["graph_edges_considered"]),
                 "graph_activation_edges": int(diagnostics.get("graph_activation_edges_considered", 0)),
+                "graph_activation_expansion_terms": list(
+                    diagnostics.get("graph_activation_expansion_terms", [])
+                ),
                 "spreading_activation_used": bool(diagnostics.get("spreading_activation_used", False)),
+                "spreading_activation_multi_hop_used": bool(
+                    diagnostics.get("spreading_activation_multi_hop_used", False)
+                ),
+                "spreading_activation_depth_counts": dict(
+                    diagnostics.get("spreading_activation_depth_counts", {})
+                ),
                 "spreading_activation_boosted_count": int(
                     diagnostics.get("spreading_activation_boosted_count", 0)
                 ),
@@ -251,7 +260,8 @@ def _rationale(
             "Graph activation contributed locally: "
             f"edges={selected.get('graph_activation_edges', 0)}, "
             f"boosted={selected.get('spreading_activation_boosted_count', 0)}, "
-            f"supplemented={selected.get('spreading_activation_supplemented_count', 0)}."
+            f"supplemented={selected.get('spreading_activation_supplemented_count', 0)}, "
+            f"depths={selected.get('spreading_activation_depth_counts', {})}."
         )
     if include_hot:
         delta = int(selected["estimated_tokens"]) - without_hot_tokens
@@ -297,7 +307,10 @@ def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
         "visible_section_count": int(selected.get("visible_section_count", 0)),
         "sections_truncated": int(selected.get("sections_truncated", 0)),
         "graph_activation_edges": int(selected.get("graph_activation_edges", 0)),
+        "graph_activation_expansion_terms": list(selected.get("graph_activation_expansion_terms", [])),
         "spreading_activation_used": bool(selected.get("spreading_activation_used", False)),
+        "spreading_activation_multi_hop_used": bool(selected.get("spreading_activation_multi_hop_used", False)),
+        "spreading_activation_depth_counts": dict(selected.get("spreading_activation_depth_counts", {})),
         "spreading_activation_boosted_count": int(selected.get("spreading_activation_boosted_count", 0)),
         "spreading_activation_supplemented_count": int(
             selected.get("spreading_activation_supplemented_count", 0)

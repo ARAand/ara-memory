@@ -41,6 +41,7 @@ class GraphActivationReadiness:
                 "- "
                 f"used={diagnostics['spreading_activation_used']}, "
                 f"edges={diagnostics['graph_activation_edges']}, "
+                f"depths={diagnostics['spreading_activation_depth_counts']}, "
                 f"boosted={diagnostics['spreading_activation_boosted_count']}, "
                 f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
                 f"visible={diagnostics['visible_capsules']}, "
@@ -76,6 +77,8 @@ def run_graph_activation_readiness(
         "quality_score": int(best.get("quality_score", 0)),
         "graph_activation_edges": int(best.get("graph_activation_edges", 0)),
         "spreading_activation_used": bool(best.get("spreading_activation_used", False)),
+        "spreading_activation_multi_hop_used": bool(best.get("spreading_activation_multi_hop_used", False)),
+        "spreading_activation_depth_counts": dict(best.get("spreading_activation_depth_counts", {})),
         "spreading_activation_boosted_count": int(best.get("spreading_activation_boosted_count", 0)),
         "spreading_activation_supplemented_count": int(best.get("spreading_activation_supplemented_count", 0)),
         "probes_evaluated": len(evaluated),
@@ -85,6 +88,12 @@ def run_graph_activation_readiness(
                 "best_budget": int(item["best"].get("budget", 0)),
                 "graph_activation_edges": int(item["best"].get("graph_activation_edges", 0)),
                 "spreading_activation_used": bool(item["best"].get("spreading_activation_used", False)),
+                "spreading_activation_multi_hop_used": bool(
+                    item["best"].get("spreading_activation_multi_hop_used", False)
+                ),
+                "spreading_activation_depth_counts": dict(
+                    item["best"].get("spreading_activation_depth_counts", {})
+                ),
                 "spreading_activation_boosted_count": int(item["best"].get("spreading_activation_boosted_count", 0)),
                 "spreading_activation_supplemented_count": int(
                     item["best"].get("spreading_activation_supplemented_count", 0)

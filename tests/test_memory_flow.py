@@ -355,6 +355,98 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(associated.id, result.diagnostics["spreading_activation_boosted_capsules"])
             self.assertLess(selected_ids.index(direct.id), selected_ids.index(associated.id))
 
+    def test_spreading_activation_uses_bounded_second_hop_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            lexical_seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Restore drill overview",
+                body="Restore drill overview records the general exercise.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.86,
+                source_event_ids=[],
+                tags=["restore", "drill"],
+                status=MemoryStatus.STABLE,
+            )
+            first_hop = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: sealed packet rehearsal",
+                body="Open the sealed packet and rehearse the protected recovery sequence.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.22,
+                source_event_ids=[],
+                tags=["sealed", "packet"],
+                status=MemoryStatus.STABLE,
+            )
+            second_hop = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: checksum envelope verification",
+                body="Verify the checksum envelope before recovery.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.18,
+                source_event_ids=[],
+                tags=["checksum", "envelope"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(lexical_seed)
+            memory.store.upsert_capsule(first_hop)
+            memory.store.upsert_capsule(second_hop)
+            for index in range(55):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.SUMMARY,
+                        title=f"High salience second-hop noise {index}",
+                        body="This memory should not crowd out bounded graph expansion evidence.",
+                        scope="alpha",
+                        confidence=0.9,
+                        salience=0.98,
+                        source_event_ids=[],
+                        tags=["noise", f"hop-noise-{index}"],
+                        status=MemoryStatus.STABLE,
+                    )
+                )
+            memory.store.add_edge(
+                subject="restore",
+                predicate="requires",
+                object_="sealed packet drill",
+                scope="alpha",
+                source_capsule_id=first_hop.id,
+                confidence=0.95,
+            )
+            memory.store.add_edge(
+                subject="sealed packet",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=second_hop.id,
+                confidence=0.95,
+            )
+
+            result = memory.recall_candidates(
+                "restore drill",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+                candidate_limit=18,
+            )
+
+            self.assertTrue(result.diagnostics["spreading_activation_multi_hop_used"])
+            self.assertGreater(int(result.diagnostics["spreading_activation_depth_counts"]["2"]), 0)
+            self.assertIn("sealed", result.diagnostics["graph_activation_expansion_terms"])
+            self.assertIn(second_hop.id, result.diagnostics["spreading_activation_supplemented_capsules"])
+            self.assertIn(second_hop.id, result.diagnostics["spreading_activation_boosted_capsules"])
+            selected_ids = [cap["id"] for cap in result.capsules]
+            self.assertIn(first_hop.id, selected_ids)
+            self.assertIn(second_hop.id, selected_ids)
+            first = next(cap for cap in result.capsules if cap["id"] == first_hop.id)
+            second = next(cap for cap in result.capsules if cap["id"] == second_hop.id)
+            self.assertGreater(first["spreading_activation_score"], second["spreading_activation_score"])
+
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [
             {

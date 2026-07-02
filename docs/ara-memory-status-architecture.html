@@ -413,10 +413,10 @@
         <article class="panel">
           <h3>지금 된 것</h3>
           <ul>
-            <li>로컬 우선 durable store: events 1289, capsules 2763, storage 239MB.</li>
-            <li>원문 전체 재독해 대신 bounded recall: 800 token 예산 안에서 18개 캡슐 선택.</li>
+            <li>로컬 우선 durable store: events 1329, capsules 2849, storage 약 241MB.</li>
+            <li>원문 전체 재독해 대신 bounded recall: 800 token 예산 안에서 727 token / 18개 캡슐 선택.</li>
             <li>purpose continuity, identity continuity, semantic hygiene, milestone readiness 통과.</li>
-            <li>temporal edge 기반 one-hop graph spreading activation이 recall 경로와 readiness gate에 들어갔습니다.</li>
+            <li>temporal edge 기반 bounded 2-hop graph spreading activation이 recall 경로와 readiness gate에 들어갔습니다.</li>
             <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
           </ul>
         </article>
@@ -424,7 +424,7 @@
           <h3>아직 아닌 것</h3>
           <ul>
             <li>사람 같은 기억의 핵심인 재구성, 망각, 감정적 salience, 자기 목적성은 아직 v0 단계입니다.</li>
-            <li>graph activation은 multi-probe readiness gate까지 갖췄지만 아직 one-hop입니다. 다중 hop, decay, relation node 정규화는 남아 있습니다.</li>
+            <li>graph activation은 bounded 2-hop prototype까지 들어갔지만, normalized relation node, global spreading, reconsolidation은 남아 있습니다.</li>
             <li>cold memory가 70%라 비파괴 retention evidence는 통과했지만, protected-only drift와 실제 prunable drift를 계속 구분해야 합니다.</li>
             <li>보상해킹 방어는 테스트와 게이트가 있으나, 장기 자기평가 루프는 아직 충분히 적대적으로 검증되지 않았습니다.</li>
           </ul>
@@ -485,7 +485,7 @@
         </div>
         <div class="lane">
           <div class="lane-name">Graph Activation</div>
-          <div>temporal edge 텍스트와 질의가 겹칠 때만 one-hop boost/supplement를 허용합니다. 경로 텍스트는 일반 recall pack에 노출하지 않습니다.</div>
+          <div>질의와 겹치는 1-hop edge에서 확장 term을 뽑고, decay를 적용한 2-hop boost/supplement까지만 허용합니다. 경로 텍스트는 일반 recall pack에 노출하지 않습니다.</div>
         </div>
         <div class="lane">
           <div class="lane-name">Governance</div>
@@ -535,8 +535,8 @@
               <td>완료</td>
             </tr>
             <tr>
-              <td>Multi-hop spreading with decay</td>
-              <td>한 단계 연결을 넘어 연쇄 기억을 찾되 hub term 폭주 방지</td>
+              <td>Beyond 2-hop / global spreading policy</td>
+              <td>bounded 2-hop을 넘어설 때의 global fanout, hub suppression, privacy gate 정의</td>
               <td>8-14h</td>
               <td>높음</td>
             </tr>
@@ -581,7 +581,7 @@
         <article class="panel">
           <h3>최소 다음 버전</h3>
           <p>
-            8-16시간이면 relation-node schema, multi-hop decay prototype, privacy gate 일부까지 넣은
+            8-16시간이면 relation-node schema, global spreading policy, privacy gate 일부까지 넣은
             “사용 가능한 v0.2”로 갈 수 있습니다.
           </p>
         </article>
@@ -594,7 +594,7 @@
         </article>
       </div>
       <div class="callout watch-border" style="margin-top:14px;">
-        Ara 판단: 운영 게이트는 처음으로 모두 초록입니다. 다음 작업은 multi-hop relation memory와 reconsolidation frame입니다.
+        Ara 판단: 운영 게이트는 처음으로 모두 초록입니다. 다음 작업은 normalized relation memory와 reconsolidation frame입니다.
         이제는 기억을 보존하는 능력에서 기억을 재구성하는 능력으로 넘어가야 합니다.
       </div>
     </section>
@@ -628,7 +628,7 @@
       <div class="panel timeline">
         <div class="timeline-item">
           <div class="timebox">0-4h</div>
-          <div>multi-hop spreading의 decay, fanout, hub suppression 규칙을 설계하고 테스트 fixture를 만듭니다.</div>
+          <div>bounded 2-hop spreading fixture를 확장해 hub suppression, fanout, privacy gate 회귀 테스트를 보강합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">4-10h</div>
@@ -636,7 +636,7 @@
         </div>
         <div class="timeline-item">
           <div class="timebox">10-18h</div>
-          <div>multi-hop spreading의 decay, max fanout, hub suppression 규칙을 설계하고 작은 프로토타입을 붙입니다.</div>
+          <div>normalized relation node를 읽는 recall prototype을 붙이고 temporal edge fallback과 비교합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">18-24h</div>

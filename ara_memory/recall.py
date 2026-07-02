@@ -10,7 +10,7 @@ from ara_memory.espa import apply_espa_activation, axis_coverage
 from ara_memory.models import MemoryStatus
 from ara_memory.projection import render_projection
 from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
-from ara_memory.spreading import apply_spreading_activation, graph_activation_terms
+from ara_memory.spreading import apply_spreading_activation, graph_activation_terms, graph_expansion_terms
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -88,6 +88,21 @@ class RecallCompiler:
             include_global=include_global,
             limit=80,
         )
+        activation_edge_depths = {_edge_identity(edge): 1 for edge in activation_edges}
+        expansion_terms = graph_expansion_terms(activation_edges, graph_terms, limit=6)
+        if expansion_terms:
+            second_hop_edges = self.store.graph_activation_edges(
+                expansion_terms,
+                seed_capsule_ids=_edge_source_ids(activation_edges),
+                scope=scope,
+                include_global=include_global,
+                limit=40,
+            )
+            activation_edges, activation_edge_depths = _merge_activation_edges(
+                activation_edges,
+                second_hop_edges,
+                activation_edge_depths,
+            )
         candidates, graph_supplemented_ids = _with_graph_source_capsules(
             self.store,
             candidates,
@@ -115,6 +130,8 @@ class RecallCompiler:
             terms=graph_terms,
             seed_ids=seed_ids,
             supplemented_ids=graph_supplemented_ids,
+            edge_depths=activation_edge_depths,
+            expansion_terms=expansion_terms,
         )
         capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:candidate_limit]
         low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
@@ -138,6 +155,7 @@ class RecallCompiler:
             "capsules_renderable": len(renderable_capsules),
             "graph_edges_considered": len(graph_rows),
             "graph_activation_edges_considered": int(spreading["edge_count"]),
+            "graph_activation_expansion_terms": list(spreading.get("expansion_terms", [])),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
@@ -174,6 +192,8 @@ class RecallCompiler:
             "espa_axis_coverage": axis_coverage(capsules),
             "spreading_activation_used": bool(spreading["activation_used"]),
             "spreading_activation_edges": int(spreading["edge_count"]),
+            "spreading_activation_depth_counts": dict(spreading.get("depth_counts", {})),
+            "spreading_activation_multi_hop_used": int(spreading.get("depth_counts", {}).get("2", 0)) > 0,
             "spreading_activation_boosted_count": len(spreading_boosted_ids),
             "spreading_activation_supplemented_count": len(spreading_supplemented_ids),
             "spreading_activation_boosted_capsules": spreading_boosted_ids[:12],
@@ -325,6 +345,9 @@ class RecallCompiler:
             "capsules_rendered_after_budget": len(visible_capsules),
             "graph_edges_considered": len(graph_rows),
             "graph_activation_edges_considered": int(candidate_result.diagnostics["graph_activation_edges_considered"]),
+            "graph_activation_expansion_terms": list(
+                candidate_result.diagnostics.get("graph_activation_expansion_terms", [])
+            ),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
@@ -350,6 +373,12 @@ class RecallCompiler:
             "espa_axis_coverage": dict(candidate_result.diagnostics["espa_axis_coverage"]),
             "spreading_activation_used": bool(candidate_result.diagnostics["spreading_activation_used"]),
             "spreading_activation_edges": int(candidate_result.diagnostics["spreading_activation_edges"]),
+            "spreading_activation_depth_counts": dict(
+                candidate_result.diagnostics.get("spreading_activation_depth_counts", {})
+            ),
+            "spreading_activation_multi_hop_used": bool(
+                candidate_result.diagnostics.get("spreading_activation_multi_hop_used", False)
+            ),
             "spreading_activation_boosted_count": int(
                 candidate_result.diagnostics["spreading_activation_boosted_count"]
             ),
@@ -372,6 +401,54 @@ class RecallCompiler:
             "visible_capsule_ids": [cap["id"] for cap in visible_capsules],
         }
         return RecallResult(pack=pack, diagnostics=diagnostics)
+
+
+def _edge_identity(edge: Any) -> str:
+    row_id = _edge_value(edge, "id")
+    if row_id is not None:
+        return str(row_id)
+    return "\0".join(
+        str(_edge_value(edge, key) or "").lower().strip()
+        for key in ("source_capsule_id", "subject", "predicate", "object")
+    )
+
+
+def _edge_source_ids(edges: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for edge in edges:
+        source_id = str(_edge_value(edge, "source_capsule_id") or "")
+        if source_id and source_id not in seen:
+            out.append(source_id)
+            seen.add(source_id)
+    return out
+
+
+def _merge_activation_edges(
+    first_edges: list[Any],
+    second_edges: list[Any],
+    edge_depths: dict[str, int],
+) -> tuple[list[Any], dict[str, int]]:
+    out = list(first_edges)
+    seen = {_edge_identity(edge) for edge in out}
+    depths = dict(edge_depths)
+    for edge in second_edges:
+        edge_id = _edge_identity(edge)
+        if edge_id in seen:
+            continue
+        out.append(edge)
+        seen.add(edge_id)
+        depths[edge_id] = 2
+    return out, depths
+
+
+def _edge_value(edge: Any, key: str) -> Any:
+    if isinstance(edge, dict):
+        return edge.get(key)
+    try:
+        return edge[key]
+    except (IndexError, KeyError, TypeError):
+        return None
 
 
 def _with_intent_goals(
