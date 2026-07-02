@@ -590,7 +590,11 @@ a backup, restores it into a temporary shadow store, runs prepare/apply/review
 and optional recall-regression there, and redacts the shadow approval token from
 output. Passing preflight is not permission to mutate live memory; it is evidence
 that a stronger live gate can be designed without relying on the live store as
-the test bed. `reconsolidation-shadow-rollback` is the rollback executor's
+the test bed. Use `--action promote`, `--action rewrite`, `--action delete`, or
+`--action cool` to inspect the capability-specific gate matrix. Each action
+reports `design_ready` separately from `live_authorized`; preflight can make an
+action design-ready, but it never authorizes live promote, rewrite, delete, or
+cool by itself. `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in
 that restored copy, preserves evidence capsules/source events/witnesses, and

@@ -3174,6 +3174,18 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(report.prepare.get("token"), "<shadow-token-redacted>")
             self.assertTrue(report.apply and report.apply["passed"])
             self.assertTrue(report.review and report.review["passed"])
+            self.assertEqual(
+                [item["action"] for item in report.action_gates],
+                ["promote", "rewrite", "delete", "cool"],
+            )
+            self.assertTrue(all(item["design_ready"] for item in report.action_gates))
+            self.assertTrue(all(not item["live_authorized"] for item in report.action_gates))
+            self.assertTrue(
+                all(
+                    "rollback_or_exception_witness_design" in item["required_gates"]
+                    for item in report.action_gates
+                )
+            )
             self.assertEqual(memory.store.stats(), before_stats)
             with memory.store.session() as conn:
                 approvals = conn.execute("SELECT COUNT(*) FROM reconsolidation_approvals").fetchone()[0]
@@ -3258,6 +3270,8 @@ class MemoryFlowTests(unittest.TestCase):
                     "--recall-budget",
                     "1200",
                     "--no-global",
+                    "--action",
+                    "rewrite",
                     "--regression-manifest",
                     str(manifest),
                     "--json",
@@ -3274,6 +3288,13 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(payload["passed"], payload)
             self.assertTrue(payload["review"]["regression"]["passed"])
             self.assertEqual(payload["prepare"]["token"], "<shadow-token-redacted>")
+            self.assertEqual([item["action"] for item in payload["action_gates"]], ["rewrite"])
+            self.assertTrue(payload["action_gates"][0]["design_ready"])
+            self.assertFalse(payload["action_gates"][0]["live_authorized"])
+            self.assertIn(
+                "exact_before_after_exception_witness",
+                payload["action_gates"][0]["required_gates"],
+            )
 
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

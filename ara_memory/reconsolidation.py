@@ -17,6 +17,7 @@ from ara_memory.storage import _invalidate_hot_scope, _sync_capsule_fts_row, row
 
 RECONSOLIDATION_APPLY_CONFIRMATION = "APPLY RECONSOLIDATION FRAME"
 RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION = "ROLLBACK RECONSOLIDATION CANDIDATE"
+STRONG_RECONSOLIDATION_ACTIONS = ("promote", "rewrite", "delete", "cool")
 
 
 @dataclass(slots=True)
@@ -352,6 +353,7 @@ class ReconsolidationStrongPreflightReport:
     prepare: dict[str, Any] | None
     apply: dict[str, Any] | None
     review: dict[str, Any] | None
+    action_gates: list[dict[str, Any]]
     recommendations: list[str]
 
     def as_dict(self) -> dict[str, Any]:
@@ -365,6 +367,7 @@ class ReconsolidationStrongPreflightReport:
             "prepare": self.prepare,
             "apply": self.apply,
             "review": self.review,
+            "action_gates": self.action_gates,
             "recommendations": self.recommendations,
             "safety": [
                 "Runs only inside a temporary restored backup.",
@@ -394,6 +397,13 @@ class ReconsolidationStrongPreflightReport:
                 f"reviewed={self.review.get('reviewed')} "
                 f"fail={self.review.get('fail_count')}"
             )
+        if self.action_gates:
+            lines.append("## Action Gates")
+            for item in self.action_gates:
+                lines.append(
+                    f"- {item['action']}: design_ready={item['design_ready']}, "
+                    f"live_authorized={item['live_authorized']}"
+                )
         if self.recommendations:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
@@ -1256,10 +1266,12 @@ def strong_reconsolidation_preflight(
     include_hot: bool = True,
     regression_cases: list[Any] | None = None,
     regression_baseline: dict[str, Any] | None = None,
+    actions: list[str] | None = None,
 ) -> ReconsolidationStrongPreflightReport:
     clean_query = query.strip()
     if not clean_query:
         raise ValueError("query is required.")
+    requested_actions = _normalize_strong_reconsolidation_actions(actions)
     backup_path = backup_path.resolve()
     backup_verification = memory.verify_backup(backup_path)
     recommendations: list[str] = []
@@ -1274,6 +1286,11 @@ def strong_reconsolidation_preflight(
             prepare=None,
             apply=None,
             review=None,
+            action_gates=_strong_action_gate_matrix(
+                requested_actions,
+                design_ready=False,
+                reason="backup verification failed",
+            ),
             recommendations=["Verify the backup before running strong reconsolidation preflight."],
         )
 
@@ -1291,6 +1308,11 @@ def strong_reconsolidation_preflight(
                 prepare=None,
                 apply=None,
                 review=None,
+                action_gates=_strong_action_gate_matrix(
+                    requested_actions,
+                    design_ready=False,
+                    reason="backup restore failed",
+                ),
                 recommendations=["Restore the backup cleanly before trusting any stronger reconsolidation preflight."],
             )
         shadow = memory.__class__(target_root)
@@ -1317,6 +1339,11 @@ def strong_reconsolidation_preflight(
                 prepare=_without_shadow_token(prepare_payload),
                 apply=None,
                 review=None,
+                action_gates=_strong_action_gate_matrix(
+                    requested_actions,
+                    design_ready=False,
+                    reason="shadow prepare failed",
+                ),
                 recommendations=[
                     "Shadow prepare did not produce an approval token; repair the frame before stronger reconsolidation.",
                 ],
@@ -1338,6 +1365,11 @@ def strong_reconsolidation_preflight(
                 prepare=_without_shadow_token(prepare_payload),
                 apply=apply_payload,
                 review=None,
+                action_gates=_strong_action_gate_matrix(
+                    requested_actions,
+                    design_ready=False,
+                    reason="shadow candidate apply failed",
+                ),
                 recommendations=[
                     "Shadow candidate apply failed; do not design stronger live mutation from this frame.",
                 ],
@@ -1359,6 +1391,15 @@ def strong_reconsolidation_preflight(
             recommendations.append(
                 "Block stronger reconsolidation: shadow witness review or recall-regression failed."
             )
+        action_gates = _strong_action_gate_matrix(
+            requested_actions,
+            design_ready=passed,
+            reason=(
+                "shadow preflight evidence passed; live executor still intentionally unavailable"
+                if passed
+                else "shadow witness review or recall-regression failed"
+            ),
+        )
         return ReconsolidationStrongPreflightReport(
             scope=scope,
             query=clean_query,
@@ -1369,8 +1410,65 @@ def strong_reconsolidation_preflight(
             prepare=_without_shadow_token(prepare_payload),
             apply=apply_payload,
             review=review_payload,
+            action_gates=action_gates,
             recommendations=recommendations,
         )
+
+
+def _normalize_strong_reconsolidation_actions(actions: list[str] | None) -> list[str]:
+    if not actions:
+        return list(STRONG_RECONSOLIDATION_ACTIONS)
+    normalized: list[str] = []
+    invalid: list[str] = []
+    for action in actions:
+        clean = action.strip().lower()
+        if clean not in STRONG_RECONSOLIDATION_ACTIONS:
+            invalid.append(action)
+            continue
+        if clean not in normalized:
+            normalized.append(clean)
+    if invalid:
+        allowed = ", ".join(STRONG_RECONSOLIDATION_ACTIONS)
+        raise ValueError(
+            f"unsupported strong reconsolidation action(s): {', '.join(invalid)}; "
+            f"allowed: {allowed}"
+        )
+    return normalized
+
+
+def _strong_action_gate_matrix(
+    actions: list[str],
+    *,
+    design_ready: bool,
+    reason: str,
+) -> list[dict[str, Any]]:
+    common_required = [
+        "verified_backup",
+        "shadow_restore",
+        "shadow_prepare_apply_review",
+        "recall_regression_when_manifest_is_supplied",
+        "open_reconsolidation_review_queue_empty",
+        "one_use_live_token_design",
+        "rollback_or_exception_witness_design",
+    ]
+    action_requirements = {
+        "promote": ["candidate_identity_compare_and_set", "promotion_provenance_review"],
+        "rewrite": ["field_digest_compare_and_set", "exact_before_after_exception_witness"],
+        "delete": ["cold_export_or_irreversible_operation_record", "source_event_preservation"],
+        "cool": ["lifecycle_pressure_evidence", "recall_visibility_shadow_check"],
+    }
+    return [
+        {
+            "action": action,
+            "design_ready": bool(design_ready),
+            "live_authorized": False,
+            "reason": reason,
+            "required_gates": common_required + action_requirements[action],
+            "denied_live_mutations": [item for item in STRONG_RECONSOLIDATION_ACTIONS if item != action],
+            "confirmation_required": f"ENABLE STRONG RECONSOLIDATION {action.upper()}",
+        }
+        for action in actions
+    ]
 
 
 def shadow_reconsolidation_rollback(

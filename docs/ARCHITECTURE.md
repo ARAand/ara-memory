@@ -153,6 +153,8 @@ reconsolidation_strong_preflight(backup, query, scope)
   -> verify backup and restore into a temporary shadow memory root
   -> run prepare/apply/review and optional recall-regression only in the restored copy
   -> redact the shadow approval token from output
+  -> evaluate promote/rewrite/delete/cool as explicit action gates
+  -> report design_ready separately from live_authorized for each requested action
   -> never mutate the live memory store
   -> treat pass as design evidence for a future stronger gate, not live mutation approval
 

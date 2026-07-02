@@ -27,6 +27,7 @@ from ara_memory.relation_merge import (
 from ara_memory.reconsolidation import (
     RECONSOLIDATION_APPLY_CONFIRMATION,
     RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION,
+    STRONG_RECONSOLIDATION_ACTIONS,
     backfill_legacy_reconsolidation_rollback_witnesses,
     list_reconsolidation_review_queue,
     record_reconsolidation_review_queue,
@@ -299,6 +300,13 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_strong_preflight.add_argument("--recall-budget", type=int, default=1600)
     reconsolidation_strong_preflight.add_argument("--no-global", action="store_true")
     reconsolidation_strong_preflight.add_argument("--no-hot", action="store_true")
+    reconsolidation_strong_preflight.add_argument(
+        "--action",
+        choices=STRONG_RECONSOLIDATION_ACTIONS,
+        action="append",
+        default=[],
+        help="Strong live capability to evaluate. Repeat for multiple actions. Defaults to all actions.",
+    )
     reconsolidation_strong_preflight.add_argument("--regression-manifest", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--regression-baseline", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--json", action="store_true")
@@ -1437,6 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
             include_hot=not args.no_hot,
             regression_cases=cases,
             regression_baseline=baseline,
+            actions=args.action,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
