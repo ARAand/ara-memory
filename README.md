@@ -384,7 +384,9 @@ deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event
-preservation in shadow-prune. It also classifies cold capsules into
+preservation in shadow-prune. Matching means both the live cold totals and a
+compact cold identity fingerprint agree, so same-count capsule/source-event
+swaps force a new cycle instead of silently reusing stale evidence. It also classifies cold capsules into
 `evidence`, `archive`, and `reject` tiers so operators can see whether a cold
 group should preserve active-linked provenance, be exported before pruning, or
 stay as audit-only safety evidence. Its active provenance pin report shows which
@@ -570,7 +572,11 @@ only for partial evidence collection and does not pass pruning readiness. Each
 run writes a compact report under `.ara-memory/archive/retention-cycles/`;
 `health` uses the latest passing report to distinguish unmanaged cold pressure
 from reviewed pruning readiness evidence, while `cold-stewardship` additionally
-checks freshness and drift against the current live cold set.
+checks freshness and drift against the current live cold set. Retention-cycle
+reports include a cold identity fingerprint over the selected cold capsule IDs,
+cold source-event IDs, protected source-event IDs, and prunable source-event
+IDs; old reports without that fingerprint are treated as stale for high cold
+pressure.
 `cold-export` writes superseded/rejected/quarantined capsules plus their source
 events into a portable zip so pruning can later be audited. Restoring a pruned
 store still requires a full verified backup, not a cold export alone. Verification

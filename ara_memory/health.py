@@ -367,6 +367,23 @@ def _retention_cycle_signal(
             if not evidence.get("matches_current"):
                 current = evidence.get("current") or {}
                 cycle = evidence.get("cycle") or {}
+                if not evidence.get("identity_available"):
+                    return HealthSignal(
+                        "retention_cycle",
+                        False,
+                        "latest retention-cycle lacks a cold identity fingerprint; rerun retention-cycle evidence",
+                        severity="warning",
+                        value=latest,
+                    )
+                if evidence.get("count_match") and not evidence.get("identity_match"):
+                    mismatched = ", ".join(evidence.get("identity_mismatched_sets") or []) or "unknown"
+                    return HealthSignal(
+                        "retention_cycle",
+                        False,
+                        f"cold identity fingerprint drifted since latest retention-cycle: mismatched_sets={mismatched}",
+                        severity="warning",
+                        value=latest,
+                    )
                 return HealthSignal(
                     "retention_cycle",
                     False,
@@ -448,6 +465,7 @@ def _summarize_retention_cycle(path: Path, payload: dict[str, Any], created_at: 
         "backup_path": backup.get("path"),
         "cold_export_path": cold_export.get("path"),
         "plan_totals": plan.get("totals", {}),
+        "cold_identity": plan.get("cold_identity"),
         "shadow_prune": {
             "passed": shadow.get("passed"),
             "deletion": (shadow.get("deletion") or {}),

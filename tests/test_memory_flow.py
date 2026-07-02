@@ -26,6 +26,7 @@ from ara_memory.archive_crypto import (
     migrate_archive_objects,
     read_archive_object_header,
 )
+from ara_memory.cold_identity import build_cold_identity
 from ara_memory.costs import estimate_api_cost
 from ara_memory.core import AraMemory
 from ara_memory.compressors import estimate_tokens, extract_keywords
@@ -4198,6 +4199,7 @@ class MemoryFlowTests(unittest.TestCase):
                         protected_events=1,
                         prunable_events=1,
                         created_at=utc_now(),
+                        cold_identity=report.totals["cold_identity"],
                     ),
                     ensure_ascii=False,
                 ),
@@ -4220,6 +4222,13 @@ class MemoryFlowTests(unittest.TestCase):
                         protected_events=1,
                         prunable_events=0,
                         created_at=utc_now(),
+                        cold_identity=build_cold_identity(
+                            scope="alpha",
+                            cold_capsule_ids=["drifted-cold-a", "drifted-cold-b"],
+                            cold_source_event_ids=[shared_event.id],
+                            protected_event_ids=[shared_event.id],
+                            prunable_event_ids=[],
+                        ),
                     ),
                     ensure_ascii=False,
                 ),
@@ -4229,6 +4238,91 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(drifted.status, "watch")
             self.assertFalse(drifted.cycle_evidence["matches_current"])
             self.assertTrue(any("drifted" in item for item in drifted.recommendations))
+
+    def test_cold_stewardship_detects_same_count_identity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            protected_event = memory.retain(
+                kind="decision",
+                text="Decision: active source event should stay protected even if cold identity drifts.",
+                source="test",
+                scope="alpha",
+            )
+            cold_only_event = memory.retain(
+                kind="note",
+                text="Old note: cold-only source event keeps the same total count during identity drift.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="active identity drift decision",
+                    body="active memory pins one source event",
+                    scope="alpha",
+                    confidence=0.9,
+                    salience=0.9,
+                    source_event_ids=[protected_event.id],
+                    tags=["active"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            for event, title in (
+                (protected_event, "old identity drift protected cold"),
+                (cold_only_event, "old identity drift cold-only"),
+            ):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.PROJECT,
+                        title=title,
+                        body="same totals should not hide changed cold capsule identity",
+                        scope="alpha",
+                        confidence=0.4,
+                        salience=0.3,
+                        source_event_ids=[event.id],
+                        tags=["cold"],
+                        status=MemoryStatus.SUPERSEDED,
+                    )
+                )
+
+            wrong_identity = build_cold_identity(
+                scope="alpha",
+                cold_capsule_ids=["previous-cold-a", "previous-cold-b"],
+                cold_source_event_ids=[protected_event.id, cold_only_event.id],
+                protected_event_ids=[protected_event.id],
+                prunable_event_ids=[cold_only_event.id],
+            )
+            cycle_dir = memory.store.root / "archive" / "retention-cycles"
+            cycle_dir.mkdir(parents=True, exist_ok=True)
+            (cycle_dir / "alpha-retention-cycle-same-count-drift.json").write_text(
+                json.dumps(
+                    _retention_cycle_payload(
+                        scope="alpha",
+                        cold_capsules=2,
+                        protected_events=1,
+                        prunable_events=1,
+                        created_at=utc_now(),
+                        cold_identity=wrong_identity,
+                    ),
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            stewardship = memory.cold_stewardship(scope="alpha")
+            health = memory.health(scope="alpha", query="identity drift", recall_budget=900, hot_budget=500)
+            retention_signal = next(signal for signal in health.signals if signal.name == "retention_cycle")
+
+            self.assertEqual(stewardship.status, "watch")
+            self.assertTrue(stewardship.cycle_evidence["count_match"])
+            self.assertTrue(stewardship.cycle_evidence["identity_available"])
+            self.assertFalse(stewardship.cycle_evidence["identity_match"])
+            self.assertFalse(stewardship.cycle_evidence["matches_current"])
+            self.assertEqual(stewardship.cycle_evidence["identity_mismatched_sets"], ["cold_capsules"])
+            self.assertTrue(any("identity fingerprint drifted" in item for item in stewardship.recommendations))
+            self.assertFalse(retention_signal.passed, health.as_dict())
+            self.assertIn("identity fingerprint drifted", retention_signal.detail)
 
     def test_cold_stewardship_requires_fresh_retention_cycle_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4255,6 +4349,7 @@ class MemoryFlowTests(unittest.TestCase):
                     )
                 )
 
+            current = memory.cold_stewardship(scope="alpha", max_cycle_age_hours=24)
             cycle_dir = memory.store.root / "archive" / "retention-cycles"
             cycle_dir.mkdir(parents=True, exist_ok=True)
             (cycle_dir / "alpha-retention-cycle-stale.json").write_text(
@@ -4265,6 +4360,7 @@ class MemoryFlowTests(unittest.TestCase):
                         protected_events=0,
                         prunable_events=1,
                         created_at="2020-01-01T00:00:00+00:00",
+                        cold_identity=current.totals["cold_identity"],
                     ),
                     ensure_ascii=False,
                 ),
@@ -11375,6 +11471,7 @@ def _retention_cycle_payload(
     protected_events: int,
     prunable_events: int,
     created_at: str,
+    cold_identity: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     return {
         "scope": scope,
@@ -11387,7 +11484,8 @@ def _retention_cycle_payload(
                 "cold_capsules": cold_capsules,
                 "protected_events": protected_events,
                 "prunable_events": prunable_events,
-            }
+            },
+            **({"cold_identity": cold_identity} if cold_identity is not None else {}),
         },
         "shadow_prune": {
             "passed": True,

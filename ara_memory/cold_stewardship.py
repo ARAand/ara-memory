@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ara_memory.cold_identity import build_cold_identity, compare_cold_identities
 from ara_memory.compressors import estimate_tokens
 from ara_memory.models import MemoryStatus
 from ara_memory.retention import COLD_STATUSES
@@ -206,6 +207,13 @@ class ColdStewardshipAnalyzer:
         cold_source_events = sorted({event_id for row in rows for event_id in row["source_event_ids"]})
         protected_source_events = sorted(set(cold_source_events).intersection(active_event_ids))
         prunable_source_events = sorted(set(cold_source_events) - set(protected_source_events))
+        cold_identity = build_cold_identity(
+            scope=scope,
+            cold_capsule_ids=[row["id"] for row in rows],
+            cold_source_event_ids=cold_source_events,
+            protected_event_ids=protected_source_events,
+            prunable_event_ids=prunable_source_events,
+        )
         lifecycle_tiers = _lifecycle_tiers(rows)
         active_pins = _active_pin_groups(
             _active_rows(self.store, scope=scope),
@@ -220,6 +228,7 @@ class ColdStewardshipAnalyzer:
             cold_source_events=cold_source_events,
             protected_source_events=protected_source_events,
             prunable_source_events=prunable_source_events,
+            cold_identity=cold_identity,
             lifecycle_tiers=lifecycle_tiers,
         )
         groups = _groups(
@@ -340,6 +349,7 @@ def _totals(
     cold_source_events: list[str],
     protected_source_events: list[str],
     prunable_source_events: list[str],
+    cold_identity: dict[str, Any],
     lifecycle_tiers: list[ColdLifecycleTier],
 ) -> dict[str, Any]:
     with store.session() as conn:
@@ -358,6 +368,7 @@ def _totals(
         "cold_source_events": len(cold_source_events),
         "protected_source_events": len(protected_source_events),
         "prunable_source_events": len(prunable_source_events),
+        "cold_identity": cold_identity,
     }
     for tier in lifecycle_tiers:
         totals[f"{tier.name}_capsules"] = tier.count
@@ -573,6 +584,7 @@ def _latest_retention_cycle(root: Path, *, scope: str | None) -> dict[str, Any] 
             "created_at": created_at.isoformat(),
             "age_hours": round((datetime.now(timezone.utc) - created_at).total_seconds() / 3600, 2),
             "plan_totals": plan.get("totals", {}),
+            "cold_identity": plan.get("cold_identity"),
             "shadow_deletion": (shadow.get("deletion") or {}) if shadow else {},
             "backup_path": (payload.get("backup") or {}).get("path"),
             "cold_export_path": (payload.get("cold_export") or {}).get("path"),
@@ -603,15 +615,22 @@ def _cycle_evidence(
         "protected_events": totals["protected_source_events"],
         "prunable_events": totals["prunable_source_events"],
     }
+    current_identity = totals.get("cold_identity") if isinstance(totals.get("cold_identity"), dict) else None
     if not latest_cycle:
         return {
             "required": totals["cold_capsules"] > 0 and totals["cold_ratio"] > 0.5,
             "fresh": False,
             "max_age_hours": max_cycle_age_hours,
+            "count_match": False,
+            "identity_available": False,
+            "identity_match": False,
+            "identity_reason": "missing_cycle_identity",
             "matches_current": False,
             "shadow_events_preserved": False,
             "current": current,
             "cycle": None,
+            "current_identity": current_identity,
+            "cycle_identity": None,
         }
 
     plan_totals = dict(latest_cycle.get("plan_totals") or {})
@@ -622,16 +641,28 @@ def _cycle_evidence(
         "prunable_events": plan_totals.get("prunable_events"),
     }
     fresh = float(latest_cycle.get("age_hours") or 0) <= max_cycle_age_hours
-    matches_current = all(current[key] == cycle.get(key) for key in current)
+    count_match = all(current[key] == cycle.get(key) for key in current)
+    cycle_identity = latest_cycle.get("cold_identity") if isinstance(latest_cycle.get("cold_identity"), dict) else None
+    identity_comparison = compare_cold_identities(current_identity, cycle_identity)
+    identity_available = bool(identity_comparison.get("available"))
+    identity_match = bool(identity_comparison.get("matches"))
+    matches_current = count_match and identity_match
     shadow_events_preserved = bool(shadow_deletion) and shadow_deletion.get("events_removed", 0) == 0
     return {
         "required": totals["cold_capsules"] > 0 and totals["cold_ratio"] > 0.5,
         "fresh": fresh,
         "max_age_hours": max_cycle_age_hours,
+        "count_match": count_match,
+        "identity_available": identity_available,
+        "identity_match": identity_match,
+        "identity_reason": identity_comparison.get("reason"),
+        "identity_mismatched_sets": identity_comparison.get("mismatched_sets", []),
         "matches_current": matches_current,
         "shadow_events_preserved": shadow_events_preserved,
         "current": current,
         "cycle": cycle,
+        "current_identity": current_identity,
+        "cycle_identity": cycle_identity,
     }
 
 
@@ -712,7 +743,16 @@ def _recommend(
             if not cycle_evidence.get("fresh"):
                 recommendations.append("Latest retention-cycle is stale; rerun it before relying on cold stewardship evidence.")
             if not cycle_evidence.get("matches_current"):
-                recommendations.append("Cold memory totals drifted since the latest retention-cycle; rerun retention-cycle.")
+                if not cycle_evidence.get("identity_available"):
+                    recommendations.append(
+                        "Latest retention-cycle lacks a cold identity fingerprint; rerun retention-cycle."
+                    )
+                elif cycle_evidence.get("count_match") and not cycle_evidence.get("identity_match"):
+                    recommendations.append(
+                        "Cold memory identity fingerprint drifted since the latest retention-cycle; rerun retention-cycle."
+                    )
+                else:
+                    recommendations.append("Cold memory totals drifted since the latest retention-cycle; rerun retention-cycle.")
             if not cycle_evidence.get("shadow_events_preserved"):
                 recommendations.append("Latest shadow-prune did not prove source-event preservation; rerun retention-cycle.")
         recommendations.append("Latest retention-cycle passed; use it as evidence, not approval, before any live prune.")

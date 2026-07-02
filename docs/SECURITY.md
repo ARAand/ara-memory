@@ -53,7 +53,7 @@
 - `restore-backup` copies the source ZIP to a temporary snapshot and verifies/extracts that same byte stream; `--force` only clears recognized memory-root paths and preserves local signing keys.
 - `live-prune` binds approvals to exact capsule IDs plus backup/export SHA-256 identities, rechecks export coverage from the verified cold-export scan, rechecks current cold status at deletion time, and preserves source events.
 - `retention-cycle --no-shadow` is partial evidence only; pruning readiness requires a passing shadow-prune in a restored sandbox.
-- `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals, proved source-event preservation, separates active-linked evidence from archive candidates and audit-only rejects, and identifies active memories that pin cold source events.
+- `cold-stewardship` treats high cold pressure as current evidence only when the latest retention-cycle is fresh, matches live cold totals and the cold identity fingerprint, proved source-event preservation, separates active-linked evidence from archive candidates and audit-only rejects, and identifies active memories that pin cold source events.
 - `provenance-compact` is dry-run by default and applies only with `--apply --confirm "COMPACT PROVENANCE"`. Apply mode rewrites active source-event links in one transaction with compare-and-set checks on capsule status, expected source IDs, and retained event existence; any stale or malformed item aborts the whole batch. Successful writes leave `memory_actions` rows with `action=compact-provenance` and `actor=provenance-compaction`.
 - `lifecycle` is analysis-only: it separates core, working, guarded, evidence, archive, and reject memory without changing capsule status or deleting provenance.
 - Repository ignore rules block local memory roots, SQLite databases, backups, archives, logs, restored memory roots, and Codex-local folders from ordinary `git add .` publishing paths.
@@ -87,7 +87,7 @@
 - Run `worker-schedule-verify` after generating or editing scheduled-worker scripts and before installing them; verify the installed task and recent worker log separately.
 - Treat `worker-schedule-verify` as pre-install static evidence only; runtime evidence requires the generated status script plus recent worker log review.
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
-- Treat stale or drifted cold-stewardship evidence as a watch signal; inspect the evidence/archive/reject tier split and active provenance pins, then rerun retention-cycle before relying on it.
+- Treat stale, missing-fingerprint, or drifted cold-stewardship evidence as a watch signal; inspect the evidence/archive/reject tier split and active provenance pins, then rerun retention-cycle before relying on it.
 - Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
 - Treat `.ara-memory`, backups, cold exports, hot-memory files, archive object metadata, spool envelopes/path metadata, legacy snapshots, and SQLite databases as private evidence. Archive object payloads are encrypted at rest, but backups still include plaintext spool/ledger/database evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
 

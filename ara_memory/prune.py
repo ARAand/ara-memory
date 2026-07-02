@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.backup import restore_backup, verify_backup
+from ara_memory.cold_identity import build_cold_identity
 from ara_memory.cold_export import verify_cold_export
 from ara_memory.doctor import MemoryDoctor
 from ara_memory.models import MemoryStatus, new_id, utc_now
@@ -40,6 +41,7 @@ class PrunePlanReport:
     recall_checks: list[dict[str, Any]]
     protected_event_ids: list[str]
     prunable_event_ids: list[str]
+    cold_identity: dict[str, Any]
     candidate_capsule_ids: list[str]
     candidate_capsules: list[dict[str, Any]]
     recommendations: list[str]
@@ -55,6 +57,7 @@ class PrunePlanReport:
             "recall_checks": self.recall_checks,
             "protected_event_ids": self.protected_event_ids,
             "prunable_event_ids": self.prunable_event_ids,
+            "cold_identity": self.cold_identity,
             "candidate_capsule_ids": self.candidate_capsule_ids,
             "candidate_capsules": self.candidate_capsules,
             "recommendations": self.recommendations,
@@ -270,6 +273,13 @@ class PrunePlanner:
             "prunable_events": len(prunable_event_ids),
             "protected_events": len(protected_event_ids),
         }
+        cold_identity = build_cold_identity(
+            scope=scope,
+            cold_capsule_ids=ordered_candidate_ids,
+            cold_source_event_ids=source_event_ids,
+            protected_event_ids=protected_event_ids,
+            prunable_event_ids=prunable_event_ids,
+        )
         recommendations = _recommend(totals, gates, recall_queries=recall_queries or [])
         return PrunePlanReport(
             scope=scope,
@@ -281,6 +291,7 @@ class PrunePlanner:
             recall_checks=recall_checks,
             protected_event_ids=protected_event_ids,
             prunable_event_ids=prunable_event_ids,
+            cold_identity=cold_identity,
             candidate_capsule_ids=ordered_candidate_ids,
             candidate_capsules=[
                 {
