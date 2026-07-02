@@ -17,6 +17,7 @@ from ara_memory.storage import _invalidate_hot_scope, _sync_capsule_fts_row, row
 
 RECONSOLIDATION_APPLY_CONFIRMATION = "APPLY RECONSOLIDATION FRAME"
 RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION = "ROLLBACK RECONSOLIDATION CANDIDATE"
+RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION = "PREPARE STRONG RECONSOLIDATION ACTION"
 STRONG_RECONSOLIDATION_ACTIONS = ("promote", "rewrite", "delete", "cool")
 
 
@@ -538,6 +539,60 @@ class ReconsolidationLiveRollbackApproval:
                 "- Shadow rollback already passed on a verified restored backup.",
                 "- Live execution still requires exact confirmation.",
                 "- The only allowed live mutation is candidate frame capsule rejection.",
+            ]
+        )
+
+
+@dataclass(slots=True)
+class ReconsolidationStrongActionApproval:
+    approval_id: str
+    token: str
+    expires_at: str
+    scope: str
+    action: str
+    query: str
+    backup_path: str
+    action_gate: dict[str, Any]
+    preflight: ReconsolidationStrongPreflightReport
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "token": self.token,
+            "expires_at": self.expires_at,
+            "scope": self.scope,
+            "action": self.action,
+            "query": self.query,
+            "backup_path": self.backup_path,
+            "action_gate": self.action_gate,
+            "preflight": self.preflight.as_dict(),
+            "safety": [
+                "Approval is short-lived and one-use, but no live executor consumes it yet.",
+                "This approval does not mutate live memory.",
+                "The selected action is design-ready only; live_authorized remains false.",
+                (
+                    "A future live executor must reverify the backup, preflight evidence, "
+                    "compare-and-set target state, and rollback or exception witness design."
+                ),
+            ],
+        }
+
+    def to_text(self) -> str:
+        return "\n".join(
+            [
+                "# Ara Reconsolidation Strong Action Prepare",
+                f"approval_id: {self.approval_id}",
+                f"scope: {self.scope}",
+                f"action: {self.action}",
+                f"expires_at: {self.expires_at}",
+                f"approval_token: {self.token}",
+                f"design_ready: {self.action_gate.get('design_ready')}",
+                f"live_authorized: {self.action_gate.get('live_authorized')}",
+                f"future_confirmation_required: {self.action_gate.get('confirmation_required')}",
+                "## Safety",
+                "- Strong preflight passed on a verified restored backup.",
+                "- This command only stores an approval record; it does not promote, rewrite, delete, or cool memory.",
+                "- A future live executor must consume the token once and rerun the same invariants.",
             ]
         )
 
@@ -1469,6 +1524,106 @@ def _strong_action_gate_matrix(
         }
         for action in actions
     ]
+
+
+def prepare_live_reconsolidation_action(
+    memory: Any,
+    query: str,
+    *,
+    backup_path: Path,
+    action: str,
+    confirmation: str,
+    scope: str = "global",
+    budgets: list[int] | None = None,
+    working_budget: int = 900,
+    recall_budget: int = 1600,
+    include_global: bool = True,
+    include_hot: bool = True,
+    regression_cases: list[Any] | None = None,
+    regression_baseline: dict[str, Any] | None = None,
+    ttl_minutes: int = 30,
+) -> ReconsolidationStrongActionApproval:
+    clean_query = query.strip()
+    if not clean_query:
+        raise ValueError("query is required.")
+    if confirmation != RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION:
+        raise ValueError(
+            f"confirmation must exactly match: {RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION}"
+        )
+    requested_action = _normalize_strong_reconsolidation_actions([action])[0]
+    memory.store.init()
+    backup_path = backup_path.resolve()
+    backup_identity_before = _file_identity(backup_path)
+    preflight = strong_reconsolidation_preflight(
+        memory,
+        clean_query,
+        backup_path=backup_path,
+        scope=scope,
+        budgets=budgets,
+        working_budget=working_budget,
+        recall_budget=recall_budget,
+        include_global=include_global,
+        include_hot=include_hot,
+        regression_cases=regression_cases,
+        regression_baseline=regression_baseline,
+        actions=[requested_action],
+    )
+    if not preflight.passed:
+        raise ValueError("Cannot prepare live reconsolidation action because strong preflight did not pass.")
+    if len(preflight.action_gates) != 1:
+        raise ValueError("Cannot prepare live reconsolidation action because exactly one action gate is required.")
+    action_gate = preflight.action_gates[0]
+    if action_gate.get("action") != requested_action:
+        raise ValueError("Cannot prepare live reconsolidation action because the preflight action changed.")
+    if not action_gate.get("design_ready"):
+        raise ValueError("Cannot prepare live reconsolidation action because the action is not design-ready.")
+    if action_gate.get("live_authorized"):
+        raise ValueError("Cannot prepare live reconsolidation action because preflight must not authorize live mutation.")
+    backup_identity_after = _file_identity(backup_path)
+    if backup_identity_before != backup_identity_after:
+        raise ValueError("Cannot prepare live reconsolidation action because backup changed during preflight.")
+
+    token = secrets.token_urlsafe(24)
+    approval_id = new_id("recon_action_approval")
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+    preflight_payload = preflight.as_dict()
+    with memory.store.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_action_approvals(
+              id, token_hash, scope, action, query, backup_path, preflight_json,
+              action_gate_json, backup_identity_json, confirmation_required,
+              expires_at, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                _token_hash(token),
+                scope,
+                requested_action,
+                clean_query,
+                str(backup_path),
+                json.dumps(preflight_payload, ensure_ascii=False, sort_keys=True),
+                json.dumps(action_gate, ensure_ascii=False, sort_keys=True),
+                json.dumps(backup_identity_after, ensure_ascii=False, sort_keys=True),
+                str(action_gate.get("confirmation_required", "")),
+                expires_at,
+                "prepared",
+                utc_now(),
+            ),
+        )
+    return ReconsolidationStrongActionApproval(
+        approval_id=approval_id,
+        token=token,
+        expires_at=expires_at,
+        scope=scope,
+        action=requested_action,
+        query=clean_query,
+        backup_path=str(backup_path),
+        action_gate=action_gate,
+        preflight=preflight,
+    )
 
 
 def shadow_reconsolidation_rollback(

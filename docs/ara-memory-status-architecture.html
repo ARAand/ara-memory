@@ -170,6 +170,7 @@
       <ul>
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
         <li>strong preflight는 promote/rewrite/delete/cool을 action gate로 분리하고, design_ready와 live_authorized를 별도로 보고한다.</li>
+        <li>prepare-live-reconsolidation-action은 action 하나에 대한 짧은 one-use approval record만 저장하며 live mutation은 여전히 닫혀 있다.</li>
         <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
         <li>exception witness는 설명 장치일 뿐 권한 상승 장치가 아니다.</li>
         <li>semantic hygiene false failure는 재분류했고 milestone readiness는 pass다.</li>
@@ -234,8 +235,8 @@
         </div>
         <div class="row">
           <strong>strong action gate</strong>
-          <p>진행: promote/rewrite/delete/cool capability matrix를 추가했다. 남음: 실제 live executor는 아직 닫혀 있으며, one-use token과 compare-and-set witness 설계가 필요하다.</p>
-          <span class="badge watch">3-5h</span>
+          <p>진행: promote/rewrite/delete/cool capability matrix와 prepare-live-reconsolidation-action approval record를 추가했다. 남음: 실제 live executor는 아직 닫혀 있으며, compare-and-set witness 실행기가 필요하다.</p>
+          <span class="badge watch">2-4h</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
@@ -249,7 +250,7 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 design_ready가 된 action을 실제 live executor로 열기 전에 one-use token, compare-and-set, rollback witness를 연결하는 것이다.</li>
+        <li>다음 1순위는 prepared action approval token을 소비하는 실제 live executor를 만들기 전에 compare-and-set target snapshot과 rollback/exception witness를 연결하는 것이다.</li>
         <li>live mutation은 promote/rewrite/delete/cool 권한마다 별도 confirmation과 증거를 요구해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
@@ -258,7 +259,7 @@
   </section>
 
   <footer>
-    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, and strong action gate matrix.
+    Updated for schema v20 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, strong action gate matrix, and action approval records.
     Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>

@@ -27,6 +27,7 @@ from ara_memory.relation_merge import (
 from ara_memory.reconsolidation import (
     RECONSOLIDATION_APPLY_CONFIRMATION,
     RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION,
+    RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION,
     STRONG_RECONSOLIDATION_ACTIONS,
     backfill_legacy_reconsolidation_rollback_witnesses,
     list_reconsolidation_review_queue,
@@ -310,6 +311,31 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_strong_preflight.add_argument("--regression-manifest", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--regression-baseline", type=Path, default=None)
     reconsolidation_strong_preflight.add_argument("--json", action="store_true")
+    prepare_live_recon_action = sub.add_parser(
+        "prepare-live-reconsolidation-action",
+        help=(
+            "Prepare a short-lived one-use approval record for one design-ready "
+            "strong reconsolidation action without mutating live memory."
+        ),
+    )
+    prepare_live_recon_action.add_argument("query", nargs="?", default=None)
+    prepare_live_recon_action.add_argument("--backup", type=Path, required=True)
+    prepare_live_recon_action.add_argument("--action", choices=STRONG_RECONSOLIDATION_ACTIONS, required=True)
+    prepare_live_recon_action.add_argument("--scope", default="global")
+    prepare_live_recon_action.add_argument("--budgets", default="800,1600,2500")
+    prepare_live_recon_action.add_argument("--working-budget", type=int, default=900)
+    prepare_live_recon_action.add_argument("--recall-budget", type=int, default=1600)
+    prepare_live_recon_action.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_live_recon_action.add_argument(
+        "--confirm",
+        required=True,
+        help=f"Must exactly match: {RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION}",
+    )
+    prepare_live_recon_action.add_argument("--no-global", action="store_true")
+    prepare_live_recon_action.add_argument("--no-hot", action="store_true")
+    prepare_live_recon_action.add_argument("--regression-manifest", type=Path, default=None)
+    prepare_live_recon_action.add_argument("--regression-baseline", type=Path, default=None)
+    prepare_live_recon_action.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1452,6 +1478,31 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.passed else 1
+
+    if args.cmd == "prepare-live-reconsolidation-action":
+        query = args.query if args.query is not None else sys.stdin.read().strip()
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
+        result = memory.prepare_live_reconsolidation_action(
+            query,
+            backup_path=args.backup,
+            action=args.action,
+            confirmation=args.confirm,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            regression_cases=cases,
+            regression_baseline=baseline,
+            ttl_minutes=args.ttl_minutes,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
 
     if args.cmd == "reconsolidation-shadow-rollback":
         result = memory.shadow_reconsolidation_rollback(

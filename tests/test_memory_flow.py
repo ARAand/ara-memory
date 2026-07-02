@@ -45,6 +45,7 @@ from ara_memory.relation_merge import (
     run_relation_merge_dry_run,
 )
 from ara_memory.reconsolidation import (
+    RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION,
     backfill_legacy_reconsolidation_rollback_witnesses,
     list_reconsolidation_review_queue,
     record_reconsolidation_review_queue,
@@ -3296,6 +3297,99 @@ class MemoryFlowTests(unittest.TestCase):
                 payload["action_gates"][0]["required_gates"],
             )
 
+    def test_prepare_live_reconsolidation_action_records_one_use_design_approval_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text=(
+                    "Goal: long-running purpose requires strong reconsolidation shadow apply review "
+                    "before rewrite action becomes design-ready for any live executor."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: strong action approval",
+                    body=(
+                        "long-running purpose requires strong reconsolidation shadow apply review "
+                        "before rewrite action becomes design-ready for any live executor"
+                    ),
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "strong-action", "approval"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: prepare does not execute",
+                    body=(
+                        "Strong action prepare requires shadow apply, witness review, recall regression, "
+                        "and a short-lived approval record, not a live mutation."
+                    ),
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "strong-action", "safety"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            backup = memory.backup(output=Path(tmp) / "strong-action-approval.zip")
+
+            with self.assertRaises(ValueError):
+                memory.prepare_live_reconsolidation_action(
+                    "strong action rewrite approval",
+                    backup_path=backup.path,
+                    action="rewrite",
+                    confirmation="prepare",
+                    scope="alpha",
+                    budgets=[800, 1200],
+                    include_global=False,
+                )
+
+            approval = memory.prepare_live_reconsolidation_action(
+                "long-running purpose strong reconsolidation shadow apply review",
+                backup_path=backup.path,
+                action="rewrite",
+                confirmation=RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION,
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+                include_global=False,
+            )
+
+            self.assertTrue(approval.token)
+            self.assertEqual(approval.action, "rewrite")
+            self.assertTrue(approval.action_gate["design_ready"])
+            self.assertFalse(approval.action_gate["live_authorized"])
+            self.assertEqual(
+                approval.action_gate["confirmation_required"],
+                "ENABLE STRONG RECONSOLIDATION REWRITE",
+            )
+            with memory.store.session() as conn:
+                row = conn.execute("SELECT * FROM reconsolidation_action_approvals").fetchone()
+                recon_approvals = conn.execute("SELECT COUNT(*) FROM reconsolidation_approvals").fetchone()[0]
+                recon_witnesses = conn.execute("SELECT COUNT(*) FROM reconsolidation_witnesses").fetchone()[0]
+            self.assertIsNotNone(row)
+            self.assertEqual(row["status"], "prepared")
+            self.assertEqual(row["scope"], "alpha")
+            self.assertEqual(row["action"], "rewrite")
+            self.assertNotEqual(row["token_hash"], approval.token)
+            action_gate = json.loads(row["action_gate_json"])
+            self.assertTrue(action_gate["design_ready"])
+            self.assertFalse(action_gate["live_authorized"])
+            self.assertEqual(recon_approvals, 0)
+            self.assertEqual(recon_witnesses, 0)
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -5316,12 +5410,20 @@ class MemoryFlowTests(unittest.TestCase):
                     WHERE type = 'table' AND name = 'reconsolidation_exception_witnesses'
                     """
                 ).fetchone()
+                action_approval_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_action_approvals'
+                    """
+                ).fetchone()
             self.assertIn("rollback_witness_json", columns)
             self.assertEqual(row["rollback_witness_json"], "{}")
             self.assertIsNotNone(queue_table)
             self.assertIsNotNone(rollback_approval_table)
             self.assertIsNotNone(rollback_witness_table)
             self.assertIsNotNone(exception_witness_table)
+            self.assertIsNotNone(action_approval_table)
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:

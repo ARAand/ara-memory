@@ -594,7 +594,14 @@ the test bed. Use `--action promote`, `--action rewrite`, `--action delete`, or
 `--action cool` to inspect the capability-specific gate matrix. Each action
 reports `design_ready` separately from `live_authorized`; preflight can make an
 action design-ready, but it never authorizes live promote, rewrite, delete, or
-cool by itself. `reconsolidation-shadow-rollback` is the rollback executor's
+cool by itself. `prepare-live-reconsolidation-action` is the next narrow gate:
+it reruns strong preflight for exactly one action, requires the exact
+confirmation `PREPARE STRONG RECONSOLIDATION ACTION`, stores a short-lived
+one-use approval record, and still performs no live mutation. Its token is only
+a future executor input; the future executor must recheck backup identity,
+preflight evidence, compare-and-set target state, and rollback or exception
+witness design before it can promote, rewrite, delete, or cool anything.
+`reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in
 that restored copy, preserves evidence capsules/source events/witnesses, and

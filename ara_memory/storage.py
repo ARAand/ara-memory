@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -389,6 +389,26 @@ CREATE TABLE IF NOT EXISTS reconsolidation_exception_witnesses (
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_exception_witnesses_target
 ON reconsolidation_exception_witnesses(reconsolidation_witness_id, capsule_id, field, status);
 
+CREATE TABLE IF NOT EXISTS reconsolidation_action_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  query TEXT NOT NULL,
+  backup_path TEXT NOT NULL,
+  preflight_json TEXT NOT NULL,
+  action_gate_json TEXT NOT NULL,
+  backup_identity_json TEXT NOT NULL,
+  confirmation_required TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_approvals_status
+ON reconsolidation_action_approvals(scope, action, status, expires_at);
+
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -550,6 +570,8 @@ class MemoryStore:
                 _ensure_reconsolidation_rollback_v18_tables(conn)
             if old_version < 19:
                 _ensure_reconsolidation_exception_v19_tables(conn)
+            if old_version < 20:
+                _ensure_reconsolidation_action_v20_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1966,6 +1988,32 @@ def _ensure_reconsolidation_exception_v19_tables(conn: sqlite3.Connection) -> No
 
         CREATE INDEX IF NOT EXISTS idx_reconsolidation_exception_witnesses_target
         ON reconsolidation_exception_witnesses(reconsolidation_witness_id, capsule_id, field, status);
+        """
+    )
+
+
+def _ensure_reconsolidation_action_v20_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reconsolidation_action_approvals (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          query TEXT NOT NULL,
+          backup_path TEXT NOT NULL,
+          preflight_json TEXT NOT NULL,
+          action_gate_json TEXT NOT NULL,
+          backup_identity_json TEXT NOT NULL,
+          confirmation_required TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          used_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_approvals_status
+        ON reconsolidation_action_approvals(scope, action, status, expires_at);
         """
     )
 

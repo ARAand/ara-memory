@@ -158,6 +158,14 @@ reconsolidation_strong_preflight(backup, query, scope)
   -> never mutate the live memory store
   -> treat pass as design evidence for a future stronger gate, not live mutation approval
 
+prepare_live_reconsolidation_action(backup, query, action, confirm)
+  -> require exact PREPARE STRONG RECONSOLIDATION ACTION confirmation
+  -> rerun strong preflight for exactly one promote/rewrite/delete/cool action
+  -> require design_ready=true and live_authorized=false
+  -> store a short-lived one-use approval token plus backup identity, preflight, and action gate evidence
+  -> never mutate the live memory store and never consume the token itself
+  -> leave actual live execution closed until a future executor rechecks compare-and-set and rollback/exception witnesses
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack
