@@ -194,6 +194,7 @@ reframe the request.
 }
 '@ | python -m ara_memory plan-turn --capture-cwd .
 python -m ara_memory govern-turn --file ./turn.json --scope project --capture-cwd . --json
+python -m ara_memory govern-turn --file ./turn.json --scope project --record-working-impact --impact-outcome "Projected memory changed the next action." --impact-helped true --json
 ```
 
 For the always-on path, use `ingress-turn`. It runs the same plan and then
@@ -423,6 +424,11 @@ feedback guides recall without turning it into an unchecked reward signal.
 projection has no items, no action section, no overlap with visible recall
 evidence, or exceeds the working-memory budget. This makes the next-action
 context auditable without forcing Codex to read a full recall pack.
+After a reviewed turn outcome, `govern-turn --record-working-impact` can record
+the projected capsule ids as `working-memory-impact` rows. This reuses the same
+bounded impact table as manual feedback: helpful/harmful outcomes can nudge
+future cue-matched ranking, unknown remains diagnostic, and no route or memory
+is promoted automatically.
 `agency-review` is the first self-directed judgment layer above recall policy
 and working memory. It checks a current prompt or proposed action against visible
 purpose memory, Ara identity memory, recall-policy routing, and associative

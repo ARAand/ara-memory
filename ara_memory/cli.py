@@ -570,6 +570,13 @@ def main(argv: list[str] | None = None) -> int:
     govern_turn.add_argument("--output-tokens", type=int, default=0)
     govern_turn.add_argument("--input-usd-per-million", type=float, default=0.0)
     govern_turn.add_argument("--output-usd-per-million", type=float, default=0.0)
+    govern_turn.add_argument(
+        "--record-working-impact",
+        action="store_true",
+        help="Record projected working-memory capsule ids as bounded impact feedback after reviewing the turn outcome.",
+    )
+    govern_turn.add_argument("--impact-outcome", default="")
+    govern_turn.add_argument("--impact-helped", choices=["true", "false", "unknown"], default="unknown")
     govern_turn.add_argument("--json", action="store_true")
 
     agency_review = sub.add_parser(
@@ -1868,6 +1875,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "govern-turn":
         payload = _read_json_arg(args.file)
+        impact_helped = None if args.impact_helped == "unknown" else args.impact_helped == "true"
         result = memory.govern_turn(
             payload,
             scope=args.scope,
@@ -1882,6 +1890,9 @@ def main(argv: list[str] | None = None) -> int:
             output_tokens=args.output_tokens,
             input_usd_per_million=args.input_usd_per_million,
             output_usd_per_million=args.output_usd_per_million,
+            record_working_impact=args.record_working_impact,
+            impact_outcome=args.impact_outcome,
+            impact_helped=impact_helped,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

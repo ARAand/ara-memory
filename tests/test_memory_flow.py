@@ -10456,6 +10456,93 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(any(action["name"] == "proceed-with-current-evidence" for action in payload["actions"]))
             self.assertTrue(any("low-evidence" in risk for risk in payload["risks"]))
 
+    def test_govern_turn_can_record_projection_gate_working_memory_impact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: projection impact",
+                body="Projection gate impact should become bounded feedback only after explicit review.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.82,
+                source_event_ids=[],
+                tags=["projection", "impact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.govern_turn(
+                {"prompt": "Projection impact should become bounded feedback."},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+                record_working_impact=True,
+                impact_outcome="The projection gate helped choose the next action.",
+                impact_helped=True,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(payload["working_memory_impact"]["status"], "recorded")
+            self.assertEqual(payload["working_memory_impact"]["helped"], True)
+            self.assertIn(capsule.id, payload["working_memory_impact"]["capsule_ids"])
+            rows = memory.store.list_working_memory_impacts(
+                scope="alpha",
+                capsule_ids=[capsule.id],
+                include_global=False,
+            )
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["capsule_id"], capsule.id)
+            self.assertEqual(rows[0]["helped"], 1)
+            with memory.store.session() as conn:
+                event = conn.execute(
+                    "SELECT source, metadata_json FROM events WHERE id = ?",
+                    (payload["working_memory_impact"]["event_id"],),
+                ).fetchone()
+            self.assertEqual(event["source"], "govern-turn-working-memory-impact")
+            self.assertIn("working_memory_impact", event["metadata_json"])
+
+    def test_govern_turn_skips_projection_impact_without_reviewed_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision memory: projection impact outcome",
+                    body="Projection impact feedback requires a reviewed outcome.",
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.82,
+                    source_event_ids=[],
+                    tags=["projection", "impact"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+
+            report = memory.govern_turn(
+                {"prompt": "Projection impact feedback requires a reviewed outcome."},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+                record_working_impact=True,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(payload["working_memory_impact"]["status"], "skipped")
+            self.assertIn("impact_outcome is required", payload["working_memory_impact"]["reason"])
+            self.assertEqual(
+                memory.store.list_working_memory_impacts(
+                    scope="alpha",
+                    capsule_ids=list(payload["projection_gate"]["projected_capsule_ids"]),
+                    include_global=False,
+                ),
+                [],
+            )
+
     def test_govern_turn_blocks_anti_judgment_frame(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -10603,6 +10690,70 @@ class MemoryFlowTests(unittest.TestCase):
             finally:
                 conn.close()
             self.assertEqual(retained, 0)
+
+    def test_cli_govern_turn_can_record_working_memory_impact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: cli projection impact",
+                body="CLI projection impact should be recorded only when explicitly requested.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.82,
+                source_event_ids=[],
+                tags=["cli", "projection", "impact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            envelope = root / "turn.json"
+            envelope.write_text(
+                json.dumps({"prompt": "CLI projection impact should be recorded."}),
+                encoding="utf-8",
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "govern-turn",
+                    "--file",
+                    str(envelope),
+                    "--scope",
+                    "alpha",
+                    "--budgets",
+                    "700",
+                    "--no-global",
+                    "--no-hot",
+                    "--record-working-impact",
+                    "--impact-outcome",
+                    "The CLI projection influenced the turn outcome.",
+                    "--impact-helped",
+                    "true",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["working_memory_impact"]["status"], "recorded")
+            self.assertIn(capsule.id, payload["working_memory_impact"]["capsule_ids"])
+            rows = memory.store.list_working_memory_impacts(
+                scope="alpha",
+                capsule_ids=[capsule.id],
+                include_global=False,
+            )
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["helped"], 1)
 
     def test_cli_govern_turn_returns_nonzero_when_agency_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

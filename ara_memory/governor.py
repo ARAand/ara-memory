@@ -38,6 +38,7 @@ class TurnGovernanceReport:
     recall_probe: dict[str, Any]
     working_memory: dict[str, Any]
     projection_gate: dict[str, Any]
+    working_memory_impact: dict[str, Any]
     cost: dict[str, Any]
     risks: list[str] = field(default_factory=list)
     actions: list[GovernanceAction] = field(default_factory=list)
@@ -57,6 +58,7 @@ class TurnGovernanceReport:
             "recall_probe": self.recall_probe,
             "working_memory": self.working_memory,
             "projection_gate": self.projection_gate,
+            "working_memory_impact": self.working_memory_impact,
             "cost": self.cost,
             "risks": list(self.risks),
             "actions": [action.as_dict() for action in self.actions],
@@ -105,6 +107,13 @@ class TurnGovernanceReport:
             f"overlap={self.projection_gate.get('visible_projected_overlap')} "
             f"action_items={self.projection_gate.get('action_items')}"
         )
+        impact_state = self.working_memory_impact.get("status", "not-requested")
+        if impact_state != "not-requested":
+            lines.append(
+                "- working_memory_impact: "
+                f"status={impact_state} "
+                f"event_id={self.working_memory_impact.get('event_id') or 'none'}"
+            )
         lines.append("## Cost")
         lines.append(
             "- local_only=True "
@@ -133,6 +142,9 @@ def govern_turn(
     output_tokens: int = 0,
     input_usd_per_million: float = 0.0,
     output_usd_per_million: float = 0.0,
+    record_working_impact: bool = False,
+    impact_outcome: str = "",
+    impact_helped: bool | None = None,
 ) -> TurnGovernanceReport:
     """Plan memory actions for a turn without storing or rendering raw history."""
 
@@ -194,6 +206,15 @@ def govern_turn(
     )
     agency_payload = _agency_payload(agency)
     projection_gate = _projection_gate(working_payload, selected_probe, working_budget=working_budget)
+    working_impact = _record_working_impact(
+        memory,
+        scope=scope,
+        cue=cue,
+        projection_gate=projection_gate,
+        requested=record_working_impact,
+        outcome=impact_outcome,
+        helped=impact_helped,
+    )
     risks = _risks(capture_plan, selected_probe, working_payload, projection_gate, command_errors, agency_payload)
     cost = _cost_payload(
         capture_plan,
@@ -222,6 +243,7 @@ def govern_turn(
         recall_probe=selected_probe,
         working_memory=working_payload,
         projection_gate=projection_gate,
+        working_memory_impact=working_impact,
         cost=cost,
         risks=risks,
         actions=actions,
@@ -334,6 +356,58 @@ def _agency_payload(agency: Any) -> dict[str, Any]:
         "identity_passed": bool(agency.evidence.get("identity", {}).get("passed", False)),
         "recall_policy_status": agency.evidence.get("recall_policy", {}).get("status"),
         "working_items": int(agency.evidence.get("working_memory", {}).get("items", 0)),
+    }
+
+
+def _record_working_impact(
+    memory: Any,
+    *,
+    scope: str,
+    cue: str,
+    projection_gate: dict[str, Any],
+    requested: bool,
+    outcome: str,
+    helped: bool | None,
+) -> dict[str, Any]:
+    capsule_ids = list(projection_gate.get("projected_capsule_ids", []))
+    if not requested:
+        return {
+            "status": "not-requested",
+            "event_id": None,
+            "capsule_ids": [],
+            "helped": None,
+        }
+    clean_outcome = outcome.strip()
+    if not clean_outcome:
+        return {
+            "status": "skipped",
+            "event_id": None,
+            "capsule_ids": capsule_ids,
+            "helped": helped,
+            "reason": "impact_outcome is required when recording govern-turn working-memory impact",
+        }
+    if not capsule_ids:
+        return {
+            "status": "skipped",
+            "event_id": None,
+            "capsule_ids": [],
+            "helped": helped,
+            "reason": "projection gate had no projected capsule ids",
+        }
+    event = memory.record_memory_impact(
+        scope=scope,
+        cue=cue,
+        capsule_ids=capsule_ids,
+        outcome=clean_outcome,
+        helped=helped,
+        source="govern-turn-working-memory-impact",
+    )
+    return {
+        "status": "recorded",
+        "event_id": event.id,
+        "capsule_ids": capsule_ids,
+        "helped": helped,
+        "source": event.source,
     }
 
 
