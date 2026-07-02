@@ -173,6 +173,7 @@ class ReviewWorkerItem:
     dry_run: bool
     changed: bool
     reason: str
+    witness_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -183,6 +184,7 @@ class ReviewWorkerItem:
             "dry_run": self.dry_run,
             "changed": self.changed,
             "reason": self.reason,
+            "witness_id": self.witness_id,
         }
 
 
@@ -208,7 +210,8 @@ class ReviewWorkerReport:
         lines = [f"# Ara Review Worker: {scope}", f"dry_run: {self.dry_run}", f"processed={self.processed}, changed={self.changed}"]
         for item in self.items[:20]:
             marker = "changed" if item.changed else "kept"
-            lines.append(f"- [{marker}] {item.queue_id} {item.requested_action}->{item.applied_action}: {item.reason}")
+            witness = f" witness={item.witness_id}" if item.witness_id else ""
+            lines.append(f"- [{marker}] {item.queue_id} {item.requested_action}->{item.applied_action}{witness}: {item.reason}")
         return "\n".join(lines)
 
 
@@ -835,6 +838,7 @@ class QualityScorer:
         applied = "keep-open"
         changed = False
         reason = "; ".join(current.reasons[:4]) or row["reason"]
+        witness_id: str | None = None
         if row["action"] == "promote" and capsule["status"] == MemoryStatus.CANDIDATE.value:
             gate = can_promote_capsule(self.store, capsule, require_provenance=True)
             if not gate.allowed:
@@ -846,15 +850,18 @@ class QualityScorer:
                 changed = True
             if not dry_run:
                 if changed:
-                    updated = self.store.update_capsule_status_if_current(
+                    witness_id = self.store.apply_review_status_if_current(
                         capsule["id"],
-                        MemoryStatus.CANDIDATE,
+                        capsule["status"],
                         MemoryStatus.STABLE,
+                        review_queue_id=row["id"],
+                        requested_action=row["action"],
+                        applied_action="promote",
                         actor="review-worker",
                         reason=reason,
                     )
-                    changed = updated
-                    if updated:
+                    changed = witness_id is not None
+                    if witness_id:
                         self.resolve_queue_item(row["id"])
                     else:
                         applied = "keep-open"
@@ -863,8 +870,22 @@ class QualityScorer:
             applied = "quarantine"
             changed = True
             if not dry_run:
-                self.store.update_capsule_status(capsule["id"], MemoryStatus.QUARANTINED, actor="review-worker", reason=reason)
-                self.resolve_queue_item(row["id"])
+                witness_id = self.store.apply_review_status_if_current(
+                    capsule["id"],
+                    capsule["status"],
+                    MemoryStatus.QUARANTINED,
+                    review_queue_id=row["id"],
+                    requested_action=row["action"],
+                    applied_action="quarantine",
+                    actor="review-worker",
+                    reason=reason,
+                )
+                changed = witness_id is not None
+                if witness_id:
+                    self.resolve_queue_item(row["id"])
+                else:
+                    applied = "keep-open"
+                    reason = "quarantine skipped because capsule status changed before apply"
         elif row["action"] == "review":
             if _is_acknowledgeable_review(reason):
                 applied = "resolve"
@@ -888,6 +909,7 @@ class QualityScorer:
             dry_run=dry_run,
             changed=changed,
             reason=reason,
+            witness_id=witness_id,
         )
 
     def _capsule(self, capsule_id: str) -> dict[str, Any] | None:

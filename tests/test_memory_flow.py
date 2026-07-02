@@ -13743,6 +13743,83 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["ready"][0]["capsule_id"], ready.id)
             self.assertEqual(payload["blocked"][0]["capsule_id"], blocked.id)
 
+    def test_review_worker_apply_records_status_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            first = memory.retain(
+                kind="note",
+                text="Independent evidence: project beta promotion should be witnessed.",
+                source="test-a",
+                scope="beta",
+            )
+            second = memory.retain(
+                kind="note",
+                text="Independent evidence: project beta promotion should be witnessed.",
+                source="test-b",
+                scope="beta",
+            )
+            candidate = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="witnessed promotion candidate",
+                body="Project beta promotion should be witnessed.",
+                scope="beta",
+                confidence=0.95,
+                salience=0.95,
+                source_event_ids=[first.id, second.id],
+                tags=["promotion", "witness"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(candidate)
+
+            quality = memory.quality(scope="beta", persist=True)
+            scored = next(item for item in quality.items if item.capsule_id == candidate.id)
+            self.assertEqual(scored.action, "promote")
+            queue = memory.review_queue(scope="beta")
+            self.assertEqual(len(queue), 1)
+
+            report = memory.review_worker(scope="beta", limit=10, dry_run=False)
+
+            self.assertEqual(report.changed, 1, report.as_dict())
+            self.assertEqual(report.items[0].applied_action, "promote")
+            self.assertIsNotNone(report.items[0].witness_id)
+            self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.STABLE.value)
+            witnesses = memory.review_witnesses(scope="beta", action="promote")
+            self.assertEqual(len(witnesses), 1)
+            witness = witnesses[0]
+            self.assertEqual(witness["id"], report.items[0].witness_id)
+            self.assertEqual(witness["review_queue_id"], queue[0]["id"])
+            self.assertEqual(witness["before_status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(witness["after_status"], MemoryStatus.STABLE.value)
+            self.assertNotEqual(witness["before_digest"], witness["after_digest"])
+            before = json.loads(witness["before_json"])
+            after = json.loads(witness["after_json"])
+            self.assertEqual(before["status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(after["status"], MemoryStatus.STABLE.value)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "review-witnesses",
+                    "--scope",
+                    "beta",
+                    "--action",
+                    "promote",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload[0]["id"], witness["id"])
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

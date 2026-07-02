@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -558,6 +558,31 @@ CREATE TABLE IF NOT EXISTS memory_review_queue (
 
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON memory_review_queue(scope, status, priority);
 
+CREATE TABLE IF NOT EXISTS memory_review_witnesses (
+  id TEXT PRIMARY KEY,
+  review_queue_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  requested_action TEXT NOT NULL,
+  applied_action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_status TEXT NOT NULL,
+  after_status TEXT NOT NULL,
+  before_digest TEXT NOT NULL,
+  after_digest TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(review_queue_id) REFERENCES memory_review_queue(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_scope
+ON memory_review_witnesses(scope, requested_action, applied_action, created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_capsule
+ON memory_review_witnesses(capsule_id, created_at);
+
 CREATE TABLE IF NOT EXISTS working_memory_impacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL,
@@ -640,6 +665,8 @@ class MemoryStore:
                 _ensure_reconsolidation_action_rollback_v22_tables(conn)
             if old_version < 23:
                 _ensure_reconsolidation_action_rollback_witness_v23_tables(conn)
+            if old_version < 24:
+                _ensure_memory_review_witness_v24_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1329,6 +1356,78 @@ class MemoryStore:
             _invalidate_hot_scope(self.hot_dir, row["scope"])
             return True
 
+    def apply_review_status_if_current(
+        self,
+        capsule_id: str,
+        current_status: str | MemoryStatus,
+        status: str | MemoryStatus,
+        *,
+        review_queue_id: str,
+        requested_action: str,
+        applied_action: str,
+        actor: str = "review-worker",
+        reason: str = "",
+    ) -> str | None:
+        self.init()
+        current_status_value = _status_value(current_status)
+        status_value = _status_value(status)
+        with self.session() as conn:
+            row = conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if row is None or row["status"] != current_status_value:
+                return None
+            before = _capsule_witness_snapshot(row)
+            before_json = json.dumps(before, ensure_ascii=False, sort_keys=True)
+            now = utc_now()
+            cur = conn.execute(
+                "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (status_value, now, capsule_id, current_status_value),
+            )
+            if cur.rowcount <= 0:
+                return None
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if updated is None:
+                return None
+            _sync_capsule_fts_row(conn, updated)
+            after = _capsule_witness_snapshot(updated)
+            after_json = json.dumps(after, ensure_ascii=False, sort_keys=True)
+            witness_id = new_id("rwit")
+            conn.execute(
+                """
+                INSERT INTO memory_review_witnesses(
+                  id, review_queue_id, capsule_id, scope, requested_action, applied_action,
+                  actor, reason, before_status, after_status, before_digest, after_digest,
+                  before_json, after_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    witness_id,
+                    review_queue_id,
+                    capsule_id,
+                    row["scope"],
+                    requested_action,
+                    applied_action,
+                    actor,
+                    reason,
+                    before["status"],
+                    after["status"],
+                    _json_digest(before),
+                    _json_digest(after),
+                    before_json,
+                    after_json,
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (status_value, capsule_id, row["scope"], reason, actor, utc_now()),
+            )
+            _invalidate_hot_scope(self.hot_dir, row["scope"])
+            return witness_id
+
     def update_capsule_projection_if_current(
         self,
         capsule_id: str,
@@ -1806,6 +1905,38 @@ class MemoryStore:
                 )
             )
 
+    def list_review_witnesses(
+        self,
+        *,
+        scope: str | None = None,
+        action: str | None = None,
+        limit: int = 50,
+    ) -> list[sqlite3.Row]:
+        self.init()
+        clauses: list[str] = []
+        args: list[Any] = []
+        if scope:
+            clauses.append("scope = ?")
+            args.append(scope)
+        if action:
+            clauses.append("(requested_action = ? OR applied_action = ?)")
+            args.extend([action, action])
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        args.append(limit)
+        with self.session() as conn:
+            return list(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM memory_review_witnesses
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    args,
+                )
+            )
+
     def list_working_memory_impacts(
         self,
         *,
@@ -1932,6 +2063,28 @@ def row_to_capsule(row: sqlite3.Row) -> dict[str, Any]:
     data["source_event_ids"] = json.loads(data.pop("source_event_ids_json"))
     data["tags"] = json.loads(data.pop("tags_json"))
     return data
+
+
+def _capsule_witness_snapshot(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "title": row["title"],
+        "body": row["body"],
+        "scope": row["scope"],
+        "status": row["status"],
+        "confidence": row["confidence"],
+        "salience": row["salience"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "source_event_ids": json.loads(row["source_event_ids_json"]),
+        "tags": json.loads(row["tags_json"]),
+    }
+
+
+def _json_digest(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 def _normalize_relation_text(text: str) -> str:
@@ -2162,6 +2315,37 @@ def _ensure_reconsolidation_action_rollback_witness_v23_tables(conn: sqlite3.Con
 
         CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_rollback_witnesses_scope
         ON reconsolidation_action_rollback_witnesses(scope, action, created_at);
+        """
+    )
+
+
+def _ensure_memory_review_witness_v24_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memory_review_witnesses (
+          id TEXT PRIMARY KEY,
+          review_queue_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          requested_action TEXT NOT NULL,
+          applied_action TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          before_status TEXT NOT NULL,
+          after_status TEXT NOT NULL,
+          before_digest TEXT NOT NULL,
+          after_digest TEXT NOT NULL,
+          before_json TEXT NOT NULL,
+          after_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(review_queue_id) REFERENCES memory_review_queue(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_scope
+        ON memory_review_witnesses(scope, requested_action, applied_action, created_at);
+        CREATE INDEX IF NOT EXISTS idx_memory_review_witnesses_capsule
+        ON memory_review_witnesses(capsule_id, created_at);
         """
     )
 

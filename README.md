@@ -813,7 +813,12 @@ longer sees sensitive text in the projection.
 candidates, quarantine risky candidates, or resolve only acknowledgeable review
 markers. Sensitive-data, self-serving identity, and other unresolved policy
 reviews stay open instead of being silently acknowledged. It never deletes
-memories and leaves decay items for explicit policy review.
+memories and leaves decay items for explicit policy review. Promotion and
+quarantine apply operations write `memory_review_witnesses` rows with the review queue id,
+requested/applied action, before/after status, before/after capsule projection,
+and digests. Use `review-witnesses --scope project --action promote --json` to
+inspect those witnesses before trusting or rolling back a worker-applied memory
+change.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

@@ -493,6 +493,14 @@ promotion recommendation
   -> automatic provenance gate
   -> candidate-only compare-and-set write
   -> memory_actions actor/reason log + hot invalidation
+
+review_worker_apply(scope)
+  -> reload open memory_review_queue row and capsule
+  -> recompute quality/risk action
+  -> promotion provenance gate or quarantine risk gate
+  -> compare-and-set status write
+  -> memory_review_witnesses before/after capsule snapshot + digest
+  -> resolve queue row only after witness-backed mutation succeeds
 ```
 
 Manual promotion uses the shared deterministic risk gate but remains an

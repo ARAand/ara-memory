@@ -822,6 +822,11 @@ def main(argv: list[str] | None = None) -> int:
     review_triage.add_argument("--json", action="store_true")
     resolve_review = sub.add_parser("resolve-review")
     resolve_review.add_argument("queue_id")
+    review_witnesses = sub.add_parser("review-witnesses")
+    review_witnesses.add_argument("--scope", default=None)
+    review_witnesses.add_argument("--action", default=None)
+    review_witnesses.add_argument("--limit", type=int, default=50)
+    review_witnesses.add_argument("--json", action="store_true")
     review_worker = sub.add_parser("review-worker")
     review_worker.add_argument("--scope", default=None)
     review_worker.add_argument("--limit", type=int, default=25)
@@ -2316,6 +2321,18 @@ def main(argv: list[str] | None = None) -> int:
         if not memory.resolve_review(args.queue_id):
             raise SystemExit(f"Open review queue item not found: {args.queue_id}")
         print(json.dumps({"resolved": args.queue_id}, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "review-witnesses":
+        rows = memory.review_witnesses(scope=args.scope, action=args.action, limit=args.limit)
+        if args.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            for row in rows:
+                print(
+                    f"{row['id']} {row['requested_action']}->{row['applied_action']} "
+                    f"{row['capsule_id']} {row['before_status']}->{row['after_status']}"
+                )
         return 0
 
     if args.cmd == "review-worker":

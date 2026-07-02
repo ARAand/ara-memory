@@ -194,6 +194,16 @@ class AraMemory:
     def list_actions(self, *, limit: int = 50) -> list[dict[str, Any]]:
         return [dict(row) for row in self.store.list_actions(limit=limit)]
 
+    def review_witnesses(
+        self,
+        *,
+        scope: str | None = None,
+        action: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        scope = _canonical_scope(scope)
+        return [dict(row) for row in self.store.list_review_witnesses(scope=scope, action=action, limit=limit)]
+
     def sleep(self, *, scope: str = "global", dry_run: bool = False) -> SleepReport:
         scope = _canonical_scope(scope) or "global"
         return SleepConsolidator(self.store, advisor=self._advisor()).run(scope=scope, dry_run=dry_run)
