@@ -127,6 +127,11 @@ review_compact(scope)
   -> acknowledge deterministic artifact-exclusion markers
   -> never promote, quarantine, decay, delete, or otherwise mutate capsules
 
+review_redact(scope)
+  -> redact sensitive capsule title/body/tags projections only
+  -> preserve source-event links and write digest witnesses
+  -> resolve sensitive review markers only after risk re-score clears
+
 review_worker(scope)
   -> promote/quarantine only gated queue actions
   -> acknowledge only low-risk review markers
@@ -300,7 +305,8 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 18. Use purpose-aware lifecycle tiers before recall or pruning: long-running purpose, identity, and preference anchors may enter hot memory, working memories require query selection, guarded memories require review, and cold evidence requires export/prune gates.
 19. Verify scheduled-worker scripts before installation; treat installed always-on maintenance as a separate operational gate.
 20. Compact active summary provenance before expecting cold pressure to fall, but only from a reviewed dry-run. The retained source sample is deterministic and quality-aware: it prefers decision, verification, regression, health, backup, retention, identity, purpose, and risk evidence while preserving temporal coverage. Apply uses one transaction with compare-and-set checks on capsule status, source links, event existence, and provenance witness creation, so a stale or malformed plan rolls back without partial link rewrites. Witness rows preserve the original source-event set and digest while active direct links are shortened. When recall-regression manifest/baseline inputs are supplied, baseline-visible and baseline-selected capsules are protected, then apply simulates the remaining rewrite in a shadow store. If the simulation shifts a reviewed recall path, unstable candidates are elided and retried; live mutation is blocked when no recall-stable plan remains. This operation changes active provenance links, not memory text or promotion status, and must be followed by cold-stewardship, health, and recall-regression before retention-cycle or pruning decisions.
-21. Treat temporal recall as explicit: only temporal words or phrases should
+21. Redact sensitive active capsule projections through reviewed `review-redact` dry-runs, not by deleting source evidence. The operation updates only title/body/tags with compare-and-set checks, records original/redacted digests in `capsule_redaction_witnesses`, keeps source-event links intact, and resolves the review marker only after a fresh risk score no longer detects sensitive projection text.
+22. Treat temporal recall as explicit: only temporal words or phrases should
     trigger recency boosts, while ordinary substrings such as `knowledge` or
     `blast` must stay lexical.
 22. Treat working memory as a cue-led action pack, not another cache: it should

@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import tempfile
+import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -31,6 +32,8 @@ ARCHIVE_OBJECT_ALGORITHM = "aes-256-gcm-archive-object-v1"
 ARCHIVE_KEY_ESCROW_ALGORITHM = "aes-256-gcm-archive-key-escrow-v1"
 GCM_NONCE_BYTES = 12
 GCM_TAG_BYTES = 16
+ARCHIVE_KEY_READY_RETRIES = 50
+ARCHIVE_KEY_READY_SLEEP_SECONDS = 0.01
 
 
 @dataclass(slots=True)
@@ -359,7 +362,7 @@ def _encrypt_file(source: Path, destination: Path, *, key: bytes, plaintext_sha2
 
 
 def _load_or_create_archive_key(root: Path) -> bytes:
-    key = _load_archive_key(root)
+    key = _load_archive_key_when_ready(root)
     if key is not None:
         return key
     key_path = root / ARCHIVE_OBJECT_KEY_NAME
@@ -369,7 +372,7 @@ def _load_or_create_archive_key(root: Path) -> bytes:
     try:
         fd = os.open(str(key_path), flags, 0o600)
     except FileExistsError:
-        winner = _load_archive_key(root)
+        winner = _load_archive_key_when_ready(root)
         if winner is None:
             raise
         return winner
@@ -380,6 +383,19 @@ def _load_or_create_archive_key(root: Path) -> bytes:
     except OSError:
         pass
     return key
+
+
+def _load_archive_key_when_ready(root: Path) -> bytes | None:
+    for attempt in range(ARCHIVE_KEY_READY_RETRIES):
+        try:
+            return _load_archive_key(root)
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            if attempt == ARCHIVE_KEY_READY_RETRIES - 1:
+                raise
+            time.sleep(ARCHIVE_KEY_READY_SLEEP_SECONDS)
+    return None
 
 
 def _write_archive_key(root: Path, key: bytes) -> None:

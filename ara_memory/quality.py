@@ -7,7 +7,7 @@ from typing import Any
 
 from ara_memory.models import MemoryStatus, new_id, utc_now
 from ara_memory.promotion import can_promote_capsule, promotion_block_reason
-from ara_memory.risk import MemoryRiskAssessor
+from ara_memory.risk import MemoryRiskAssessor, redact_memory_tags, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -183,6 +183,63 @@ class ReviewCompactReport:
         for item in self.items[:20]:
             marker = "changed" if item.changed else "kept"
             lines.append(f"- [{marker}] {item.queue_id} {item.action}: {item.reason}")
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReviewRedactionItem:
+    queue_id: str
+    capsule_id: str
+    action: str
+    changed: bool
+    resolved: bool
+    dry_run: bool
+    reason: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "queue_id": self.queue_id,
+            "capsule_id": self.capsule_id,
+            "action": self.action,
+            "changed": self.changed,
+            "resolved": self.resolved,
+            "dry_run": self.dry_run,
+            "reason": self.reason,
+        }
+
+
+@dataclass(slots=True)
+class ReviewRedactionReport:
+    scope: str | None
+    dry_run: bool
+    processed: int
+    changed: int
+    resolved: int
+    skipped: int
+    items: list[ReviewRedactionItem]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "dry_run": self.dry_run,
+            "processed": self.processed,
+            "changed": self.changed,
+            "resolved": self.resolved,
+            "skipped": self.skipped,
+            "items": [item.as_dict() for item in self.items],
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Review Redact: {scope}",
+            f"dry_run: {self.dry_run}",
+            f"processed={self.processed}, changed={self.changed}, resolved={self.resolved}, skipped={self.skipped}",
+        ]
+        for item in self.items[:20]:
+            marker = "changed" if item.changed else "kept"
+            resolved = " resolved" if item.resolved else ""
+            lines.append(f"- [{marker}{resolved}] {item.queue_id} {item.action}: {item.reason}")
         return "\n".join(lines)
 
 
@@ -385,6 +442,26 @@ class QualityScorer:
             items=items,
         )
 
+    def redact_sensitive_reviews(
+        self,
+        *,
+        scope: str | None = None,
+        limit: int = 50,
+        dry_run: bool = True,
+    ) -> ReviewRedactionReport:
+        self.store.init()
+        queue = self.list_queue(scope=scope, status="open", limit=limit)
+        items = [self._redact_item(row, dry_run=dry_run) for row in queue]
+        return ReviewRedactionReport(
+            scope=scope,
+            dry_run=dry_run,
+            processed=len(items),
+            changed=sum(1 for item in items if item.changed),
+            resolved=sum(1 for item in items if item.resolved),
+            skipped=sum(1 for item in items if not item.changed),
+            items=items,
+        )
+
     def _compact_item(self, row: dict[str, Any], *, dry_run: bool) -> ReviewCompactItem:
         capsule = self._capsule(row["capsule_id"])
         if capsule is None:
@@ -428,6 +505,110 @@ class QualityScorer:
             changed=False,
             dry_run=dry_run,
             reason="left open; action changes memory state or needs explicit policy",
+        )
+
+    def _redact_item(self, row: dict[str, Any], *, dry_run: bool) -> ReviewRedactionItem:
+        capsule = self._capsule(row["capsule_id"])
+        if capsule is None:
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=False,
+                resolved=False,
+                dry_run=dry_run,
+                reason="left open; capsule no longer exists and should be compacted separately",
+            )
+        current = self._score(capsule)
+        reason = "; ".join(current.reasons[:4]) or str(row["reason"])
+        if row["action"] != "review" or current.action != "review":
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=False,
+                resolved=False,
+                dry_run=dry_run,
+                reason=f"skipped; current review action is {current.action}",
+            )
+        if not _is_sensitive_review(reason):
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=False,
+                resolved=False,
+                dry_run=dry_run,
+                reason=f"skipped; review is not a sensitive-data marker: {reason}",
+            )
+
+        redacted_title = redact_sensitive_text(str(capsule["title"]))
+        redacted_body = redact_sensitive_text(str(capsule["body"]))
+        redacted_tags = _redacted_projection_tags(capsule["tags"])
+        changed = (
+            redacted_title != capsule["title"]
+            or redacted_body != capsule["body"]
+            or redacted_tags != capsule["tags"]
+        )
+        if not changed:
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=False,
+                resolved=False,
+                dry_run=dry_run,
+                reason="left open; no sensitive text was removed from the capsule projection",
+            )
+
+        if dry_run:
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=True,
+                resolved=True,
+                dry_run=dry_run,
+                reason="would redact capsule projection and resolve sensitive review marker",
+            )
+
+        updated = self.store.update_capsule_projection_if_current(
+            capsule["id"],
+            title=redacted_title,
+            body=redacted_body,
+            tags=redacted_tags,
+            expected_status=capsule["status"],
+            expected_title=capsule["title"],
+            expected_body=capsule["body"],
+            expected_tags=capsule["tags"],
+            actor="review-redact",
+            reason=reason,
+            action="redact-sensitive-review",
+            review_queue_id=row["id"],
+        )
+        if not updated:
+            return ReviewRedactionItem(
+                queue_id=row["id"],
+                capsule_id=row["capsule_id"],
+                action=row["action"],
+                changed=False,
+                resolved=False,
+                dry_run=dry_run,
+                reason="left open; capsule changed before redaction apply",
+            )
+        refreshed = self._capsule(capsule["id"])
+        still_sensitive = bool(refreshed and self._score(refreshed).action == "review" and self.risk.assess_capsule(refreshed).has_sensitive_text)
+        resolved = False
+        if not still_sensitive:
+            resolved = self.resolve_queue_item(row["id"])
+        return ReviewRedactionItem(
+            queue_id=row["id"],
+            capsule_id=row["capsule_id"],
+            action=row["action"],
+            changed=True,
+            resolved=resolved,
+            dry_run=dry_run,
+            reason="redacted capsule projection" + (" and resolved review marker" if resolved else "; sensitive review remains open"),
         )
 
     def _work_item(self, row: dict[str, Any], *, dry_run: bool) -> ReviewWorkerItem:
@@ -747,6 +928,19 @@ def _is_acknowledgeable_review(reason: str) -> bool:
         "instruction-like text appears inside code/test/document artifact" in lowered
         or "keyword stuffing" in lowered
     )
+
+
+def _is_sensitive_review(reason: str) -> bool:
+    lowered = reason.lower()
+    return "sensitive data" in lowered or "direct identifier" in lowered
+
+
+def _redacted_projection_tags(tags: list[str]) -> list[str]:
+    safe = redact_memory_tags(tags)
+    for tag in ("privacy:redacted", "review-redacted"):
+        if tag not in safe:
+            safe.append(tag)
+    return safe
 
 
 def _has_resolved_review_marker(conn: Any, *, capsule_id: str, action: str, reason: str) -> bool:

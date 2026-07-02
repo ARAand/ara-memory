@@ -328,6 +328,7 @@ python -m ara_memory quality --scope ara-memory --persist
 python -m ara_memory review-queue --scope ara-memory
 python -m ara_memory review-triage --scope ara-memory
 python -m ara_memory review-compact --scope ara-memory
+python -m ara_memory review-redact --scope ara-memory
 python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
@@ -490,6 +491,12 @@ as instruction-like text inside code/test/document artifacts or keyword-stuffed
 artifact summaries. It does not promote, quarantine, decay, delete, or otherwise
 change memory capsules, and resolved review markers are not reopened by later
 quality persistence unless their reason changes.
+`review-redact` defaults to dry-run. With `--apply`, it handles sensitive-data
+review markers by redacting only the active capsule projection (`title`, `body`,
+and `tags`), leaving source-event provenance linked for local audit. Each apply
+writes a `capsule_redaction_witnesses` row with original and redacted digests,
+then resolves the review marker only when the deterministic risk scorer no
+longer sees sensitive text in the projection.
 `review-worker` defaults to dry-run. With `--apply`, it may promote strong
 candidates, quarantine risky candidates, or resolve only acknowledgeable review
 markers. Sensitive-data, self-serving identity, and other unresolved policy

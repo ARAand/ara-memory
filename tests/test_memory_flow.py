@@ -9202,6 +9202,67 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(len(memory.review_queue(scope="worker-sensitive", status="open", limit=10)), 1)
             self.assertEqual(memory.store.get_capsule(sensitive.id)["status"], MemoryStatus.STABLE.value)
 
+    def test_review_redact_redacts_sensitive_projection_and_keeps_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Evidence note: source event should remain linked after projection redaction.",
+                source="test",
+                scope="redact-sensitive",
+            )
+            sensitive = Capsule.create(
+                kind=CapsuleKind.EPISODE,
+                title="Sensitive operational episode",
+                body="Contact 010-1234-5678 appeared in operational evidence.",
+                scope="redact-sensitive",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["contact", "010-1234-5678"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(sensitive)
+            memory.quality(scope="redact-sensitive", persist=True)
+            queue = memory.review_queue(scope="redact-sensitive", status="open", limit=10)
+            self.assertEqual(len(queue), 1)
+            self.assertEqual(queue[0]["action"], "review")
+
+            dry = memory.review_redact(scope="redact-sensitive", dry_run=True)
+            self.assertEqual(dry.changed, 1, dry.as_dict())
+            self.assertEqual(dry.resolved, 1, dry.as_dict())
+            self.assertIn("010-1234-5678", memory.store.get_capsule(sensitive.id)["body"])
+            self.assertEqual(len(memory.review_queue(scope="redact-sensitive", status="open", limit=10)), 1)
+
+            applied = memory.review_redact(scope="redact-sensitive", dry_run=False)
+
+            self.assertEqual(applied.changed, 1, applied.as_dict())
+            self.assertEqual(applied.resolved, 1, applied.as_dict())
+            row = memory.store.get_capsule(sensitive.id)
+            self.assertNotIn("010-1234-5678", row["body"])
+            self.assertIn("[redacted phone-like identifier]", row["body"])
+            tags = json.loads(row["tags_json"])
+            self.assertNotIn("010-1234-5678", tags)
+            self.assertIn("privacy:redacted", tags)
+            self.assertEqual(json.loads(row["source_event_ids_json"]), [event.id])
+            self.assertFalse(any(item["sensitive"] for item in memory.risk_report(scope="redact-sensitive")), memory.risk_report(scope="redact-sensitive"))
+            self.assertEqual(len(memory.review_queue(scope="redact-sensitive", status="open", limit=10)), 0)
+            self.assertEqual(len(memory.review_queue(scope="redact-sensitive", status="resolved", limit=10)), 1)
+            with memory.store.session() as conn:
+                witness = conn.execute(
+                    "SELECT * FROM capsule_redaction_witnesses WHERE capsule_id = ?",
+                    (sensitive.id,),
+                ).fetchone()
+                self.assertIsNotNone(witness)
+                self.assertEqual(witness["review_queue_id"], queue[0]["id"])
+                self.assertEqual(witness["action"], "redact-sensitive-review")
+                action = conn.execute(
+                    "SELECT action FROM memory_actions WHERE capsule_id = ? ORDER BY id DESC LIMIT 1",
+                    (sensitive.id,),
+                ).fetchone()
+                self.assertEqual(action["action"], "redact-sensitive-review")
+
     def test_external_command_advisor_can_keep_safe_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

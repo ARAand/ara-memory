@@ -369,6 +369,11 @@ def main(argv: list[str] | None = None) -> int:
     review_compact.add_argument("--limit", type=int, default=250)
     review_compact.add_argument("--apply", action="store_true")
     review_compact.add_argument("--json", action="store_true")
+    review_redact = sub.add_parser("review-redact")
+    review_redact.add_argument("--scope", default=None)
+    review_redact.add_argument("--limit", type=int, default=50)
+    review_redact.add_argument("--apply", action="store_true")
+    review_redact.add_argument("--json", action="store_true")
     worker = sub.add_parser("worker")
     worker.add_argument("--scope", default="global")
     worker.add_argument("--spool-limit", type=int, default=25)
@@ -1260,6 +1265,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "review-compact":
         result = memory.review_compact(scope=args.scope, limit=args.limit, dry_run=not args.apply)
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "review-redact":
+        result = memory.review_redact(scope=args.scope, limit=args.limit, dry_run=not args.apply)
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         else:

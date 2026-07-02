@@ -247,6 +247,10 @@ class AraMemory:
         scope = _canonical_scope(scope)
         return QualityScorer(self.store).compact_queue(scope=scope, limit=limit, dry_run=dry_run)
 
+    def review_redact(self, *, scope: str | None = None, limit: int = 50, dry_run: bool = True) -> Any:
+        scope = _canonical_scope(scope)
+        return QualityScorer(self.store).redact_sensitive_reviews(scope=scope, limit=limit, dry_run=dry_run)
+
     def build_hot(self, *, scope: str = "global", budget: int = 1200) -> HotState:
         scope = _canonical_scope(scope) or "global"
         return HotStateBuilder(self.store).build(scope=scope, budget=budget)

@@ -13,7 +13,7 @@ from ara_memory.compressors import extract_keywords, is_search_term
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, utc_now
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -129,6 +129,24 @@ CREATE TABLE IF NOT EXISTS provenance_witnesses (
   FOREIGN KEY(capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS capsule_redaction_witnesses (
+  id TEXT PRIMARY KEY,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  review_queue_id TEXT,
+  original_title_digest TEXT NOT NULL,
+  redacted_title_digest TEXT NOT NULL,
+  original_body_digest TEXT NOT NULL,
+  redacted_body_digest TEXT NOT NULL,
+  original_tags_digest TEXT NOT NULL,
+  redacted_tags_digest TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS capsules_fts USING fts5(
   id UNINDEXED,
   title,
@@ -159,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_capsules_status_updated ON capsules(status, updat
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_status_updated ON capsules(scope, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_capsule_source_events_event ON capsule_source_events(event_id, capsule_id);
 CREATE INDEX IF NOT EXISTS idx_provenance_witnesses_capsule ON provenance_witnesses(capsule_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_capsule_redaction_witnesses_capsule ON capsule_redaction_witnesses(capsule_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
 
@@ -714,6 +733,102 @@ class MemoryStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (status.value, capsule_id, row["scope"], reason, actor, utc_now()),
+            )
+            _invalidate_hot_scope(self.hot_dir, row["scope"])
+            return True
+
+    def update_capsule_projection_if_current(
+        self,
+        capsule_id: str,
+        *,
+        title: str,
+        body: str,
+        tags: list[str],
+        expected_status: str | MemoryStatus,
+        expected_title: str,
+        expected_body: str,
+        expected_tags: list[str],
+        actor: str = "manual",
+        reason: str = "",
+        action: str = "redact-sensitive-review",
+        review_queue_id: str | None = None,
+    ) -> bool:
+        self.init()
+        expected_status_value = _status_value(expected_status)
+        expected_tags_json = json.dumps(list(expected_tags), ensure_ascii=False)
+        tags_json = json.dumps(list(tags), ensure_ascii=False)
+        with self.session() as conn:
+            row = conn.execute(
+                "SELECT scope, status, title, body, tags_json FROM capsules WHERE id = ?",
+                (capsule_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if (
+                row["status"] != expected_status_value
+                or row["title"] != expected_title
+                or row["body"] != expected_body
+                or row["tags_json"] != expected_tags_json
+            ):
+                return False
+            now = utc_now()
+            cur = conn.execute(
+                """
+                UPDATE capsules
+                SET title = ?, body = ?, tags_json = ?, updated_at = ?
+                WHERE id = ? AND status = ? AND title = ? AND body = ? AND tags_json = ?
+                """,
+                (
+                    title,
+                    body,
+                    tags_json,
+                    now,
+                    capsule_id,
+                    expected_status_value,
+                    expected_title,
+                    expected_body,
+                    expected_tags_json,
+                ),
+            )
+            if cur.rowcount <= 0:
+                return False
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+            if updated is not None:
+                _sync_capsule_fts_row(conn, updated)
+            conn.execute(
+                """
+                INSERT INTO capsule_redaction_witnesses(
+                  id, capsule_id, scope, action, actor, reason, review_queue_id,
+                  original_title_digest, redacted_title_digest,
+                  original_body_digest, redacted_body_digest,
+                  original_tags_digest, redacted_tags_digest,
+                  created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_id("red"),
+                    capsule_id,
+                    row["scope"],
+                    action,
+                    actor,
+                    reason,
+                    review_queue_id,
+                    _text_digest(expected_title),
+                    _text_digest(title),
+                    _text_digest(expected_body),
+                    _text_digest(body),
+                    _tags_digest(expected_tags),
+                    _tags_digest(tags),
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (action, capsule_id, row["scope"], reason, actor, utc_now()),
             )
             _invalidate_hot_scope(self.hot_dir, row["scope"])
             return True
@@ -1298,6 +1413,15 @@ def _sync_capsule_fts_payload(
         "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
         (capsule_id, title, body, kind, scope, " ".join(tags)),
     )
+
+
+def _text_digest(value: str) -> str:
+    return sha256(str(value).encode("utf-8", errors="replace")).hexdigest()
+
+
+def _tags_digest(tags: Iterable[Any]) -> str:
+    payload = json.dumps([str(tag) for tag in tags], ensure_ascii=False, sort_keys=True)
+    return _text_digest(payload)
 
 
 def _event_fingerprint(event: Event) -> str:
