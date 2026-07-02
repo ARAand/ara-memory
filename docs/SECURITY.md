@@ -102,7 +102,7 @@
 - Run `worker-schedule-verify` after generating or editing scheduled-worker scripts and before installing them; verify the installed task and recent worker log separately.
 - Treat `worker-schedule-verify` as pre-install static evidence only; runtime evidence requires the generated status script plus recent worker log review.
 - Treat `live-prune` as irreversible: rerun retention-cycle and prepare-live-prune if any cold capsule status changes after approval.
-- Treat stale, missing-fingerprint, or drifted cold-stewardship evidence as a watch signal; inspect the evidence/archive/reject tier split and active provenance pins, then rerun retention-cycle before relying on it.
+- Treat stale, missing-fingerprint, or prunable-set-drifted cold-stewardship evidence as a watch signal; inspect the evidence/archive/reject tier split and active provenance pins, then rerun retention-cycle before relying on it. Protected-only drift can be treated as managed cold pressure only when shadow events are preserved and the prunable identity still matches.
 - Treat guarded lifecycle memory as review-required; do not let it enter hot memory simply because it is recent or high-salience.
 - Treat `.ara-memory`, backups, cold exports, hot-memory files, archive object metadata, spool envelopes/path metadata, legacy snapshots, and SQLite databases as private evidence. Archive object payloads are encrypted at rest, but backups still include plaintext spool/ledger/database evidence. Keep live memory roots outside public repositories when possible, and run `git status --short` plus `git ls-files` before publishing.
 

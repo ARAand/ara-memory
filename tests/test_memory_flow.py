@@ -9196,12 +9196,14 @@ class MemoryFlowTests(unittest.TestCase):
 
             report = memory.health(scope="alpha", query="retention cycle health evidence", recall_budget=900, hot_budget=500)
             retention_signal = next(signal for signal in report.signals if signal.name == "retention_cycle")
+            cold_signal = next(signal for signal in report.signals if signal.name == "cold_ratio")
 
             self.assertTrue(retention_signal.passed, report.as_dict())
+            self.assertTrue(cold_signal.passed, report.as_dict())
+            self.assertIn("covered by current cold-stewardship evidence", cold_signal.detail)
             self.assertIn("latest_retention_cycle", report.stats)
             self.assertTrue(report.stats["latest_retention_cycle"]["passed"])
-            self.assertTrue(any("retention-cycle evidence exists" in item for item in report.recommendations))
-            self.assertTrue(any("cold-stewardship" in item for item in report.recommendations))
+            self.assertTrue(report.stats["cold_stewardship"]["cycle_evidence"]["matches_current"])
 
     def test_health_allows_protected_only_retention_cycle_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -85,7 +85,8 @@ def run_health_check(
     latest_backup = _latest_backup(memory.store.root)
     backup_stewardship = _backup_stewardship_report(memory, stats, target_backup_bytes=backup_target_bytes)
     latest_retention_cycle = _latest_retention_cycle(memory.store.root, scope=scope)
-    cold_signal = _cold_ratio_signal(retention.as_dict())
+    retention_payload = retention.as_dict()
+    cold_ratio_probe = _cold_ratio_signal(retention_payload)
     cold_stewardship = (
         memory.cold_stewardship(
             scope=scope,
@@ -93,8 +94,12 @@ def run_health_check(
             examples_per_group=0,
             max_cycle_age_hours=retention_cycle_max_age_hours,
         )
-        if not cold_signal.passed
+        if not cold_ratio_probe.passed
         else None
+    )
+    cold_signal = _cold_ratio_signal(
+        retention_payload,
+        cold_stewardship.as_dict() if cold_stewardship else None,
     )
 
     signals = [
@@ -108,11 +113,11 @@ def run_health_check(
         _review_pressure_signal(triage.as_dict()),
         _relation_review_pressure_signal(memory.store, scope=scope, limit=review_limit),
         _reconsolidation_review_pressure_signal(memory, scope=scope, limit=review_limit),
-        _candidate_ratio_signal(retention.as_dict()),
+        _candidate_ratio_signal(retention_payload),
         cold_signal,
         _retention_cycle_signal(
             latest_retention_cycle,
-            retention.as_dict(),
+            retention_payload,
             cold_stewardship.as_dict() if cold_stewardship else None,
             max_age_hours=retention_cycle_max_age_hours,
         ),
@@ -246,14 +251,40 @@ def _candidate_ratio_signal(retention: dict[str, Any]) -> HealthSignal:
     return HealthSignal("candidate_ratio", True, f"candidate/stable ratio is {ratio:.2f}", value=ratio)
 
 
-def _cold_ratio_signal(retention: dict[str, Any]) -> HealthSignal:
+def _cold_ratio_signal(retention: dict[str, Any], cold_stewardship: dict[str, Any] | None = None) -> HealthSignal:
     totals = retention.get("totals", {})
     capsules = max(1, int(totals.get("capsules", 0)))
     cold = int(totals.get("cold_capsules", 0))
     ratio = cold / capsules
     if ratio > 0.5:
+        if _cold_stewardship_covers_current_pressure(cold_stewardship):
+            value = {
+                "ratio": ratio,
+                "cold_stewardship": cold_stewardship,
+            }
+            return HealthSignal(
+                "cold_ratio",
+                True,
+                f"cold capsules are {ratio:.0%} of scope, covered by current cold-stewardship evidence",
+                value=value,
+            )
         return HealthSignal("cold_ratio", False, f"cold capsules are {ratio:.0%} of scope", severity="warning", value=ratio)
     return HealthSignal("cold_ratio", True, f"cold capsules are {ratio:.0%} of scope", value=ratio)
+
+
+def _cold_stewardship_covers_current_pressure(cold_stewardship: dict[str, Any] | None) -> bool:
+    if not isinstance(cold_stewardship, dict):
+        return False
+    if cold_stewardship.get("status") != "pass":
+        return False
+    evidence = cold_stewardship.get("cycle_evidence", {})
+    if not isinstance(evidence, dict):
+        return False
+    if not evidence.get("shadow_events_preserved"):
+        return False
+    if evidence.get("matches_current"):
+        return True
+    return bool(evidence.get("protected_only_drift") and evidence.get("prunable_identity_match"))
 
 
 def _backup_signal(latest: dict[str, Any] | None, *, max_age_hours: float) -> HealthSignal:

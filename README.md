@@ -515,7 +515,10 @@ concrete next actions. `watch` is intentionally non-fatal and exits 0 from the
 CLI; schedulers and CI that should alert on watch conditions must parse
 `health --json` and inspect `status`, not only the process exit code. When cold pressure is high, health treats a stale or
 drifted retention-cycle as watch evidence and points back to
-`cold-stewardship`/`retention-cycle` before any live cleanup. When verified
+`cold-stewardship`/`retention-cycle` before any live cleanup. A passing
+`cold-stewardship` report can cover high cold ratios only when shadow events are
+preserved and the prunable identity still matches; protected-only drift remains
+managed distant memory instead of an automatic warning. When verified
 backup bytes exceed the stewardship target, health reports a `backup_pressure`
 watch signal using a read-only dry-run `backup-stewardship` candidate set that
 does not update the verification cache; deletion still requires a separate
