@@ -601,6 +601,12 @@ one-use approval record, and still performs no live mutation. Its token is only
 a future executor input; the future executor must recheck backup identity,
 preflight evidence, compare-and-set target state, and rollback or exception
 witness design before it can promote, rewrite, delete, or cool anything.
+`live-reconsolidation-cool` is the first such executor and is deliberately
+narrow: it consumes one prepared `cool` approval, requires the exact future
+confirmation from the action gate, blocks core purpose/identity/preference
+anchors, and can only compare-and-set one active capsule to `superseded` while
+preserving the capsule text and source events in a
+`reconsolidation_action_witnesses` row.
 `reconsolidation-shadow-rollback` is the rollback executor's
 shadow-first proof: it restores a verified backup, selects applied
 reconsolidation witnesses, rejects only the created candidate frame capsule in

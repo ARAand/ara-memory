@@ -336,6 +336,22 @@ def main(argv: list[str] | None = None) -> int:
     prepare_live_recon_action.add_argument("--regression-manifest", type=Path, default=None)
     prepare_live_recon_action.add_argument("--regression-baseline", type=Path, default=None)
     prepare_live_recon_action.add_argument("--json", action="store_true")
+    live_recon_cool = sub.add_parser(
+        "live-reconsolidation-cool",
+        help="Consume one prepared cool action approval and supersede one non-core active capsule.",
+    )
+    live_recon_cool.add_argument("--approval-token", required=True)
+    live_recon_cool.add_argument("--capsule-id", required=True)
+    live_recon_cool.add_argument("--confirm", required=True)
+    live_recon_cool.add_argument("--reason", default="approved strong reconsolidation cool action")
+    live_recon_cool.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation cool",
+    )
+    live_recon_cool.add_argument("--recall-budget", type=int, default=1200)
+    live_recon_cool.add_argument("--hot-budget", type=int, default=900)
+    live_recon_cool.add_argument("--no-global", action="store_true")
+    live_recon_cool.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1503,6 +1519,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "live-reconsolidation-cool":
+        result = memory.live_reconsolidation_cool(
+            approval_token=args.approval_token,
+            capsule_id=args.capsule_id,
+            confirmation=args.confirm,
+            reason=args.reason,
+            doctor_query=args.doctor_query,
+            recall_budget=args.recall_budget,
+            hot_budget=args.hot_budget,
+            include_global=not args.no_global,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "reconsolidation-shadow-rollback":
         result = memory.shadow_reconsolidation_rollback(

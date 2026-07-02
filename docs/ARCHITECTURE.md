@@ -166,6 +166,14 @@ prepare_live_reconsolidation_action(backup, query, action, confirm)
   -> never mutate the live memory store and never consume the token itself
   -> leave actual live execution closed until a future executor rechecks compare-and-set and rollback/exception witnesses
 
+live_reconsolidation_cool(approval_token, capsule_id, confirm)
+  -> consume only a prepared cool action approval
+  -> require the exact ENABLE STRONG RECONSOLIDATION COOL confirmation recorded by the action gate
+  -> recheck approval status, expiry, backup identity, backup verification, and action_gate invariants
+  -> block core lifecycle anchors
+  -> compare-and-set exactly one active target capsule to superseded
+  -> preserve capsule text and source events and write reconsolidation_action_witnesses
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

@@ -382,6 +382,11 @@ class AraMemory:
 
         return prepare_live_reconsolidation_action(self, query, **kwargs)
 
+    def live_reconsolidation_cool(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import live_reconsolidation_cool
+
+        return live_reconsolidation_cool(self, **kwargs)
+
     def shadow_reconsolidation_rollback(self, **kwargs: Any) -> Any:
         from ara_memory.reconsolidation import shadow_reconsolidation_rollback
 

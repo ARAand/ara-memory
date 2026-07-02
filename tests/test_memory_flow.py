@@ -3390,6 +3390,96 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(recon_approvals, 0)
             self.assertEqual(recon_witnesses, 0)
 
+    def test_live_reconsolidation_cool_consumes_approval_and_supersedes_non_core_capsule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text=(
+                    "Goal: long-running purpose requires strong reconsolidation shadow apply review "
+                    "before cool action can move working memory out of active recall."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            core = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: long-running purpose cool gate",
+                body=(
+                    "long-running purpose requires strong reconsolidation shadow apply review "
+                    "before cool action can move working memory out of active recall"
+                ),
+                scope="alpha",
+                confidence=0.88,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal", "strong-action", "cool"],
+                status=MemoryStatus.STABLE,
+            )
+            target = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: coolable working note",
+                body="This active working note can be cooled after a reviewed strong action approval.",
+                scope="alpha",
+                confidence=0.72,
+                salience=0.62,
+                source_event_ids=[event.id],
+                tags=["project", "working", "cool"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(core)
+            memory.store.upsert_capsule(target)
+            memory.build_hot(scope="alpha", budget=900)
+            backup = memory.backup(output=Path(tmp) / "strong-action-cool.zip")
+            approval = memory.prepare_live_reconsolidation_action(
+                "long-running purpose strong reconsolidation shadow apply review",
+                backup_path=backup.path,
+                action="cool",
+                confirmation=RECONSOLIDATION_STRONG_ACTION_PREPARE_CONFIRMATION,
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+                include_global=False,
+            )
+
+            blocked_core = memory.live_reconsolidation_cool(
+                approval_token=approval.token,
+                capsule_id=core.id,
+                confirmation="ENABLE STRONG RECONSOLIDATION COOL",
+                include_global=False,
+            )
+            self.assertFalse(blocked_core.passed, blocked_core.as_dict())
+            self.assertIn("Core purpose", blocked_core.recommendations[0])
+
+            result = memory.live_reconsolidation_cool(
+                approval_token=approval.token,
+                capsule_id=target.id,
+                confirmation="ENABLE STRONG RECONSOLIDATION COOL",
+                include_global=False,
+            )
+
+            self.assertTrue(result.passed, result.as_dict())
+            self.assertEqual(result.before_status, MemoryStatus.STABLE.value)
+            self.assertEqual(result.after_status, MemoryStatus.SUPERSEDED.value)
+            self.assertEqual(memory.store.get_capsule(target.id)["status"], MemoryStatus.SUPERSEDED.value)
+            self.assertEqual(memory.store.get_capsule(core.id)["status"], MemoryStatus.STABLE.value)
+            reused = memory.live_reconsolidation_cool(
+                approval_token=approval.token,
+                capsule_id=target.id,
+                confirmation="ENABLE STRONG RECONSOLIDATION COOL",
+                include_global=False,
+            )
+            self.assertFalse(reused.passed)
+            self.assertIn("not prepared", reused.recommendations[0])
+            with memory.store.session() as conn:
+                approval_row = conn.execute("SELECT status FROM reconsolidation_action_approvals").fetchone()
+                witness_row = conn.execute("SELECT * FROM reconsolidation_action_witnesses").fetchone()
+            self.assertEqual(approval_row["status"], "used")
+            self.assertIsNotNone(witness_row)
+            self.assertEqual(witness_row["action"], "cool")
+            self.assertEqual(witness_row["capsule_id"], target.id)
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -5417,6 +5507,13 @@ class MemoryFlowTests(unittest.TestCase):
                     WHERE type = 'table' AND name = 'reconsolidation_action_approvals'
                     """
                 ).fetchone()
+                action_witness_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_action_witnesses'
+                    """
+                ).fetchone()
             self.assertIn("rollback_witness_json", columns)
             self.assertEqual(row["rollback_witness_json"], "{}")
             self.assertIsNotNone(queue_table)
@@ -5424,6 +5521,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIsNotNone(rollback_witness_table)
             self.assertIsNotNone(exception_witness_table)
             self.assertIsNotNone(action_approval_table)
+            self.assertIsNotNone(action_witness_table)
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:

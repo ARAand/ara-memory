@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens
+from ara_memory.memory_lifecycle import is_core_anchor
 from ara_memory.models import Capsule, CapsuleKind, Event, EventKind, MemoryStatus, new_id, utc_now
 from ara_memory.storage import _invalidate_hot_scope, _sync_capsule_fts_row, row_to_capsule
 
@@ -631,6 +632,51 @@ class ReconsolidationLiveRollbackReport:
             f"rollback_approval_id: {self.rollback_approval_id or 'none'}",
             f"rollback_witness_id: {self.rollback_witness_id or 'none'}",
             f"reconsolidation_witness_id: {self.reconsolidation_witness_id or 'none'}",
+            f"capsule_id: {self.capsule_id or 'none'}",
+            f"status_change: {self.before_status or 'none'} -> {self.after_status or 'none'}",
+        ]
+        if self.doctor is not None:
+            lines.append(f"doctor: {self.doctor.get('passed')}")
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationLiveActionReport:
+    scope: str | None
+    action: str
+    passed: bool
+    action_approval_id: str | None
+    action_witness_id: str | None
+    capsule_id: str | None
+    before_status: str | None
+    after_status: str | None
+    doctor: dict[str, Any] | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "action": self.action,
+            "passed": self.passed,
+            "action_approval_id": self.action_approval_id,
+            "action_witness_id": self.action_witness_id,
+            "capsule_id": self.capsule_id,
+            "before_status": self.before_status,
+            "after_status": self.after_status,
+            "doctor": self.doctor,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Live Action: {self.action}",
+            f"status: {'pass' if self.passed else 'blocked'}",
+            f"scope: {self.scope or 'unknown'}",
+            f"action_approval_id: {self.action_approval_id or 'none'}",
+            f"action_witness_id: {self.action_witness_id or 'none'}",
             f"capsule_id: {self.capsule_id or 'none'}",
             f"status_change: {self.before_status or 'none'} -> {self.after_status or 'none'}",
         ]
@@ -1623,6 +1669,171 @@ def prepare_live_reconsolidation_action(
         backup_path=str(backup_path),
         action_gate=action_gate,
         preflight=preflight,
+    )
+
+
+def live_reconsolidation_cool(
+    memory: Any,
+    *,
+    approval_token: str,
+    capsule_id: str,
+    confirmation: str,
+    reason: str = "approved strong reconsolidation cool action",
+    doctor_query: str = "current memory state after reconsolidation cool",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationLiveActionReport:
+    memory.store.init()
+    clean_capsule_id = capsule_id.strip()
+    if not clean_capsule_id:
+        return _blocked_live_action_report("cool", None, "capsule_id is required.")
+    approval = _load_live_action_approval(memory, approval_token)
+    if approval is None:
+        return _blocked_live_action_report("cool", None, "Approval token was not found.")
+    if approval["action"] != "cool":
+        return _blocked_live_action_report("cool", approval, f"Approval action is {approval['action']}, not cool.")
+    if approval["status"] != "prepared":
+        return _blocked_live_action_report("cool", approval, f"Approval status is {approval['status']}, not prepared.")
+    if _is_expired(str(approval["expires_at"])):
+        _mark_live_action_approval(memory, str(approval["id"]), "expired")
+        return _blocked_live_action_report("cool", approval, "Approval token is expired.")
+    if confirmation != str(approval["confirmation_required"]):
+        return _blocked_live_action_report(
+            "cool",
+            approval,
+            f"Confirmation must exactly match: {approval['confirmation_required']}",
+        )
+    approved_identity = json.loads(str(approval["backup_identity_json"]))
+    backup_path = Path(str(approval["backup_path"])).resolve()
+    if _file_identity(backup_path) != approved_identity:
+        return _blocked_live_action_report("cool", approval, "Approved backup changed after action approval.")
+    backup_verification = memory.verify_backup(backup_path)
+    if not backup_verification.get("passed"):
+        return _blocked_live_action_report("cool", approval, "Approved backup no longer verifies.")
+    try:
+        action_gate = json.loads(str(approval["action_gate_json"]))
+    except json.JSONDecodeError:
+        return _blocked_live_action_report("cool", approval, "Approved action gate JSON is malformed.")
+    if action_gate.get("action") != "cool" or not action_gate.get("design_ready") or action_gate.get("live_authorized"):
+        return _blocked_live_action_report("cool", approval, "Approved action gate no longer satisfies cool invariants.")
+
+    target_row = memory.store.get_capsule(clean_capsule_id)
+    if target_row is None:
+        return _blocked_live_action_report("cool", approval, "Target capsule was not found.")
+    target = row_to_capsule(target_row)
+    live_scope = str(approval["scope"])
+    if target["scope"] != live_scope:
+        return _blocked_live_action_report("cool", approval, "Target capsule scope does not match approval scope.")
+    if target["status"] not in {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}:
+        return _blocked_live_action_report("cool", approval, "Target capsule is not active and cannot be cooled.")
+    if is_core_anchor(target):
+        return _blocked_live_action_report("cool", approval, "Core purpose, identity, or preference anchors cannot be cooled by this executor.")
+
+    before_snapshot = _capsule_compare_snapshot(target)
+    action_witness_id = new_id("recon_action_witness")
+    now = utc_now()
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM capsules WHERE id = ? AND status = ?",
+            (clean_capsule_id, str(target["status"])),
+        ).fetchone()
+        if row is None:
+            return _blocked_live_action_report(approval=approval, action="cool", message="Target capsule changed before live cool.")
+        current = row_to_capsule(row)
+        if _capsule_compare_snapshot(current) != before_snapshot:
+            return _blocked_live_action_report(approval=approval, action="cool", message="Target capsule snapshot changed before live cool.")
+        cur = conn.execute(
+            "UPDATE capsules SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+            (MemoryStatus.SUPERSEDED.value, now, clean_capsule_id, str(target["status"])),
+        )
+        if cur.rowcount != 1:
+            return _blocked_live_action_report(approval=approval, action="cool", message="Target capsule compare-and-set failed.")
+        updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (clean_capsule_id,)).fetchone()
+        if updated is None:
+            return _blocked_live_action_report(approval=approval, action="cool", message="Target capsule disappeared during live cool.")
+        _sync_capsule_fts_row(conn, updated)
+        after_snapshot = _capsule_compare_snapshot(row_to_capsule(updated))
+        before = {
+            "schema": "reconsolidation-live-action-before-v1",
+            "action_approval_id": approval["id"],
+            "action": "cool",
+            "capsule": before_snapshot,
+            "approval": {
+                "scope": approval["scope"],
+                "query": approval["query"],
+                "backup_path": approval["backup_path"],
+                "confirmation_required": approval["confirmation_required"],
+                "action_gate": action_gate,
+            },
+        }
+        after = {
+            "schema": "reconsolidation-live-action-after-v1",
+            "action_approval_id": approval["id"],
+            "action": "cool",
+            "capsule": after_snapshot,
+        }
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_action_witnesses(
+              id, action_approval_id, scope, action, capsule_id, reason,
+              before_json, after_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                action_witness_id,
+                approval["id"],
+                live_scope,
+                "cool",
+                clean_capsule_id,
+                reason,
+                json.dumps(before, ensure_ascii=False, sort_keys=True),
+                json.dumps(after, ensure_ascii=False, sort_keys=True),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cool-reconsolidation-capsule",
+                clean_capsule_id,
+                live_scope,
+                reason,
+                "reconsolidation-live-action",
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE reconsolidation_action_approvals SET status = ?, used_at = ? WHERE id = ?",
+            ("used", now, approval["id"]),
+        )
+    _invalidate_hot_scope(memory.store.hot_dir, live_scope)
+    doctor = memory.doctor(
+        scope=live_scope,
+        recall_query=doctor_query,
+        recall_budget=recall_budget,
+        hot_budget=hot_budget,
+        include_global=include_global,
+    )
+    doctor_payload = doctor.as_dict()
+    return ReconsolidationLiveActionReport(
+        scope=live_scope,
+        action="cool",
+        passed=bool(doctor_payload.get("passed")),
+        action_approval_id=str(approval["id"]),
+        action_witness_id=action_witness_id,
+        capsule_id=clean_capsule_id,
+        before_status=str(target["status"]),
+        after_status=MemoryStatus.SUPERSEDED.value,
+        doctor=doctor_payload,
+        recommendations=[
+            "Live cool consumed one prepared action approval and wrote an action witness.",
+            "Only the target capsule status changed to superseded; source events and capsule text were preserved.",
+        ],
     )
 
 
@@ -2733,6 +2944,42 @@ def _mark_live_rollback_approval(memory: Any, approval_id: str, status: str) -> 
             "UPDATE reconsolidation_rollback_approvals SET status = ? WHERE id = ?",
             (status, approval_id),
         )
+
+
+def _load_live_action_approval(memory: Any, token: str) -> dict[str, Any] | None:
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM reconsolidation_action_approvals WHERE token_hash = ?",
+            (_token_hash(token),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _mark_live_action_approval(memory: Any, approval_id: str, status: str) -> None:
+    with memory.store.session() as conn:
+        conn.execute(
+            "UPDATE reconsolidation_action_approvals SET status = ? WHERE id = ?",
+            (status, approval_id),
+        )
+
+
+def _blocked_live_action_report(
+    action: str,
+    approval: dict[str, Any] | None,
+    message: str,
+) -> ReconsolidationLiveActionReport:
+    return ReconsolidationLiveActionReport(
+        scope=str(approval["scope"]) if approval else None,
+        action=action,
+        passed=False,
+        action_approval_id=str(approval["id"]) if approval else None,
+        action_witness_id=None,
+        capsule_id=None,
+        before_status=None,
+        after_status=None,
+        doctor=None,
+        recommendations=[message],
+    )
 
 
 def _blocked_live_rollback_report(

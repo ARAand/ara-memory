@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -409,6 +409,23 @@ CREATE TABLE IF NOT EXISTS reconsolidation_action_approvals (
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_approvals_status
 ON reconsolidation_action_approvals(scope, action, status, expires_at);
 
+CREATE TABLE IF NOT EXISTS reconsolidation_action_witnesses (
+  id TEXT PRIMARY KEY,
+  action_approval_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(action_approval_id) REFERENCES reconsolidation_action_approvals(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_witnesses_scope
+ON reconsolidation_action_witnesses(scope, action, created_at);
+
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -572,6 +589,8 @@ class MemoryStore:
                 _ensure_reconsolidation_exception_v19_tables(conn)
             if old_version < 20:
                 _ensure_reconsolidation_action_v20_tables(conn)
+            if old_version < 21:
+                _ensure_reconsolidation_action_witness_v21_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -2014,6 +2033,29 @@ def _ensure_reconsolidation_action_v20_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_approvals_status
         ON reconsolidation_action_approvals(scope, action, status, expires_at);
+        """
+    )
+
+
+def _ensure_reconsolidation_action_witness_v21_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reconsolidation_action_witnesses (
+          id TEXT PRIMARY KEY,
+          action_approval_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          before_json TEXT NOT NULL,
+          after_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(action_approval_id) REFERENCES reconsolidation_action_approvals(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_witnesses_scope
+        ON reconsolidation_action_witnesses(scope, action, created_at);
         """
     )
 
