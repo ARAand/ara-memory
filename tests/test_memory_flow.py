@@ -2702,6 +2702,109 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("changed", " ".join(result.recommendations))
             self.assertEqual(memory.store.get_capsule(applied.capsule_id or "")["status"], MemoryStatus.CANDIDATE.value)
 
+    def test_reconsolidation_exception_witness_explains_exact_candidate_digest_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs exception witnesses to distinguish intended drift from unsafe reconsolidation drift.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: natural memory exception witness",
+                    body="Ara's natural memory must explain intended reconsolidation drift before stronger mutation.",
+                    scope="alpha",
+                    confidence=0.9,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "natural-memory", "exception"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: exception witness exact digest",
+                    body="Exception witnesses must bind a single field and exact before/after digest transition.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "exception"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "exception witness exact digest transition",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE capsules SET body = body || ? WHERE id = ?",
+                    ("\nreviewed exception edit", applied.capsule_id),
+                )
+
+            failed_review = memory.review_reconsolidation(scope="alpha", approval_id=applied.approval_id)
+            self.assertFalse(failed_review.passed, failed_review.as_dict())
+            self.assertTrue(
+                any("created frame capsule changed field body_digest" in item.warnings for item in failed_review.items),
+                failed_review.as_dict(),
+            )
+
+            exception = memory.record_reconsolidation_exception_witness(
+                witness_id=applied.witness_id or "",
+                field="body_digest",
+                reason="reviewed correction to candidate frame wording before rollback testing",
+                evidence={"review": "unit-test"},
+            )
+            self.assertTrue(exception.passed, exception.as_dict())
+            repaired_review = memory.review_reconsolidation(scope="alpha", approval_id=applied.approval_id)
+            self.assertTrue(repaired_review.passed, repaired_review.as_dict())
+
+            backup_path = Path(tmp) / "exception-rollback.zip"
+            memory.backup(output=backup_path, archive_mode="none")
+            rollback_approval = memory.prepare_live_reconsolidation_rollback(
+                backup_path=backup_path,
+                witness_id=applied.witness_id or "",
+                scope="alpha",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM reconsolidation_exception_witnesses WHERE id = ?",
+                    (exception.exception_witness_id,),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["field"], "body_digest")
+
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE capsules SET body = body || ? WHERE id = ?",
+                    ("\nsecond unreviewed edit", applied.capsule_id),
+                )
+            blocked = memory.live_reconsolidation_rollback(
+                approval_token=rollback_approval.token,
+                confirmation="ROLLBACK RECONSOLIDATION CANDIDATE",
+                recall_budget=900,
+                hot_budget=700,
+            )
+            self.assertFalse(blocked.passed, blocked.as_dict())
+            self.assertIn("changed", " ".join(blocked.recommendations))
+
     def test_reconsolidation_review_queue_records_and_resolves_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -4316,6 +4419,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "reconsolidation frame",
                     "reconsolidation apply safety",
                     "reconsolidation rollback review queue",
+                    "reconsolidation exception witness gate",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -4335,6 +4439,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("risk_filtered=", global_spreading.evidence)
             privacy_push = next(item for item in roadmap.items if item.name == "privacy pre-push gate")
             self.assertIn("scanned=", privacy_push.evidence)
+            exception_gate = next(item for item in roadmap.items if item.name == "reconsolidation exception witness gate")
+            self.assertEqual(exception_gate.status, "pass")
+            self.assertIn("table_ready=True", exception_gate.evidence)
             self.assertIn("warnings=", privacy_push.evidence)
             reconsolidation = next(item for item in roadmap.items if item.name == "reconsolidation frame")
             self.assertIn("frames=", reconsolidation.evidence)
@@ -5070,11 +5177,19 @@ class MemoryFlowTests(unittest.TestCase):
                     WHERE type = 'table' AND name = 'reconsolidation_rollback_witnesses'
                     """
                 ).fetchone()
+                exception_witness_table = conn.execute(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'reconsolidation_exception_witnesses'
+                    """
+                ).fetchone()
             self.assertIn("rollback_witness_json", columns)
             self.assertEqual(row["rollback_witness_json"], "{}")
             self.assertIsNotNone(queue_table)
             self.assertIsNotNone(rollback_approval_table)
             self.assertIsNotNone(rollback_witness_table)
+            self.assertIsNotNone(exception_witness_table)
             self.assertEqual(memory.store.schema_version(), storage_module.SCHEMA_VERSION)
 
     def test_capsules_fts_indexes_only_active_capsules_and_tracks_status_changes(self) -> None:

@@ -392,6 +392,16 @@ class AraMemory:
 
         return live_reconsolidation_rollback(self, **kwargs)
 
+    def record_reconsolidation_exception_witness(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import record_reconsolidation_exception_witness
+
+        return record_reconsolidation_exception_witness(self, **kwargs)
+
+    def list_reconsolidation_exception_witnesses(self, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import list_reconsolidation_exception_witnesses
+
+        return list_reconsolidation_exception_witnesses(self, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -370,6 +370,25 @@ CREATE TABLE IF NOT EXISTS reconsolidation_rollback_witnesses (
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_rollback_witnesses_scope
 ON reconsolidation_rollback_witnesses(scope, created_at);
 
+CREATE TABLE IF NOT EXISTS reconsolidation_exception_witnesses (
+  id TEXT PRIMARY KEY,
+  reconsolidation_witness_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  field TEXT NOT NULL,
+  before_digest TEXT NOT NULL,
+  after_digest TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  evidence_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(reconsolidation_witness_id) REFERENCES reconsolidation_witnesses(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_exception_witnesses_target
+ON reconsolidation_exception_witnesses(reconsolidation_witness_id, capsule_id, field, status);
+
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -529,6 +548,8 @@ class MemoryStore:
                 _ensure_reconsolidation_v16_columns(conn)
             if old_version < 18:
                 _ensure_reconsolidation_rollback_v18_tables(conn)
+            if old_version < 19:
+                _ensure_reconsolidation_exception_v19_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1920,6 +1941,31 @@ def _ensure_reconsolidation_rollback_v18_tables(conn: sqlite3.Connection) -> Non
 
         CREATE INDEX IF NOT EXISTS idx_reconsolidation_rollback_witnesses_scope
         ON reconsolidation_rollback_witnesses(scope, created_at);
+        """
+    )
+
+
+def _ensure_reconsolidation_exception_v19_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reconsolidation_exception_witnesses (
+          id TEXT PRIMARY KEY,
+          reconsolidation_witness_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          field TEXT NOT NULL,
+          before_digest TEXT NOT NULL,
+          after_digest TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(reconsolidation_witness_id) REFERENCES reconsolidation_witnesses(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reconsolidation_exception_witnesses_target
+        ON reconsolidation_exception_witnesses(reconsolidation_witness_id, capsule_id, field, status);
         """
     )
 

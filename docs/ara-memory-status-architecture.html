@@ -6,7 +6,6 @@
   <title>Ara Memory OS - Current Status and Architecture</title>
   <style>
     :root {
-      color-scheme: light;
       --ink: #17211d;
       --muted: #5d6b63;
       --line: #d9e0da;
@@ -15,11 +14,9 @@
       --green: #1f7a4d;
       --blue: #255f95;
       --amber: #9a6614;
-      --red: #a64040;
       --soft-green: #e7f3ec;
       --soft-blue: #e8f0f8;
       --soft-amber: #fbf0d9;
-      --soft-red: #f8e8e8;
     }
     * { box-sizing: border-box; }
     body {
@@ -34,16 +31,15 @@
       margin: 0 auto;
       padding: 32px 0 48px;
     }
-    header {
+    header, .grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr);
-      gap: 20px;
-      margin-bottom: 16px;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
     }
-    h1, h2, h3, p { margin-top: 0; }
+    header { margin-bottom: 16px; }
+    h1, h2, p { margin-top: 0; }
     h1 { font-size: clamp(28px, 4vw, 46px); line-height: 1.08; margin-bottom: 14px; }
     h2 { font-size: 21px; margin-bottom: 14px; }
-    h3 { font-size: 16px; margin-bottom: 8px; }
     code {
       background: #eef3ee;
       border: 1px solid #dce5dd;
@@ -59,7 +55,11 @@
       box-shadow: 0 1px 0 rgba(22, 33, 27, .04);
     }
     .lead { color: var(--muted); font-size: 17px; max-width: 760px; }
-    .meta { display: grid; gap: 10px; align-content: start; }
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-4 { grid-column: span 4; }
+    .hero { grid-column: span 8; }
+    .meta { grid-column: span 4; display: grid; gap: 10px; align-content: start; }
     .metric {
       display: flex;
       justify-content: space-between;
@@ -70,17 +70,8 @@
     .metric:last-child { border-bottom: 0; padding-bottom: 0; }
     .label { color: var(--muted); }
     .value { font-weight: 700; text-align: right; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 16px;
-      margin-top: 16px;
-    }
-    .span-4 { grid-column: span 4; }
-    .span-6 { grid-column: span 6; }
-    .span-8 { grid-column: span 8; }
-    .span-12 { grid-column: span 12; }
-    ul { padding-left: 18px; margin: 0; }
+    .grid { margin-top: 16px; }
+    ul { margin: 0; padding-left: 20px; }
     li + li { margin-top: 8px; }
     .diagram {
       display: grid;
@@ -88,67 +79,65 @@
       gap: 10px;
     }
     .node {
-      min-height: 132px;
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px;
+      min-height: 120px;
       background: #fbfcfa;
     }
     .node b { display: block; margin-bottom: 8px; color: var(--blue); }
     .node span { color: var(--muted); font-size: 14px; }
-    .stack { display: grid; gap: 12px; }
+    .stack { display: grid; gap: 10px; }
     .row {
       display: grid;
-      grid-template-columns: minmax(160px, .8fr) minmax(0, 1.8fr) auto;
+      grid-template-columns: minmax(160px, .8fr) minmax(0, 1.7fr) auto;
       gap: 12px;
       align-items: start;
       border-top: 1px solid var(--line);
       padding-top: 12px;
     }
     .row:first-child { border-top: 0; padding-top: 0; }
-    .row p { margin: 0; color: var(--muted); }
+    .row p { margin-bottom: 0; color: var(--muted); }
     .badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 72px;
       border-radius: 999px;
       padding: 4px 9px;
       font-size: 12px;
       font-weight: 700;
       white-space: nowrap;
     }
-    .pass { color: var(--green); background: var(--soft-green); }
-    .watch { color: var(--amber); background: var(--soft-amber); }
-    .fail { color: var(--red); background: var(--soft-red); }
-    footer { color: var(--muted); margin-top: 24px; font-size: 13px; }
+    .pass { background: var(--soft-green); color: var(--green); }
+    .watch { background: var(--soft-amber); color: var(--amber); }
+    footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 20px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
     @media (max-width: 860px) {
-      header { grid-template-columns: 1fr; }
-      .span-4, .span-6, .span-8, .span-12 { grid-column: span 12; }
+      header, .grid { grid-template-columns: 1fr; }
+      .hero, .meta, .span-12, .span-8, .span-4 { grid-column: 1; }
       .diagram { grid-template-columns: 1fr; }
       .row { grid-template-columns: 1fr; }
-      .badge { justify-self: start; }
     }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <section class="panel">
+    <section class="panel hero">
       <h1>Ara Memory OS 현재 작업 상황과 아키텍처</h1>
       <p class="lead">
-        현재 시스템은 26시간 이상 제작 중인 장기 기억 저장소다. 목표는 모든 원문을 매번 읽는 구조가 아니라,
-        목적, 정체성, 결정, 실패, 작업 맥락, 망각 경계를 분리하고 필요한 맥락만 불러오는 자연스러운 기억 구조다.
-        이번 단계에서는 candidate-only 재통합 경로 위에 rollback witness, review queue,
-        shadow rollback, live rollback approval gate를 붙여 더 강한 live memory 변형 전에
-        시스템 스스로 되돌릴 수 있는 경계를 갖게 만들었다.
+        현재 시스템은 26시간 이상 제작 중인 장기 기억 저장소다. 목표는 원문 전체를 매번 다시 읽는 구조가 아니라,
+        목적, 정체성, 결정, 실패, 작업 맥락, 망각 경계를 분리하고 필요한 맥락만 작게 불러오는 자연스러운 기억 구조다.
+        이번 단계에서는 live rollback gate 위에 exception witness를 붙여, 의도된 증거 변화와 위험한 drift를 구분할 수 있게 했다.
       </p>
     </section>
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v18</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">live rollback gate</span></div>
-      <div class="metric"><span class="label">상태</span><span class="value">core pass, stronger mutation still gated</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v19</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">exception witness gate</span></div>
+      <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap has hygiene gates</span></div>
     </aside>
   </header>
 
@@ -161,19 +150,18 @@
         <li>토큰 절감 recall: raw 전체 읽기 대신 capsule projection, recall-policy, working-memory pack.</li>
         <li>수명주기 분리: core, working, guarded, evidence, archive, reject.</li>
         <li>품질/안전 게이트: doctor, health, milestone, goal-roadmap, privacy-pre-push.</li>
-        <li>candidate-only 재통합: prepare, apply, review, strong shadow preflight.</li>
+        <li>candidate-only 재통합: prepare, apply, review, strong shadow preflight, rollback gate.</li>
       </ul>
     </article>
 
     <article class="panel span-4">
       <h2>이번 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>을 18로 올리고 live rollback approval/witness table을 추가했다.</li>
-        <li><code>reconsolidation-review --record-queue</code>가 fail/watch witness를 영속 큐로 기록한다.</li>
-        <li>fail 항목은 <code>block-strong-reconsolidation</code>으로 저장되어 강한 live 변형을 막는 신호가 된다.</li>
-        <li><code>prepare-live-reconsolidation-rollback</code>은 passing shadow rollback 하나를 one-use token으로 고정한다.</li>
-        <li><code>live-reconsolidation-rollback</code>은 backup, witness, capsule digest를 재검증한 뒤 candidate frame capsule 하나만 rejected로 바꾼다.</li>
-        <li>live rollback은 별도 witness row를 남기며 evidence capsule, source event, 원래 witness는 보존한다.</li>
+        <li><code>SCHEMA_VERSION</code>을 19로 올리고 <code>reconsolidation_exception_witnesses</code>를 추가했다.</li>
+        <li><code>reconsolidation-exception-witness</code>가 witness id, capsule id, field, reason, before/after digest를 저장한다.</li>
+        <li>review와 rollback은 기록된 field와 정확히 같은 digest transition만 허용한다.</li>
+        <li>다른 edit이나 두 번째 drift는 계속 차단된다.</li>
+        <li><code>goal-roadmap</code>은 exception witness gate를 별도 항목으로 표시한다.</li>
       </ul>
     </article>
 
@@ -182,9 +170,9 @@
       <ul>
         <li>강한 재통합은 아직 live capsule promote/supersede/rewrite/delete/cool 권한을 갖지 않는다.</li>
         <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
-        <li>worker는 reconsolidation review queue를 자동 기록한다. 다만 promote/rewrite/delete/cool 같은 강한 live mutation 권한은 아직 열지 않았다.</li>
+        <li>exception witness는 설명 장치일 뿐 권한 상승 장치가 아니다.</li>
+        <li>roadmap은 semantic hygiene 1건과 milestone readiness 때문에 아직 fail이다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
-        <li>보상해킹 방지는 시작됐지만, recall-policy feedback을 자동 정책 변경으로 연결하지 않는 제한이 유지되어야 한다.</li>
       </ul>
     </article>
   </section>
@@ -197,7 +185,7 @@
         <div class="node"><b>2. Guard</b><span>비밀, 직접 식별자, hidden reasoning, 위험 텍스트를 저장 전 redaction 또는 차단한다.</span></div>
         <div class="node"><b>3. Store</b><span>원문 증거는 ledger/archive에 두고, 검색용 capsule과 graph는 SQLite/FTS로 분리한다.</span></div>
         <div class="node"><b>4. Recall</b><span>목적, 작업, distant memory, retention intent를 분류하고 작은 context pack만 렌더링한다.</span></div>
-        <div class="node"><b>5. Gate</b><span>prepare/apply/review/queue/health가 강한 기억 변형 전 증거와 rollback 조건을 검증한다.</span></div>
+        <div class="node"><b>5. Gate</b><span>prepare/apply/review/queue/rollback/exception/health가 강한 기억 변형 전 증거를 검증한다.</span></div>
       </div>
     </article>
   </section>
@@ -218,22 +206,27 @@
         </div>
         <div class="row">
           <strong>live rollback gate</strong>
-          <p>완료: shadow rollback 증거를 one-use approval token과 rollback witness table에 연결하고, candidate frame capsule 하나만 live에서 rejected로 되돌린다.</p>
+          <p>완료: shadow rollback 증거를 one-use approval token과 rollback witness table에 연결했다.</p>
           <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>exception witness</strong>
-          <p>증거 capsule 변경이 의도된 경우, 무조건 실패가 아니라 별도 승인된 예외 증거로 기록하는 경로를 만든다.</p>
-          <span class="badge watch">3-5h</span>
+          <p>완료: 생성된 frame capsule 또는 evidence capsule의 title/body/source-event 변화가 의도된 경우 정확한 digest transition으로 설명한다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
-          <strong>AI memory worker</strong>
-          <p>비용 한도 안에서 원문 전체를 비동기 분석하는 별도 memory AI를 둘지, Codex가 직접 큐만 호출할지 실험으로 결정한다.</p>
+          <strong>semantic hygiene</strong>
+          <p>남음: false failure 1건을 dry-run 검토 후 재분류해야 roadmap fail이 줄어든다.</p>
+          <span class="badge watch">1-2h</span>
+        </div>
+        <div class="row">
+          <strong>strong action gate</strong>
+          <p>promote/rewrite/delete/cool을 작은 권한 단위로 나누고 preflight, rollback, exception witness를 모두 통과한 경우에만 열어야 한다.</p>
           <span class="badge watch">6-10h</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
-          <p>대량 turn, 파일, 이미지 설명, 실패 로그를 넣고 토큰 감소율, recall 정확도, 큐 압력, 비용을 측정한다.</p>
+          <p>대량 turn, 파일, 이미지 설명, 실패 로그를 넣고 토큰 감소율, recall 정확도, 큐 정렬, 비용을 측정한다.</p>
           <span class="badge watch">4-6h</span>
         </div>
       </div>
@@ -243,8 +236,8 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 exception witness를 붙여 의도된 증거 변경과 위험한 drift를 분리하는 것이다.</li>
-        <li>그 다음 강한 reconsolidation action을 작은 권한 단위로 나누어 preflight/rollback/exception gate에 연결해야 한다.</li>
+        <li>다음 1순위는 semantic hygiene과 milestone readiness 실패 신호를 줄이는 것이다.</li>
+        <li>그 다음 strong reconsolidation action을 preflight/rollback/exception gate에 연결해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
       </ul>
@@ -252,8 +245,8 @@
   </section>
 
   <footer>
-    Updated for schema v18 reconsolidation rollback review queue, worker recording, shadow rollback, and live rollback gate. Open this file locally:
-    <code>docs/ara-memory-status-architecture.html</code>
+    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, and exception witness gate.
+    Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>
 </body>

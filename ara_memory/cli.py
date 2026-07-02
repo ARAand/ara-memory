@@ -342,6 +342,29 @@ def main(argv: list[str] | None = None) -> int:
     live_recon_rollback.add_argument("--hot-budget", type=int, default=900)
     live_recon_rollback.add_argument("--no-global", action="store_true")
     live_recon_rollback.add_argument("--json", action="store_true")
+    recon_exception = sub.add_parser(
+        "reconsolidation-exception-witness",
+        help="Record a reviewed exception for an exact reconsolidation capsule digest transition.",
+    )
+    recon_exception.add_argument("--witness-id", required=True)
+    recon_exception.add_argument("--capsule-id", default=None)
+    recon_exception.add_argument(
+        "--field",
+        required=True,
+        choices=["title_digest", "body_digest", "source_event_ids"],
+    )
+    recon_exception.add_argument("--reason", required=True)
+    recon_exception.add_argument("--evidence", default="{}")
+    recon_exception.add_argument("--json", action="store_true")
+    recon_exceptions = sub.add_parser(
+        "reconsolidation-exception-witnesses",
+        help="List active reconsolidation exception witnesses.",
+    )
+    recon_exceptions.add_argument("--scope", default=None)
+    recon_exceptions.add_argument("--witness-id", default=None)
+    recon_exceptions.add_argument("--status", default="active", choices=["active", "revoked"])
+    recon_exceptions.add_argument("--limit", type=int, default=50)
+    recon_exceptions.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
@@ -1450,6 +1473,38 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-exception-witness":
+        try:
+            evidence = json.loads(args.evidence)
+        except json.JSONDecodeError as exc:
+            print(f"--evidence must be JSON: {exc}", file=sys.stderr)
+            return 2
+        result = memory.record_reconsolidation_exception_witness(
+            witness_id=args.witness_id,
+            capsule_id=args.capsule_id,
+            field=args.field,
+            reason=args.reason,
+            evidence=evidence if isinstance(evidence, dict) else {"value": evidence},
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "reconsolidation-exception-witnesses":
+        result = memory.list_reconsolidation_exception_witnesses(
+            scope=args.scope,
+            witness_id=args.witness_id,
+            status=args.status,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
 
     if args.cmd == "recall-policy-impact":
         helped = None if args.helped == "unknown" else args.helped == "true"

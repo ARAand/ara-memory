@@ -392,7 +392,11 @@ identity, backup verification, witness invariants, and the approved candidate
 capsule digest before it rejects that single live candidate frame and writes a
 `reconsolidation_rollback_witnesses` row. This opens rollback for bad candidate
 frames without opening promotion, rewrite, deletion, or broad reconsolidation
-mutation.
+mutation. `reconsolidation-exception-witness` is the narrow escape hatch for
+intended drift: it records the witness id, capsule id, field, reason, and exact
+before/after digest transition. Review and rollback checks only accept that
+specific transition, so another edit to the same capsule must produce another
+reviewed witness instead of inheriting blanket trust.
 
 External advisor providers receive redacted candidate projections when the
 deterministic auditor has already marked a memory as unsafe for promotion or hot

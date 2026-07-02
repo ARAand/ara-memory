@@ -87,6 +87,7 @@ def build_goal_roadmap(
     )
     reconsolidation_review = memory.review_reconsolidation(scope=scope, limit=10)
     reconsolidation_queue = memory.reconsolidation_review_queue(scope=scope, status="open", limit=10)
+    reconsolidation_exceptions = _reconsolidation_exception_summary(memory, scope=scope)
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -204,6 +205,12 @@ def build_goal_roadmap(
             _reconsolidation_queue_status(reconsolidation_queue),
             _reconsolidation_queue_evidence(reconsolidation_queue),
             "Run reconsolidation-review --record-queue, inspect open blocker rows, and resolve failed witnesses before stronger live mutation.",
+        ),
+        RoadmapItem(
+            "reconsolidation exception witness gate",
+            "pass" if reconsolidation_exceptions["table_ready"] else "fail",
+            _reconsolidation_exception_evidence(reconsolidation_exceptions),
+            "Create the reconsolidation exception witness table and wire review/rollback gates to exact digest transitions.",
         ),
         RoadmapItem(
             "cold-memory stewardship",
@@ -347,6 +354,35 @@ def _reconsolidation_queue_evidence(report: Any) -> str:
     watch_count = sum(1 for item in report.open_items if item.get("review_status") == "watch")
     blockers = sum(1 for item in report.open_items if str(item.get("action", "")).startswith("block-strong-reconsolidation"))
     return f"open={len(report.open_items)}, blockers={blockers}, fail={fail_count}, watch={watch_count}"
+
+
+def _reconsolidation_exception_summary(memory: Any, *, scope: str) -> dict[str, Any]:
+    with memory.store.session() as conn:
+        table = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'reconsolidation_exception_witnesses'
+            """
+        ).fetchone()
+        if table is None:
+            return {"table_ready": False, "active": 0, "scope": scope}
+        active = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM reconsolidation_exception_witnesses
+            WHERE scope = ? AND status = 'active'
+            """,
+            (scope,),
+        ).fetchone()
+    return {"table_ready": True, "active": int(active["count"] if active else 0), "scope": scope}
+
+
+def _reconsolidation_exception_evidence(summary: dict[str, Any]) -> str:
+    return (
+        f"table_ready={summary['table_ready']}, "
+        f"active={summary['active']}, scope={summary['scope']}"
+    )
 
 
 def _cold_map_status(cold_stewardship: Any, cold_map: Any) -> str:

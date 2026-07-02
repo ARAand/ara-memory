@@ -544,6 +544,74 @@ class ReconsolidationLiveRollbackReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class ReconsolidationExceptionWitnessReport:
+    scope: str | None
+    passed: bool
+    exception_witness_id: str | None
+    reconsolidation_witness_id: str | None
+    capsule_id: str | None
+    field: str | None
+    before_digest: str | None
+    after_digest: str | None
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "passed": self.passed,
+            "exception_witness_id": self.exception_witness_id,
+            "reconsolidation_witness_id": self.reconsolidation_witness_id,
+            "capsule_id": self.capsule_id,
+            "field": self.field,
+            "before_digest": self.before_digest,
+            "after_digest": self.after_digest,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Exception Witness: {self.scope or 'unknown'}",
+            f"status: {'pass' if self.passed else 'blocked'}",
+            f"exception_witness_id: {self.exception_witness_id or 'none'}",
+            f"reconsolidation_witness_id: {self.reconsolidation_witness_id or 'none'}",
+            f"capsule_id: {self.capsule_id or 'none'}",
+            f"field: {self.field or 'none'}",
+        ]
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationExceptionWitnessList:
+    scope: str | None
+    witness_id: str | None
+    items: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "witness_id": self.witness_id,
+            "items": self.items,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Reconsolidation Exception Witnesses: {self.scope or 'all'}",
+            f"items={len(self.items)}",
+        ]
+        if not self.items:
+            lines.append("- No exception witnesses matched the filter.")
+        for item in self.items[:30]:
+            lines.append(
+                f"- [{item['status']}] {item['field']} capsule={item['capsule_id']} "
+                f"witness={item['reconsolidation_witness_id']}: {item['reason']}"
+            )
+        return "\n".join(lines)
+
+
 def build_reconsolidation_frame(
     memory: Any,
     query: str,
@@ -1492,6 +1560,202 @@ def live_reconsolidation_rollback(
     )
 
 
+def record_reconsolidation_exception_witness(
+    memory: Any,
+    *,
+    witness_id: str,
+    capsule_id: str | None = None,
+    field: str,
+    reason: str,
+    evidence: dict[str, Any] | None = None,
+) -> ReconsolidationExceptionWitnessReport:
+    memory.store.init()
+    clean_witness_id = witness_id.strip()
+    clean_field = field.strip()
+    clean_reason = reason.strip()
+    allowed_fields = {"title_digest", "body_digest", "source_event_ids"}
+    if not clean_witness_id:
+        return _blocked_exception_witness("witness_id is required.")
+    if clean_field not in allowed_fields:
+        return _blocked_exception_witness(
+            f"field must be one of: {', '.join(sorted(allowed_fields))}.",
+            witness_id=clean_witness_id,
+            field=clean_field or None,
+        )
+    if not clean_reason:
+        return _blocked_exception_witness(
+            "reason is required.",
+            witness_id=clean_witness_id,
+            field=clean_field,
+        )
+    rows = _select_reconsolidation_witness_rows(
+        memory,
+        scope=None,
+        approval_id=None,
+        witness_id=clean_witness_id,
+        limit=1,
+    )
+    if len(rows) != 1:
+        return _blocked_exception_witness(
+            "Reconsolidation witness was not found.",
+            witness_id=clean_witness_id,
+            field=clean_field,
+        )
+    row = rows[0]
+    try:
+        after = json.loads(str(row["after_json"]))
+    except json.JSONDecodeError:
+        return _blocked_exception_witness(
+            "Reconsolidation witness has malformed after snapshot.",
+            scope=str(row.get("scope")),
+            witness_id=clean_witness_id,
+            capsule_id=str(row.get("capsule_id")),
+            field=clean_field,
+        )
+    after_new = after.get("new_capsule")
+    if not isinstance(after_new, dict):
+        return _blocked_exception_witness(
+            "Reconsolidation witness has no created capsule snapshot.",
+            scope=str(row.get("scope")),
+            witness_id=clean_witness_id,
+            capsule_id=str(row.get("capsule_id")),
+            field=clean_field,
+        )
+    target_capsule_id = (capsule_id or str(row["capsule_id"])).strip()
+    if not target_capsule_id:
+        return _blocked_exception_witness(
+            "capsule_id is required.",
+            scope=str(row["scope"]),
+            witness_id=clean_witness_id,
+            field=clean_field,
+        )
+    target_snapshot = _snapshot_for_reconsolidation_witness(after, target_capsule_id)
+    if target_snapshot is None:
+        return _blocked_exception_witness(
+            "Target capsule is not part of the reconsolidation witness snapshot.",
+            scope=str(row["scope"]),
+            witness_id=clean_witness_id,
+            capsule_id=target_capsule_id,
+            field=clean_field,
+        )
+    current = _capsule_snapshot_for_id(memory, target_capsule_id)
+    if current.get("missing"):
+        return _blocked_exception_witness(
+            "Target capsule is missing.",
+            scope=str(row["scope"]),
+            witness_id=clean_witness_id,
+            capsule_id=target_capsule_id,
+            field=clean_field,
+        )
+    before_digest = _snapshot_field_digest(target_snapshot, clean_field)
+    after_digest = _snapshot_field_digest(current, clean_field)
+    if before_digest == after_digest:
+        return _blocked_exception_witness(
+            "Current capsule field has not changed from the reconsolidation witness snapshot.",
+            scope=str(row["scope"]),
+            witness_id=clean_witness_id,
+            capsule_id=target_capsule_id,
+            field=clean_field,
+            before_digest=before_digest,
+            after_digest=after_digest,
+        )
+    exception_id = new_id("recon_exception")
+    payload = {
+        "schema": "reconsolidation-exception-witness-v1",
+        "field": clean_field,
+        "reason": clean_reason,
+        "evidence": evidence or {},
+        "approved_before": before_digest,
+        "approved_after": after_digest,
+    }
+    with memory.store.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_exception_witnesses(
+              id, reconsolidation_witness_id, scope, capsule_id, field,
+              before_digest, after_digest, reason, evidence_json, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                exception_id,
+                clean_witness_id,
+                str(row["scope"]),
+                target_capsule_id,
+                clean_field,
+                before_digest,
+                after_digest,
+                clean_reason,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                "active",
+                utc_now(),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "record-reconsolidation-exception-witness",
+                target_capsule_id,
+                str(row["scope"]),
+                clean_reason,
+                "reconsolidation-exception-witness",
+                utc_now(),
+            ),
+        )
+    return ReconsolidationExceptionWitnessReport(
+        scope=str(row["scope"]),
+        passed=True,
+        exception_witness_id=exception_id,
+        reconsolidation_witness_id=clean_witness_id,
+        capsule_id=target_capsule_id,
+        field=clean_field,
+        before_digest=before_digest,
+        after_digest=after_digest,
+        recommendations=[
+            "Exception witness recorded; reconsolidation review and rollback checks will only accept this exact digest transition.",
+            "Rerun reconsolidation-review --record-queue before stronger memory mutation.",
+        ],
+    )
+
+
+def list_reconsolidation_exception_witnesses(
+    memory: Any,
+    *,
+    scope: str | None = None,
+    witness_id: str | None = None,
+    status: str = "active",
+    limit: int = 50,
+) -> ReconsolidationExceptionWitnessList:
+    memory.store.init()
+    clauses = ["status = ?"]
+    args: list[Any] = [status]
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    if witness_id:
+        clauses.append("reconsolidation_witness_id = ?")
+        args.append(witness_id)
+    args.append(max(1, int(limit)))
+    with memory.store.session() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT *
+                FROM reconsolidation_exception_witnesses
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+    return ReconsolidationExceptionWitnessList(scope=scope, witness_id=witness_id, items=rows)
+
+
 def _evidence_from_working_item(item: Any) -> ReconsolidationEvidence:
     return ReconsolidationEvidence(
         capsule_id=item.capsule_id,
@@ -1803,7 +2067,15 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
         current_new = _capsule_compare_snapshot(capsule)
         for key in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
             if current_new.get(key) != after_new.get(key):
-                warnings.append(f"created frame capsule changed field {key}")
+                if not _exception_allows_change(
+                    memory,
+                    witness_id=str(row["id"]),
+                    capsule_id=capsule_id,
+                    field=key,
+                    before_snapshot=after_new,
+                    after_snapshot=current_new,
+                ):
+                    warnings.append(f"created frame capsule changed field {key}")
                 break
     status = "pass"
     if warnings:
@@ -2085,7 +2357,7 @@ def _inspect_rollback_witness(memory: Any, row: dict[str, Any]) -> Reconsolidati
         warnings.append("before snapshot fingerprint mismatch")
     if after.get("frame_fingerprint") != row["frame_fingerprint"]:
         warnings.append("after snapshot fingerprint mismatch")
-    warnings.extend(_evidence_snapshot_warnings(memory, before))
+    warnings.extend(_evidence_snapshot_warnings(memory, before, witness_id=str(row["id"])))
     after_new = after.get("new_capsule")
     if not isinstance(after_new, dict) or after_new.get("id") != capsule_id:
         warnings.append("after snapshot missing created frame capsule")
@@ -2098,7 +2370,15 @@ def _inspect_rollback_witness(memory: Any, row: dict[str, Any]) -> Reconsolidati
         if isinstance(after_new, dict):
             for key in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
                 if current.get(key) != after_new.get(key):
-                    warnings.append(f"created frame capsule changed field {key} before rollback")
+                    if not _exception_allows_change(
+                        memory,
+                        witness_id=str(row["id"]),
+                        capsule_id=capsule_id,
+                        field=key,
+                        before_snapshot=after_new,
+                        after_snapshot=current,
+                    ):
+                        warnings.append(f"created frame capsule changed field {key} before rollback")
                     break
         if before_status != MemoryStatus.CANDIDATE.value:
             warnings.append(f"created frame capsule status is {before_status}, not candidate")
@@ -2148,7 +2428,7 @@ def _shadow_rollback_witness(memory: Any, row: dict[str, Any]) -> Reconsolidatio
     )
 
 
-def _evidence_snapshot_warnings(memory: Any, snapshot: dict[str, Any]) -> list[str]:
+def _evidence_snapshot_warnings(memory: Any, snapshot: dict[str, Any], *, witness_id: str) -> list[str]:
     warnings: list[str] = []
     for item in snapshot.get("evidence_capsules", []):
         if not isinstance(item, dict) or not item.get("id"):
@@ -2160,9 +2440,88 @@ def _evidence_snapshot_warnings(memory: Any, snapshot: dict[str, Any]) -> list[s
         current = _capsule_compare_snapshot(row_to_capsule(row))
         for key in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
             if current.get(key) != item.get(key):
-                warnings.append(f"evidence capsule {item['id']} changed field {key}")
+                if not _exception_allows_change(
+                    memory,
+                    witness_id=witness_id,
+                    capsule_id=str(item["id"]),
+                    field=key,
+                    before_snapshot=item,
+                    after_snapshot=current,
+                ):
+                    warnings.append(f"evidence capsule {item['id']} changed field {key}")
                 break
     return warnings
+
+
+def _snapshot_for_reconsolidation_witness(snapshot: dict[str, Any], capsule_id: str) -> dict[str, Any] | None:
+    after_new = snapshot.get("new_capsule")
+    if isinstance(after_new, dict) and after_new.get("id") == capsule_id:
+        return after_new
+    for item in snapshot.get("evidence_capsules", []):
+        if isinstance(item, dict) and item.get("id") == capsule_id:
+            return item
+    return None
+
+
+def _snapshot_field_digest(snapshot: dict[str, Any], field: str) -> str:
+    value = snapshot.get(field)
+    if field in {"title_digest", "body_digest"}:
+        return str(value or "")
+    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _exception_allows_change(
+    memory: Any,
+    *,
+    witness_id: str,
+    capsule_id: str,
+    field: str,
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+) -> bool:
+    if field not in {"title_digest", "body_digest", "source_event_ids"}:
+        return False
+    before_digest = _snapshot_field_digest(before_snapshot, field)
+    after_digest = _snapshot_field_digest(after_snapshot, field)
+    with memory.store.session() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM reconsolidation_exception_witnesses
+            WHERE reconsolidation_witness_id = ?
+              AND capsule_id = ?
+              AND field = ?
+              AND before_digest = ?
+              AND after_digest = ?
+              AND status = 'active'
+            LIMIT 1
+            """,
+            (witness_id, capsule_id, field, before_digest, after_digest),
+        ).fetchone()
+    return row is not None
+
+
+def _blocked_exception_witness(
+    message: str,
+    *,
+    scope: str | None = None,
+    witness_id: str | None = None,
+    capsule_id: str | None = None,
+    field: str | None = None,
+    before_digest: str | None = None,
+    after_digest: str | None = None,
+) -> ReconsolidationExceptionWitnessReport:
+    return ReconsolidationExceptionWitnessReport(
+        scope=scope,
+        passed=False,
+        exception_witness_id=None,
+        reconsolidation_witness_id=witness_id,
+        capsule_id=capsule_id,
+        field=field,
+        before_digest=before_digest,
+        after_digest=after_digest,
+        recommendations=[message],
+    )
 
 
 def _capsule_snapshot_for_id(memory: Any, capsule_id: str) -> dict[str, Any]:

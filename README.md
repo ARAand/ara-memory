@@ -594,7 +594,12 @@ verification, witness invariants, and candidate capsule digest before a
 compare-and-set rejection of that single candidate frame capsule. It writes a
 `reconsolidation_rollback_witnesses` row and leaves evidence capsules, source
 events, original reconsolidation approvals, and original reconsolidation
-witnesses intact.
+witnesses intact. `reconsolidation-exception-witness` records a reviewed
+exception for an exact capsule field digest transition on either the created
+candidate frame capsule or one of the evidence capsules in the witness snapshot.
+Review and rollback gates accept only the recorded field plus exact
+before/after digest pair; a later unreviewed edit still blocks live rollback and
+stronger reconsolidation.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
