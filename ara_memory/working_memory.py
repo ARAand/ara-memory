@@ -8,6 +8,7 @@ from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, trim_to_token_budget
 from ara_memory.models import Event
+from ara_memory.projection import working_projection
 
 
 @dataclass(slots=True)
@@ -354,11 +355,7 @@ def _item(section: str, cap: dict[str, Any], text: str, *, reason: str, score: f
 
 
 def _memory_text(cap: dict[str, Any]) -> str:
-    body = str(cap.get("body") or "")
-    title = str(cap.get("title") or "")
-    if body and body.lower() not in title.lower():
-        return f"{title}: {body}"
-    return body or title
+    return working_projection(cap)
 
 
 def _score_capsule(cap: dict[str, Any], cue_terms: list[str]) -> float:

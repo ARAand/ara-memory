@@ -10,8 +10,9 @@ The working-memory model is an associative substrate rather than a finished
 human-like memory. Recall combines explicit purpose, scope, temporal edges,
 graph neighbors, FTS/BM25 matches, and budget selection instead of treating
 memory as one flat similarity search space. It is still lexical/salience-heavy:
-there is no full ESPA router, spreading activation layer, or reconsolidation
-frame yet.
+search/render projection split is now the first compression boundary, but there
+is no full ESPA router, spreading activation layer, or reconsolidation frame
+yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -66,13 +67,14 @@ recall(query, scope, budget)
   -> recall_candidates(query, scope)
   -> optional hot memory prelude
   -> typed context pack
+  -> render bounded capsule projections instead of raw body text
   -> token budget trimming with soft-budget compaction after enough evidence
   -> count rendered capsules, visible sections, and visible query-term coverage
 
 recall_candidates(query, scope)
   -> keyword extraction
   -> graph neighbor lookup
-  -> FTS/BM25 capsule search
+  -> FTS/BM25 search over compact search projections, not raw capsule bodies
   -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
   -> cue-matched working-memory-impact boost/penalty with bounded magnitude
@@ -374,15 +376,14 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 29. Store agency-review records as audit notes, not decision memories. They may
     explain a turn but must not become self-certifying evidence that future
     agency reviews use to prove Ara's judgment.
-30. Prefer projection and routing over rereading raw memory. The next natural
-    memory layer should split raw body, search projection, and render projection,
-    then route recall through episodic, semantic, procedural, and affective axes.
+30. Prefer projection and routing over rereading raw memory. Raw body, search
+    projection, and render projection are now split; the next natural memory
+    layer should route recall through episodic, semantic, procedural, and
+    affective axes.
     Affective signals are caution/context signals, not reward or promotion scores.
 
 ## Future Extension Points
 
-- Projection split: raw body stays private/local, search projection stays short
-  and indexable, render projection is the only text normally shown to a model.
 - ESPA memory axes: episodic, semantic, procedural, and affective routing over
   SQLite metadata/FTS before considering optional embeddings.
 - Optional local embeddings for intent matching.

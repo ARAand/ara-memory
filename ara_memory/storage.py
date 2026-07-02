@@ -11,9 +11,10 @@ from typing import Any, Iterable, Iterator
 
 from ara_memory.compressors import extract_keywords, is_search_term
 from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, utc_now
+from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -330,6 +331,8 @@ class MemoryStore:
                 _sync_working_memory_impacts(conn)
             if old_version < 9:
                 _sync_recall_policy_impacts(conn)
+            if old_version < 10:
+                _sync_capsules_fts(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1548,7 +1551,14 @@ def _sync_capsule_fts_payload(
         return
     conn.execute(
         "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
-        (capsule_id, title, body, kind, scope, " ".join(tags)),
+        (
+            capsule_id,
+            title,
+            search_projection(title=title, body=body, kind=kind, tags=tags),
+            kind,
+            scope,
+            " ".join(tags),
+        ),
     )
 
 

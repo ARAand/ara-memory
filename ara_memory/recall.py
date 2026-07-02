@@ -7,6 +7,7 @@ from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, is_search_term
 from ara_memory.models import MemoryStatus
+from ara_memory.projection import render_projection
 from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
 from ara_memory.storage import MemoryStore, row_to_capsule
 
@@ -411,17 +412,7 @@ def _safe_graph_hints(store: MemoryStore, graph_rows: list[Any]) -> list[str]:
 
 def _format_capsule(cap: dict) -> str:
     tags = ", ".join(redact_memory_tags(cap["tags"])[:8])
-    body_limit = {
-        "summary": 650,
-        "project": 520,
-        "episode": 420,
-        "goal": 700,
-        "decision": 650,
-        "procedure": 650,
-        "failure": 700,
-        "conflict": 700,
-    }.get(cap["kind"], 600)
-    body = compact_text(cap["body"], limit=body_limit)
+    body = render_projection(cap)
     return (
         f"- [{cap['kind']}/{cap['status']}] {cap['title']}\n"
         f"  confidence={cap['confidence']:.2f}; salience={cap['salience']:.2f}; "

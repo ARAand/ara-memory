@@ -33,6 +33,7 @@ from ara_memory.compressors import estimate_tokens, extract_keywords
 from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
+from ara_memory.projection import render_projection, search_projection, working_projection
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
 from ara_memory.turn import plan_turn_ingress, remember_turn
@@ -81,6 +82,61 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Ara Memory Pack", pack)
             self.assertIn("\n\n## Consolidated Memory\n", pack)
             self.assertNotIn("# Ara Memory Pack Query:", pack)
+
+    def test_capsule_fts_uses_search_projection_not_raw_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            body = (
+                ("anchor " * 220)
+                + " ".join(f"unique{i}" for i in range(40))
+                + " rawonlymiddleprobe "
+                + ("tailanchor " * 220)
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: projection split",
+                body=body,
+                scope="projection",
+                confidence=0.88,
+                salience=0.82,
+                source_event_ids=[],
+                tags=["projection", "search"],
+                status=MemoryStatus.STABLE,
+            )
+
+            memory.store.upsert_capsule(capsule)
+
+            with memory.store.session() as conn:
+                row = conn.execute("SELECT body FROM capsules_fts WHERE id = ?", (capsule.id,)).fetchone()
+            self.assertIsNotNone(row)
+            indexed = row["body"]
+            self.assertLess(len(indexed), len(body))
+            self.assertIn("kind:decision", indexed)
+            self.assertIn("keywords:", indexed)
+            self.assertIn("tailanchor", indexed)
+            self.assertNotIn("rawonlymiddleprobe", indexed)
+
+    def test_render_and_working_projection_are_bounded(self) -> None:
+        capsule = {
+            "kind": "procedure",
+            "title": "Procedure memory: bounded projection",
+            "body": "Use the bounded projection layer. " * 120,
+        }
+
+        rendered = render_projection(capsule)
+        working = working_projection(capsule)
+        searched = search_projection(
+            title=capsule["title"],
+            body=capsule["body"],
+            kind=capsule["kind"],
+            tags=["projection", "procedure"],
+        )
+
+        self.assertLessEqual(len(rendered), 680)
+        self.assertLessEqual(len(working), 380)
+        self.assertLess(len(searched), len(capsule["body"]))
+        self.assertIn("Procedure memory", working)
 
     def test_successful_regression_command_is_not_failure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3526,6 +3582,51 @@ class MemoryFlowTests(unittest.TestCase):
             with reopened.store.session() as conn:
                 fts_ids = {row["id"] for row in conn.execute("SELECT id FROM capsules_fts")}
             self.assertEqual(fts_ids, {active.id})
+
+    def test_schema_migration_rebuilds_fts_with_search_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            memory.init()
+            body = (
+                ("anchor " * 220)
+                + " ".join(f"unique{i}" for i in range(40))
+                + " rawonlymigrationprobe "
+                + ("tailanchor " * 220)
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: migration projection split",
+                body=body,
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[],
+                tags=["migration", "projection"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            with memory.store.session() as conn:
+                conn.execute("DELETE FROM capsules_fts WHERE id = ?", (capsule.id,))
+                conn.execute(
+                    "INSERT INTO capsules_fts(id, title, body, kind, scope, tags) VALUES (?, ?, ?, ?, ?, ?)",
+                    (capsule.id, capsule.title, body, capsule.kind.value, capsule.scope, " ".join(capsule.tags)),
+                )
+                conn.execute(
+                    "UPDATE memory_meta SET value = ? WHERE key = 'schema_version'",
+                    ("9",),
+                )
+
+            reopened = AraMemory(root)
+            reopened.init()
+
+            self.assertEqual(reopened.store.schema_version(), storage_module.SCHEMA_VERSION)
+            with reopened.store.session() as conn:
+                row = conn.execute("SELECT body FROM capsules_fts WHERE id = ?", (capsule.id,)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertLess(len(row["body"]), len(body))
+            self.assertNotIn("rawonlymigrationprobe", row["body"])
+            self.assertIn("kind:decision", row["body"])
 
     def test_storage_has_no_dead_mojibake_audit_block(self) -> None:
         text = Path(storage_module.__file__).read_text(encoding="utf-8")
