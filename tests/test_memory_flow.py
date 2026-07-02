@@ -35,7 +35,12 @@ from ara_memory.ingest import ingest_file
 from ara_memory.lock import FileLock
 from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
 from ara_memory.projection import render_projection, search_projection, working_projection
-from ara_memory.relation_merge import prepare_relation_merge_approval, run_relation_merge_dry_run
+from ara_memory.relation_merge import (
+    RELATION_MERGE_CONFIRMATION,
+    apply_relation_merge_approval,
+    prepare_relation_merge_approval,
+    run_relation_merge_dry_run,
+)
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
 from ara_memory.spreading import apply_spreading_activation
@@ -633,6 +638,94 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(row["status"], "prepared")
             self.assertNotEqual(row["token_hash"], approval.token)
             self.assertIn("Rollback witness", approval.to_text())
+
+    def test_relation_merge_apply_consumes_token_and_writes_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: relation merge apply",
+                body="Relation merge apply test.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["relation", "merge"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="backup restore procedure",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="backup restore drill",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.7,
+            )
+            approval = prepare_relation_merge_approval(
+                memory.store,
+                scope="alpha",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+                ttl_minutes=5,
+            )
+            self.assertTrue(approval.prepared)
+
+            blocked = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation="merge",
+            )
+            self.assertFalse(blocked.passed)
+            before = memory.store.stats()
+
+            applied = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation=RELATION_MERGE_CONFIRMATION,
+            )
+
+            after = memory.store.stats()
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertEqual(applied.merged, 1)
+            self.assertEqual(after["relation_nodes"], before["relation_nodes"] - 1)
+            self.assertEqual(after["relation_edges"], before["relation_edges"] - 1)
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT status, used_at FROM relation_merge_approvals WHERE id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                witness = conn.execute(
+                    "SELECT * FROM relation_merge_witnesses WHERE approval_id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                edge = conn.execute(
+                    "SELECT evidence_count, confidence FROM relation_edges WHERE scope = ?",
+                    ("alpha",),
+                ).fetchone()
+            self.assertEqual(approval_row["status"], "used")
+            self.assertIsNotNone(approval_row["used_at"])
+            self.assertIsNotNone(witness)
+            self.assertIn("candidate_node", witness["before_json"])
+            self.assertEqual(edge["evidence_count"], 2)
+            self.assertEqual(edge["confidence"], 0.8)
+            reused = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation=RELATION_MERGE_CONFIRMATION,
+            )
+            self.assertFalse(reused.passed)
+            self.assertIn("not prepared", " ".join(reused.recommendations))
 
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [

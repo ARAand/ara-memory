@@ -16,8 +16,10 @@ and bounded two-hop relation spreading activation is now part of recall ranking.
 A conservative semantic relation merge dry-run gate can now report likely
 relation aliases without mutating the graph. A prepare gate can freeze reviewed
 candidates behind a short-lived approval token, relation fingerprint, and
-rollback witness preview. There is still no apply-mode relation merge policy,
-global spreading layer, or reconsolidation frame yet.
+rollback witness preview. A one-use apply gate can consume that token only when
+the live dry-run fingerprint still matches, merge the approved relation-node
+alias in one transaction, and preserve rollback witnesses. There is still no
+global spreading layer, review-queue automation, or reconsolidation frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -246,8 +248,11 @@ sleep()
   inspect likely relation-node aliases as a dry-run only. The
   `relation-merge-prepare` command stores a hashed approval token, candidate
   snapshot, relation fingerprint, and rollback witness preview for future
-  reviewed apply work. Neither command mutates capsule status, relation nodes,
-  or relation edges.
+  reviewed apply work. The `relation-merge-apply` command requires exact
+  confirmation, rejects expired/reused/drifted approvals, rewires only approved
+  relation edges, coalesces duplicate relation edges, deletes the merged alias
+  node, and records `relation_merge_witnesses` in the same transaction. None of
+  these commands mutate capsule status or source events.
 
 Cold memory is intentionally outside the active recall FTS index. `cold-map`
 provides the distant-memory layer between active recall and archival

@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -222,8 +222,10 @@ CREATE TABLE IF NOT EXISTS relation_merge_approvals (
   candidates_json TEXT NOT NULL,
   relation_fingerprint TEXT NOT NULL,
   rollback_witness_json TEXT NOT NULL,
+  candidate_limit INTEGER NOT NULL DEFAULT 20,
   threshold REAL NOT NULL,
   node_limit INTEGER NOT NULL,
+  include_global INTEGER NOT NULL DEFAULT 0,
   expires_at TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -231,6 +233,22 @@ CREATE TABLE IF NOT EXISTS relation_merge_approvals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_relation_merge_approvals_status ON relation_merge_approvals(scope, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS relation_merge_witnesses (
+  id TEXT PRIMARY KEY,
+  approval_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  canonical_node_id TEXT NOT NULL,
+  candidate_node_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(approval_id) REFERENCES relation_merge_approvals(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relation_merge_witnesses_approval ON relation_merge_witnesses(approval_id, created_at);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -385,6 +403,8 @@ class MemoryStore:
                 _sync_capsules_fts(conn)
             if old_version < 11:
                 _sync_relation_graph_from_temporal_edges(conn)
+            if old_version < 13:
+                _ensure_relation_merge_v13_columns(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -1704,6 +1724,21 @@ def _relation_edge_id(
         f"{subject_node_id}\0{predicate_norm}\0{object_node_id}\0{scope}\0{source}".encode("utf-8")
     ).hexdigest()[:18]
     return f"rel_edge_{digest}"
+
+
+def _ensure_relation_merge_v13_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(relation_merge_approvals)")
+    }
+    if "candidate_limit" not in columns:
+        conn.execute(
+            "ALTER TABLE relation_merge_approvals ADD COLUMN candidate_limit INTEGER NOT NULL DEFAULT 20"
+        )
+    if "include_global" not in columns:
+        conn.execute(
+            "ALTER TABLE relation_merge_approvals ADD COLUMN include_global INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _upsert_relation_node(conn: sqlite3.Connection, *, label: str, scope: str, now: str) -> str | None:

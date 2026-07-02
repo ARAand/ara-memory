@@ -4,12 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
+import sqlite3
 import secrets
 from typing import Any
 
 from ara_memory.models import new_id, utc_now
 from ara_memory.storage import MemoryStore
 
+
+RELATION_MERGE_CONFIRMATION = "MERGE RELATION NODES"
 
 LOW_VALUE_RELATION_TOKENS = {
     "the",
@@ -175,6 +178,42 @@ class RelationMergeApproval:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RelationMergeApplyReport:
+    scope: str | None
+    passed: bool
+    approval_id: str | None
+    merged: int
+    witness_ids: list[str]
+    recommendations: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "passed": self.passed,
+            "approval_id": self.approval_id,
+            "merged": self.merged,
+            "witness_ids": self.witness_ids,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        status = "pass" if self.passed else "blocked"
+        lines = [
+            f"# Ara Relation Merge Apply: {self.scope or 'unknown'}",
+            f"status: {status}",
+            f"approval_id: {self.approval_id or 'none'}",
+            f"merged: {self.merged}",
+        ]
+        if self.witness_ids:
+            lines.append("## Witnesses")
+            lines.extend(f"- {witness_id}" for witness_id in self.witness_ids)
+        if self.recommendations:
+            lines.append("## Recommendations")
+            lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
+
+
 def run_relation_merge_dry_run(
     store: MemoryStore,
     *,
@@ -276,9 +315,10 @@ def prepare_relation_merge_approval(
             """
             INSERT INTO relation_merge_approvals(
               id, token_hash, scope, candidates_json, relation_fingerprint,
-              rollback_witness_json, threshold, node_limit, expires_at, status, created_at
+              rollback_witness_json, candidate_limit, threshold, node_limit, include_global,
+              expires_at, status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 approval_id,
@@ -291,8 +331,10 @@ def prepare_relation_merge_approval(
                 ),
                 fingerprint,
                 json.dumps(witness, ensure_ascii=False, sort_keys=True),
+                limit,
                 threshold,
                 node_limit,
+                1 if include_global else 0,
                 expires_at,
                 "prepared",
                 utc_now(),
@@ -305,6 +347,101 @@ def prepare_relation_merge_approval(
         dry_run=dry_run,
         relation_fingerprint=fingerprint,
         rollback_witness=witness,
+    )
+
+
+def apply_relation_merge_approval(
+    store: MemoryStore,
+    *,
+    approval_token: str,
+    confirmation: str,
+) -> RelationMergeApplyReport:
+    store.init()
+    if confirmation != RELATION_MERGE_CONFIRMATION:
+        return RelationMergeApplyReport(
+            scope=None,
+            passed=False,
+            approval_id=None,
+            merged=0,
+            witness_ids=[],
+            recommendations=[f"Confirmation must exactly match: {RELATION_MERGE_CONFIRMATION}"],
+        )
+    approval = _load_approval(store, approval_token)
+    if approval is None:
+        return RelationMergeApplyReport(
+            scope=None,
+            passed=False,
+            approval_id=None,
+            merged=0,
+            witness_ids=[],
+            recommendations=["Approval token was not found."],
+        )
+    if approval["status"] != "prepared":
+        return _blocked_apply_report(approval, f"Approval status is {approval['status']}, not prepared.")
+    if _is_expired(str(approval["expires_at"])):
+        _mark_approval_status(store, str(approval["id"]), "expired")
+        return _blocked_apply_report(approval, "Approval token is expired.")
+
+    scope = str(approval["scope"])
+    candidate_limit = int(approval["candidate_limit"])
+    threshold = float(approval["threshold"])
+    node_limit = int(approval["node_limit"])
+    include_global = bool(int(approval["include_global"]))
+    current = run_relation_merge_dry_run(
+        store,
+        scope=scope,
+        limit=candidate_limit,
+        threshold=threshold,
+        node_limit=node_limit,
+        include_global=include_global,
+    )
+    current_fingerprint = _relation_fingerprint(current)
+    if current_fingerprint != approval["relation_fingerprint"]:
+        return _blocked_apply_report(
+            approval,
+            "Relation merge candidates changed after approval; rerun relation-merge-prepare.",
+        )
+    approved_candidates = json.loads(str(approval["candidates_json"]))
+    if not approved_candidates:
+        return _blocked_apply_report(approval, "Approved relation merge has no candidates.")
+    if approved_candidates != [candidate.as_dict() for candidate in current.candidates]:
+        return _blocked_apply_report(
+            approval,
+            "Approved relation merge candidate snapshot no longer matches the live dry-run.",
+        )
+
+    now = utc_now()
+    witness_ids: list[str] = []
+    with store.session() as conn:
+        status = conn.execute(
+            "SELECT status FROM relation_merge_approvals WHERE id = ?",
+            (approval["id"],),
+        ).fetchone()
+        if status is None or status["status"] != "prepared":
+            return _blocked_apply_report(approval, "Approval was consumed or changed before apply.")
+        for candidate in approved_candidates:
+            witness_ids.append(
+                _apply_single_candidate(
+                    conn,
+                    approval_id=str(approval["id"]),
+                    candidate=candidate,
+                    now=now,
+                )
+            )
+        conn.execute(
+            "UPDATE relation_merge_approvals SET status = ?, used_at = ? WHERE id = ?",
+            ("used", now, approval["id"]),
+        )
+    return RelationMergeApplyReport(
+        scope=scope,
+        passed=True,
+        approval_id=str(approval["id"]),
+        merged=len(witness_ids),
+        witness_ids=witness_ids,
+        recommendations=[
+            "Relation merge apply consumed the approval token and wrote rollback witnesses.",
+            "Run doctor, recall-regression, context-eval, backup, and restore-drill after reviewed relation merges.",
+        ],
     )
 
 
@@ -485,3 +622,217 @@ def _rollback_witness(report: RelationMergeReport) -> dict[str, Any]:
 
 def _token_hash(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _load_approval(store: MemoryStore, token: str) -> dict[str, Any] | None:
+    with store.session() as conn:
+        row = conn.execute(
+            "SELECT * FROM relation_merge_approvals WHERE token_hash = ?",
+            (_token_hash(token),),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _mark_approval_status(store: MemoryStore, approval_id: str, status: str) -> None:
+    with store.session() as conn:
+        conn.execute(
+            "UPDATE relation_merge_approvals SET status = ? WHERE id = ?",
+            (status, approval_id),
+        )
+
+
+def _blocked_apply_report(approval: dict[str, Any], message: str) -> RelationMergeApplyReport:
+    return RelationMergeApplyReport(
+        scope=approval.get("scope"),
+        passed=False,
+        approval_id=approval.get("id"),
+        merged=0,
+        witness_ids=[],
+        recommendations=[message],
+    )
+
+
+def _is_expired(expires_at: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(expires_at)
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= parsed
+
+
+def _apply_single_candidate(
+    conn: sqlite3.Connection,
+    *,
+    approval_id: str,
+    candidate: dict[str, Any],
+    now: str,
+) -> str:
+    scope = str(candidate["scope"])
+    canonical_id = str(candidate["canonical_node_id"])
+    candidate_id = str(candidate["candidate_node_id"])
+    canonical = _load_relation_node(conn, canonical_id)
+    merge_node = _load_relation_node(conn, candidate_id)
+    if canonical is None or merge_node is None:
+        raise ValueError("Approved relation merge node no longer exists.")
+    if canonical["scope"] != scope or merge_node["scope"] != scope:
+        raise ValueError("Approved relation merge node scope changed.")
+    before = {
+        "canonical_node": dict(canonical),
+        "candidate_node": dict(merge_node),
+        "edges": _affected_edges(conn, scope=scope, node_ids=[canonical_id, candidate_id]),
+        "approved_candidate": candidate,
+    }
+    for edge in _candidate_edges(conn, scope=scope, candidate_node_id=candidate_id):
+        _rewire_candidate_edge(
+            conn,
+            edge=edge,
+            canonical_node_id=canonical_id,
+            candidate_node_id=candidate_id,
+            now=now,
+        )
+    conn.execute("DELETE FROM relation_nodes WHERE id = ?", (candidate_id,))
+    after = {
+        "canonical_node": _load_relation_node(conn, canonical_id),
+        "candidate_node": _load_relation_node(conn, candidate_id),
+        "edges": _affected_edges(conn, scope=scope, node_ids=[canonical_id]),
+    }
+    witness_id = new_id("relation_merge_witness")
+    conn.execute(
+        """
+        INSERT INTO relation_merge_witnesses(
+          id, approval_id, scope, canonical_node_id, candidate_node_id,
+          action, reason, before_json, after_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            witness_id,
+            approval_id,
+            scope,
+            canonical_id,
+            candidate_id,
+            "merge-relation-node",
+            "approved one-use relation merge",
+            json.dumps(before, ensure_ascii=False, sort_keys=True),
+            json.dumps(after, ensure_ascii=False, sort_keys=True),
+            now,
+        ),
+    )
+    return witness_id
+
+
+def _load_relation_node(conn: sqlite3.Connection, node_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM relation_nodes WHERE id = ?", (node_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _affected_edges(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    node_ids: list[str],
+) -> list[dict[str, Any]]:
+    if not node_ids:
+        return []
+    placeholders = ", ".join("?" for _ in node_ids)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM relation_edges
+        WHERE scope = ?
+          AND (subject_node_id IN ({placeholders}) OR object_node_id IN ({placeholders}))
+        ORDER BY id
+        """,
+        tuple([scope, *node_ids, *node_ids]),
+    )
+    return [dict(row) for row in rows]
+
+
+def _candidate_edges(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    candidate_node_id: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM relation_edges
+        WHERE scope = ?
+          AND (subject_node_id = ? OR object_node_id = ?)
+        ORDER BY id
+        """,
+        (scope, candidate_node_id, candidate_node_id),
+    )
+    return [dict(row) for row in rows]
+
+
+def _rewire_candidate_edge(
+    conn: sqlite3.Connection,
+    *,
+    edge: dict[str, Any],
+    canonical_node_id: str,
+    candidate_node_id: str,
+    now: str,
+) -> None:
+    subject_id = str(edge["subject_node_id"])
+    object_id = str(edge["object_node_id"])
+    new_subject = canonical_node_id if subject_id == candidate_node_id else subject_id
+    new_object = canonical_node_id if object_id == candidate_node_id else object_id
+    if new_subject == new_object:
+        conn.execute("DELETE FROM relation_edges WHERE id = ?", (edge["id"],))
+        return
+    new_id = _relation_edge_id(
+        subject_node_id=new_subject,
+        predicate_norm=str(edge["predicate_norm"]),
+        object_node_id=new_object,
+        scope=str(edge["scope"]),
+        source_capsule_id=edge["source_capsule_id"],
+    )
+    existing = conn.execute("SELECT * FROM relation_edges WHERE id = ?", (new_id,)).fetchone()
+    if existing is not None and str(existing["id"]) != str(edge["id"]):
+        conn.execute(
+            """
+            UPDATE relation_edges
+            SET confidence = max(confidence, ?),
+                evidence_count = evidence_count + ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                float(edge["confidence"]),
+                int(edge["evidence_count"]),
+                now,
+                new_id,
+            ),
+        )
+        conn.execute("DELETE FROM relation_edges WHERE id = ?", (edge["id"],))
+        return
+    conn.execute(
+        """
+        UPDATE relation_edges
+        SET id = ?,
+            subject_node_id = ?,
+            object_node_id = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (new_id, new_subject, new_object, now, edge["id"]),
+    )
+
+
+def _relation_edge_id(
+    *,
+    subject_node_id: str,
+    predicate_norm: str,
+    object_node_id: str,
+    scope: str,
+    source_capsule_id: str | None,
+) -> str:
+    source = source_capsule_id or ""
+    digest = sha256(
+        f"{subject_node_id}\0{predicate_norm}\0{object_node_id}\0{scope}\0{source}".encode("utf-8")
+    ).hexdigest()[:18]
+    return f"rel_edge_{digest}"

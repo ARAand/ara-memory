@@ -370,14 +370,15 @@
         </p>
         <div class="meta" aria-label="현재 빌드 메타데이터">
           <span class="pill">branch: codex/ara-memory-natural-memory-gates</span>
-          <span class="pill">commit: working tree after f16451d</span>
+          <span class="pill">base commit: fbc7177</span>
+          <span class="pill">state: uncommitted v13 apply work</span>
           <span class="pill">scope: ara-memory</span>
           <span class="pill">elapsed: 26h</span>
         </div>
       </div>
       <aside class="stamp">
-        <strong>2026-07-02 14:57 +09:00</strong>
-        증거 기반 스냅샷. 테스트, 헬스, 로드맵 명령을 현재 작업트리에서 재확인했습니다.
+        <strong>2026-07-02 16:18 +09:00</strong>
+        증거 기반 스냅샷. 테스트, 헬스, 로드맵, 백업 검증을 현재 작업트리에서 재확인했습니다.
       </aside>
     </header>
 
@@ -386,18 +387,18 @@
       <div class="grid cards">
         <article class="card">
           <div class="label">작업트리</div>
-          <div class="value ok">clean</div>
-          <p class="detail">브랜치가 원격과 맞춰져 있으며 커밋되지 않은 코드 변경은 없습니다.</p>
+          <div class="value watch">ready</div>
+          <p class="detail">브랜치는 원격과 맞춰져 있고, schema v13 relation merge apply 변경이 커밋 대기 중입니다.</p>
         </article>
         <article class="card">
           <div class="label">테스트</div>
-          <div class="value ok">330</div>
+          <div class="value ok">336</div>
           <p class="detail"><code>python -m unittest discover -s tests</code> 통과, skipped=1.</p>
         </article>
         <article class="card">
           <div class="label">헬스</div>
-          <div class="value watch">90/100</div>
-          <p class="detail">상태는 watch. retention-cycle, backup pressure, protected-only drift 처리는 해결됐고 cold ratio만 남았습니다.</p>
+          <div class="value watch">80/100</div>
+          <p class="detail">상태는 watch. retention-cycle은 통과했지만 cold ratio와 backup pressure가 남아 있습니다.</p>
         </article>
         <article class="card">
           <div class="label">로드맵</div>
@@ -413,12 +414,12 @@
         <article class="panel">
           <h3>지금 된 것</h3>
           <ul>
-            <li>로컬 우선 durable store: events 1346, capsules 2898, storage 약 270MB.</li>
+            <li>로컬 우선 durable store: events 1354, capsules 2919, storage 약 287MB.</li>
             <li>원문 전체 재독해 대신 bounded recall: 800 token 예산 안에서 727 token / 18개 캡슐 선택.</li>
             <li>purpose continuity, identity continuity, semantic hygiene, milestone readiness 통과.</li>
-            <li>schema v12 기준 relation_nodes 5591개, relation_edges 20987개가 temporal edge에서 정규화됐습니다.</li>
+            <li>schema v13 기준 relation_nodes 5623개, relation_edges 21145개가 temporal edge에서 정규화됐습니다.</li>
             <li>temporal edge를 normalized relation_nodes / relation_edges로 정규화하고, bounded 2-hop graph spreading activation이 relation graph를 우선 사용합니다.</li>
-            <li>semantic relation merge는 자동 병합이 아니라 dry-run review gate와 prepare approval gate로 후보, 토큰, fingerprint, rollback witness preview만 고정합니다.</li>
+            <li>semantic relation merge는 dry-run, prepare approval, one-use apply까지 생겼고 apply는 fingerprint 재검사와 rollback witness를 요구합니다.</li>
             <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
           </ul>
         </article>
@@ -426,7 +427,7 @@
           <h3>아직 아닌 것</h3>
           <ul>
             <li>사람 같은 기억의 핵심인 재구성, 망각, 감정적 salience, 자기 목적성은 아직 v0 단계입니다.</li>
-            <li>relation node 스키마와 recall 우선 조회는 들어갔지만, 의미 병합, global spreading, reconsolidation은 남아 있습니다.</li>
+            <li>relation node 의미 병합은 one-use apply까지 들어갔지만 review automation, global spreading, reconsolidation은 남아 있습니다.</li>
             <li>cold memory가 70%라 비파괴 retention evidence는 통과했지만, protected-only drift와 실제 prunable drift를 계속 구분해야 합니다.</li>
             <li>보상해킹 방어는 테스트와 게이트가 있으나, 장기 자기평가 루프는 아직 충분히 적대적으로 검증되지 않았습니다.</li>
           </ul>
@@ -537,9 +538,9 @@
               <td>완료</td>
             </tr>
             <tr>
-              <td>Semantic relation merge apply policy</td>
-              <td>prepared approval 후보를 review queue, one-use apply, rollback witness 검증과 연결</td>
-              <td>8-16h</td>
+              <td>Relation merge review automation</td>
+              <td>one-use apply 결과를 review queue, regression sandbox, recall impact audit와 연결</td>
+              <td>6-12h</td>
               <td>높음</td>
             </tr>
             <tr>
@@ -583,7 +584,7 @@
         <article class="panel">
           <h3>최소 다음 버전</h3>
           <p>
-            8-16시간이면 reviewed relation merge apply policy, global spreading policy, privacy gate 일부까지 넣은
+            8-16시간이면 relation merge review automation, global spreading policy, privacy gate 일부까지 넣은
             “사용 가능한 v0.2”로 갈 수 있습니다.
           </p>
         </article>
@@ -596,7 +597,7 @@
         </article>
       </div>
       <div class="callout watch-border" style="margin-top:14px;">
-        Ara 판단: 운영 게이트는 초록이고 relation merge는 dry-run에서 prepare approval까지 올라왔습니다. 다음 작업은 reviewed one-use apply, global spreading sandbox, reconsolidation frame입니다.
+        Ara 판단: 운영 게이트는 초록이고 relation merge는 one-use apply까지 올라왔습니다. 다음 작업은 review automation, global spreading sandbox, reconsolidation frame입니다.
         이제는 기억을 보존하는 능력에서 기억을 재구성하는 능력으로 넘어가야 합니다.
       </div>
     </section>
@@ -634,7 +635,7 @@
         </div>
         <div class="timeline-item">
           <div class="timebox">4-10h</div>
-          <div>relation merge prepare approval을 review queue와 one-use apply 검증으로 연결합니다.</div>
+          <div>relation merge one-use apply 결과를 review queue, recall-impact audit, regression sandbox와 연결합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">10-18h</div>

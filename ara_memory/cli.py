@@ -15,7 +15,12 @@ from ara_memory.regression import (
     load_recall_regression_cases,
     write_recall_regression_baseline,
 )
-from ara_memory.relation_merge import prepare_relation_merge_approval, run_relation_merge_dry_run
+from ara_memory.relation_merge import (
+    RELATION_MERGE_CONFIRMATION,
+    apply_relation_merge_approval,
+    prepare_relation_merge_approval,
+    run_relation_merge_dry_run,
+)
 from ara_memory.turn import execute_turn_ingress, plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -387,6 +392,16 @@ def main(argv: list[str] | None = None) -> int:
     relation_merge_prepare.add_argument("--include-global", action="store_true")
     relation_merge_prepare.add_argument("--ttl-minutes", type=int, default=60)
     relation_merge_prepare.add_argument("--json", action="store_true")
+    relation_merge_apply = sub.add_parser(
+        "relation-merge-apply",
+        help=(
+            "Apply a prepared relation-node merge once. "
+            f"Requires exact confirmation: {RELATION_MERGE_CONFIRMATION!r}."
+        ),
+    )
+    relation_merge_apply.add_argument("--approval-token", required=True)
+    relation_merge_apply.add_argument("--confirm", required=True)
+    relation_merge_apply.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -1377,6 +1392,18 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "relation-merge-apply":
+        result = apply_relation_merge_approval(
+            memory.store,
+            approval_token=args.approval_token,
+            confirmation=args.confirm,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "promote":
         if not memory.promote(args.capsule_id, actor=args.actor, reason=args.reason):
