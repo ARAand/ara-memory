@@ -576,6 +576,12 @@ into `reconsolidation_review_queue`; fail rows are stored as
 `block-strong-reconsolidation`, surfaced by `health` and `goal-roadmap`, and
 must be resolved before stronger live mutation is opened. Use
 `reconsolidation-review-queue --status open` to inspect the current blockers.
+If an older approval predates rollback witness previews, run
+`reconsolidation-backfill-rollback-witnesses` first as a dry-run and then with
+`--apply` only after review. It reconstructs the missing approval rollback
+witness from the immutable witness `before_json` snapshot, records an audit
+action, and still requires `reconsolidation-review --record-queue` to close the
+watch row.
 `reconsolidation-strong-preflight` is the next non-destructive gate: it verifies
 a backup, restores it into a temporary shadow store, runs prepare/apply/review
 and optional recall-regression there, and redacts the shadow approval token from

@@ -27,6 +27,7 @@ from ara_memory.relation_merge import (
 from ara_memory.reconsolidation import (
     RECONSOLIDATION_APPLY_CONFIRMATION,
     RECONSOLIDATION_LIVE_ROLLBACK_CONFIRMATION,
+    backfill_legacy_reconsolidation_rollback_witnesses,
     list_reconsolidation_review_queue,
     record_reconsolidation_review_queue,
 )
@@ -277,6 +278,15 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_review_queue.add_argument("--status", default="open", choices=["open", "resolved"])
     reconsolidation_review_queue.add_argument("--limit", type=int, default=50)
     reconsolidation_review_queue.add_argument("--json", action="store_true")
+    reconsolidation_backfill = sub.add_parser(
+        "reconsolidation-backfill-rollback-witnesses",
+        help="Review and optionally backfill legacy reconsolidation approvals that predate rollback witness previews.",
+    )
+    reconsolidation_backfill.add_argument("--scope", default=None)
+    reconsolidation_backfill.add_argument("--approval-id", default=None)
+    reconsolidation_backfill.add_argument("--limit", type=int, default=50)
+    reconsolidation_backfill.add_argument("--apply", action="store_true")
+    reconsolidation_backfill.add_argument("--json", action="store_true")
     reconsolidation_strong_preflight = sub.add_parser(
         "reconsolidation-strong-preflight",
         help="Run prepare/apply/review/recall-regression inside a restored backup shadow store before stronger reconsolidation design.",
@@ -1391,6 +1401,20 @@ def main(argv: list[str] | None = None) -> int:
             scope=args.scope,
             status=args.status,
             limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
+
+    if args.cmd == "reconsolidation-backfill-rollback-witnesses":
+        result = backfill_legacy_reconsolidation_rollback_witnesses(
+            memory,
+            scope=args.scope,
+            approval_id=args.approval_id,
+            limit=args.limit,
+            apply=args.apply,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

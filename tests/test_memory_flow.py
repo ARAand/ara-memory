@@ -45,6 +45,7 @@ from ara_memory.relation_merge import (
     run_relation_merge_dry_run,
 )
 from ara_memory.reconsolidation import (
+    backfill_legacy_reconsolidation_rollback_witnesses,
     list_reconsolidation_review_queue,
     record_reconsolidation_review_queue,
 )
@@ -3008,6 +3009,116 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(queue_result.returncode, 0, queue_result.stderr + queue_result.stdout)
             queue_payload = json.loads(queue_result.stdout)
             self.assertEqual(queue_payload["open_items"], [])
+
+    def test_legacy_reconsolidation_rollback_witness_backfill_resolves_watch_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: legacy reconsolidation witnesses need explicit rollback witness backfill before stronger mutation.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: legacy rollback backfill",
+                    body="Legacy reconsolidation witnesses need explicit rollback witness backfill before stronger mutation.",
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "reconsolidation", "rollback"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: backfill legacy approval witness",
+                    body="Missing approval rollback witnesses should be reconstructed from immutable before snapshots, not silently ignored.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "reconsolidation"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.SELF,
+                    title="Self memory: Ara review judgment",
+                    body="Ara keeps independent judgment visible while repairing legacy memory safety evidence.",
+                    scope="alpha",
+                    confidence=0.86,
+                    salience=0.88,
+                    source_event_ids=[event.id],
+                    tags=["self", "identity", "judgment"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+            approval = memory.prepare_reconsolidation(
+                "legacy reconsolidation rollback witness backfill",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+
+            with memory.store.session() as conn:
+                witness = conn.execute(
+                    "SELECT before_json FROM reconsolidation_witnesses WHERE id = ?",
+                    (applied.witness_id,),
+                ).fetchone()
+                before = json.loads(witness["before_json"])
+                before.pop("approval_rollback_witness", None)
+                conn.execute(
+                    "UPDATE reconsolidation_witnesses SET before_json = ? WHERE id = ?",
+                    (json.dumps(before, ensure_ascii=False, sort_keys=True), applied.witness_id),
+                )
+                conn.execute(
+                    "UPDATE reconsolidation_approvals SET rollback_witness_json = '{}' WHERE id = ?",
+                    (applied.approval_id,),
+                )
+
+            watched = memory.review_reconsolidation(scope="alpha")
+            queued = record_reconsolidation_review_queue(memory, watched)
+
+            self.assertTrue(watched.passed, watched.as_dict())
+            self.assertEqual(watched.watch_count, 1)
+            self.assertEqual(len(queued.open_items), 1)
+            self.assertEqual(queued.open_items[0]["reason"], "legacy approval rollback witness missing")
+
+            dry_run = backfill_legacy_reconsolidation_rollback_witnesses(memory, scope="alpha")
+            self.assertTrue(dry_run.dry_run)
+            self.assertEqual(dry_run.changed, 1)
+            self.assertEqual(dry_run.items[0]["status"], "would-change")
+
+            applied_backfill = backfill_legacy_reconsolidation_rollback_witnesses(
+                memory,
+                scope="alpha",
+                apply=True,
+            )
+            self.assertFalse(applied_backfill.dry_run)
+            self.assertEqual(applied_backfill.changed, 1)
+
+            repaired = memory.review_reconsolidation(scope="alpha")
+            resolved = record_reconsolidation_review_queue(memory, repaired)
+            open_queue = list_reconsolidation_review_queue(memory, scope="alpha", status="open")
+
+            self.assertTrue(repaired.passed, repaired.as_dict())
+            self.assertEqual(repaired.watch_count, 0)
+            self.assertEqual(repaired.pass_count, 1)
+            self.assertEqual(resolved.resolved, 1)
+            self.assertEqual(open_queue.open_items, [])
 
     def test_reconsolidation_strong_preflight_runs_only_in_restored_shadow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

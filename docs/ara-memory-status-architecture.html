@@ -136,8 +136,8 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v19</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">semantic hygiene + milestone pass</span></div>
-      <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap watch</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">rollback backfill + roadmap pass</span></div>
+      <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap pass</span></div>
     </aside>
   </header>
 
@@ -172,7 +172,8 @@
         <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
         <li>exception witness는 설명 장치일 뿐 권한 상승 장치가 아니다.</li>
         <li>semantic hygiene false failure는 재분류했고 milestone readiness는 pass다.</li>
-        <li>roadmap의 남은 watch 항목은 reconsolidation rollback review queue 1건이다.</li>
+        <li>reconsolidation rollback review queue는 비었고 goal-roadmap은 pass다.</li>
+        <li>health는 score 80 watch다. 남은 경고는 cold pressure와 backup stewardship이다.</li>
         <li>API 기반 AI memory worker는 아직 기본 경로가 아니다. 현재는 로컬 deterministic gate가 중심이다.</li>
       </ul>
     </article>
@@ -222,7 +223,12 @@
         </div>
         <div class="row">
           <strong>rollback review queue</strong>
-          <p>남음: legacy approval rollback witness missing 경고를 해소해 roadmap watch를 pass로 낮춰야 한다.</p>
+          <p>완료: legacy approval rollback witness를 before snapshot에서 명시적으로 backfill했고 review queue open=0, witness pass=2 상태를 확인했다.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
+          <strong>cold / backup stewardship</strong>
+          <p>남음: cold pressure와 중복 검증 백업을 정리하기 전에 cold-stewardship과 backup-stewardship dry-run을 검토해야 한다.</p>
           <span class="badge watch">2-4h</span>
         </div>
         <div class="row">
@@ -242,7 +248,7 @@
       <h2>다음 판단</h2>
       <ul>
         <li>즉시 강한 live mutation을 열면 빠르지만 위험하다.</li>
-        <li>다음 1순위는 reconsolidation rollback review queue의 watch 항목을 해소하는 것이다.</li>
+        <li>다음 1순위는 cold/backup stewardship을 정리해 health watch를 낮추는 것이다.</li>
         <li>그 다음 strong reconsolidation action을 preflight/rollback/exception gate에 연결해야 한다.</li>
         <li>AI API 비용은 기본 경로가 아니라 optional batch summarizer로 제한하는 편이 낫다.</li>
         <li>이 기억의 목적은 더 많은 저장이 아니라, 원하는 맥락만 자연스럽게 떠오르게 하는 것이다.</li>
@@ -251,7 +257,7 @@
   </section>
 
   <footer>
-    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, and milestone pass.
+    Updated for schema v19 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, and roadmap pass.
     Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>

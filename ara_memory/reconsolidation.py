@@ -309,6 +309,39 @@ class ReconsolidationReviewQueueReport:
 
 
 @dataclass(slots=True)
+class ReconsolidationRollbackWitnessBackfillReport:
+    scope: str | None
+    dry_run: bool
+    reviewed: int
+    changed: int
+    skipped: int
+    items: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "dry_run": self.dry_run,
+            "reviewed": self.reviewed,
+            "changed": self.changed,
+            "skipped": self.skipped,
+            "items": self.items,
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Reconsolidation Rollback Witness Backfill: {scope}",
+            f"dry_run={self.dry_run}, reviewed={self.reviewed}, changed={self.changed}, skipped={self.skipped}",
+        ]
+        for item in self.items[:20]:
+            lines.append(
+                f"- [{item['status']}] witness={item['witness_id']} approval={item['approval_id']}: "
+                f"{item['reason']}"
+            )
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
 class ReconsolidationStrongPreflightReport:
     scope: str
     query: str
@@ -1087,6 +1120,126 @@ def review_reconsolidation_witnesses(
         items=items,
         recommendations=recommendations,
         regression=regression_payload,
+    )
+
+
+def backfill_legacy_reconsolidation_rollback_witnesses(
+    memory: Any,
+    *,
+    scope: str | None = None,
+    approval_id: str | None = None,
+    apply: bool = False,
+    limit: int = 50,
+) -> ReconsolidationRollbackWitnessBackfillReport:
+    memory.store.init()
+    clauses = ["(a.rollback_witness_json IS NULL OR a.rollback_witness_json = '' OR a.rollback_witness_json = '{}')"]
+    args: list[Any] = []
+    if scope:
+        clauses.append("w.scope = ?")
+        args.append(scope)
+    if approval_id:
+        clauses.append("w.approval_id = ?")
+        args.append(approval_id)
+    where = "WHERE " + " AND ".join(clauses)
+    args.append(limit)
+    with memory.store.session() as conn:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                f"""
+                SELECT
+                  w.id AS witness_id,
+                  w.approval_id AS approval_id,
+                  w.scope AS scope,
+                  w.query AS query,
+                  w.frame_fingerprint AS frame_fingerprint,
+                  w.before_json AS before_json
+                FROM reconsolidation_witnesses w
+                JOIN reconsolidation_approvals a ON a.id = w.approval_id
+                {where}
+                ORDER BY w.created_at DESC
+                LIMIT ?
+                """,
+                args,
+            )
+        ]
+    items: list[dict[str, Any]] = []
+    updates: list[tuple[str, str, str]] = []
+    for row in rows:
+        status = "skipped"
+        reason = "not reviewed"
+        try:
+            before = json.loads(str(row["before_json"]))
+        except json.JSONDecodeError:
+            before = {}
+            reason = "before snapshot is not valid JSON"
+        if before.get("frame_fingerprint") != row["frame_fingerprint"]:
+            reason = "before snapshot fingerprint mismatch"
+        elif isinstance(before.get("approval_rollback_witness"), dict):
+            reason = "before snapshot already carries approval rollback witness"
+        else:
+            witness = _rollback_witness_from_snapshot(
+                before,
+                scope=str(row["scope"]),
+                query=str(row["query"]),
+                frame_fingerprint=str(row["frame_fingerprint"]),
+            )
+            if witness is None:
+                reason = "before snapshot does not contain reconstructable evidence capsules"
+            else:
+                status = "changed" if apply else "would-change"
+                reason = "legacy approval rollback witness reconstructed from before snapshot"
+                updates.append(
+                    (
+                        json.dumps(witness, ensure_ascii=False, sort_keys=True),
+                        str(row["approval_id"]),
+                        str(row["scope"]),
+                    )
+                )
+        items.append(
+            {
+                "witness_id": str(row["witness_id"]),
+                "approval_id": str(row["approval_id"]),
+                "scope": str(row["scope"]),
+                "status": status,
+                "reason": reason,
+            }
+        )
+    if apply and updates:
+        now = utc_now()
+        with memory.store.session() as conn:
+            for payload, approval_id_value, item_scope in updates:
+                conn.execute(
+                    """
+                    UPDATE reconsolidation_approvals
+                    SET rollback_witness_json = ?
+                    WHERE id = ?
+                      AND (rollback_witness_json IS NULL OR rollback_witness_json = '' OR rollback_witness_json = '{}')
+                    """,
+                    (payload, approval_id_value),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "reconsolidation-rollback-witness-backfill",
+                        None,
+                        item_scope,
+                        f"backfilled approval rollback witness for {approval_id_value}",
+                        "reconsolidation-backfill-rollback-witnesses",
+                        now,
+                    ),
+                )
+    changed = sum(1 for item in items if item["status"] in {"changed", "would-change"})
+    return ReconsolidationRollbackWitnessBackfillReport(
+        scope=scope,
+        dry_run=not apply,
+        reviewed=len(rows),
+        changed=changed,
+        skipped=len(rows) - changed,
+        items=items,
     )
 
 
@@ -2029,6 +2182,8 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
         warnings.append("before snapshot fingerprint mismatch")
     approval_rollback = before.get("approval_rollback_witness")
     if not isinstance(approval_rollback, dict):
+        approval_rollback = _load_approval_rollback_witness_by_id(memory, str(row["approval_id"]))
+    if not isinstance(approval_rollback, dict):
         warnings.append("legacy approval rollback witness missing")
     elif approval_rollback.get("frame_fingerprint") != row["frame_fingerprint"]:
         warnings.append("approval rollback witness fingerprint mismatch")
@@ -2098,6 +2253,53 @@ def _is_failed_witness_warning(warning: str) -> bool:
         "evidence capsule set changed during apply",
         "created frame capsule is missing",
     } or warning.startswith("evidence capsule ") or warning.startswith("created frame capsule changed field ")
+
+
+def _rollback_witness_from_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    scope: str,
+    query: str,
+    frame_fingerprint: str,
+) -> dict[str, Any] | None:
+    evidence_capsules = snapshot.get("evidence_capsules")
+    if not isinstance(evidence_capsules, list):
+        return None
+    capsules = [item for item in evidence_capsules if isinstance(item, dict)]
+    if len(capsules) != len(evidence_capsules):
+        return None
+    return {
+        "schema": "reconsolidation-rollback-witness-v1",
+        "scope": scope,
+        "query_digest": _text_digest(query),
+        "frame_fingerprint": frame_fingerprint,
+        "candidate_only": True,
+        "allowed_live_mutations": [],
+        "evidence_capsule_count": len(capsules),
+        "missing_capsule_ids": [],
+        "evidence_capsules": capsules,
+        "rollback_policy": (
+            "Legacy approval rollback witness reconstructed from the immutable before snapshot. "
+            "Future stronger reconsolidation must preserve these evidence capsule identities, "
+            "statuses, source links, and content digests or write an explicit reviewed rollback/exception witness."
+        ),
+        "reconstructed_from": "reconsolidation_witnesses.before_json",
+    }
+
+
+def _load_approval_rollback_witness_by_id(memory: Any, approval_id: str) -> dict[str, Any] | None:
+    with memory.store.session() as conn:
+        row = conn.execute(
+            "SELECT rollback_witness_json FROM reconsolidation_approvals WHERE id = ?",
+            (approval_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(str(row["rollback_witness_json"] or "{}"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) and payload else None
 
 
 def _upsert_reconsolidation_review_queue(
