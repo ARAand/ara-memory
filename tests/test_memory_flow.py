@@ -9161,6 +9161,47 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("current action is review", item.reason)
             self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.CANDIDATE.value)
 
+    def test_review_worker_keeps_sensitive_review_marker_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Evidence note with a direct phone identifier should require explicit review.",
+                source="test",
+                scope="worker-sensitive",
+            )
+            sensitive = Capsule.create(
+                kind=CapsuleKind.EPISODE,
+                title="Sensitive direct identifier episode",
+                body="Contact 010-1234-5678 appeared in operational evidence.",
+                scope="worker-sensitive",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["evidence"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(sensitive)
+
+            quality = memory.quality(scope="worker-sensitive", persist=True)
+            item = next(item for item in quality.items if item.capsule_id == sensitive.id)
+            self.assertEqual(item.action, "review")
+            self.assertTrue(any("sensitive data" in reason for reason in item.reasons))
+
+            dry = memory.review_worker(scope="worker-sensitive", dry_run=True)
+            self.assertEqual(dry.changed, 0, dry.as_dict())
+            self.assertEqual(dry.items[0].applied_action, "keep-open")
+            self.assertIn("explicit policy choice", dry.items[0].reason)
+            self.assertEqual(len(memory.review_queue(scope="worker-sensitive", status="open", limit=10)), 1)
+
+            applied = memory.review_worker(scope="worker-sensitive", dry_run=False)
+
+            self.assertEqual(applied.changed, 0, applied.as_dict())
+            self.assertEqual(applied.items[0].applied_action, "keep-open")
+            self.assertEqual(len(memory.review_queue(scope="worker-sensitive", status="open", limit=10)), 1)
+            self.assertEqual(memory.store.get_capsule(sensitive.id)["status"], MemoryStatus.STABLE.value)
+
     def test_external_command_advisor_can_keep_safe_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

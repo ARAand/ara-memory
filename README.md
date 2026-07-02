@@ -491,8 +491,10 @@ artifact summaries. It does not promote, quarantine, decay, delete, or otherwise
 change memory capsules, and resolved review markers are not reopened by later
 quality persistence unless their reason changes.
 `review-worker` defaults to dry-run. With `--apply`, it may promote strong
-candidates, quarantine risky candidates, or resolve review markers, but it never
-deletes memories and leaves decay items for explicit policy review.
+candidates, quarantine risky candidates, or resolve only acknowledgeable review
+markers. Sensitive-data, self-serving identity, and other unresolved policy
+reviews stay open instead of being silently acknowledged. It never deletes
+memories and leaves decay items for explicit policy review.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

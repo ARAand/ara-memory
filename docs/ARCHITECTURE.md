@@ -127,6 +127,11 @@ review_compact(scope)
   -> acknowledge deterministic artifact-exclusion markers
   -> never promote, quarantine, decay, delete, or otherwise mutate capsules
 
+review_worker(scope)
+  -> promote/quarantine only gated queue actions
+  -> acknowledge only low-risk review markers
+  -> keep sensitive-data and identity-policy reviews open
+
 worker_loop(iterations, interval)
   -> repeat worker(scope)
   -> compact per-iteration report

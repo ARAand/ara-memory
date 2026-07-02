@@ -493,11 +493,16 @@ class QualityScorer:
                 self.store.update_capsule_status(capsule["id"], MemoryStatus.QUARANTINED, actor="review-worker", reason=reason)
                 self.resolve_queue_item(row["id"])
         elif row["action"] == "review":
-            applied = "resolve"
-            changed = True
-            reason = f"manual review marker acknowledged: {reason}"
-            if not dry_run:
-                self.resolve_queue_item(row["id"])
+            if _is_acknowledgeable_review(reason):
+                applied = "resolve"
+                changed = True
+                reason = f"manual review marker acknowledged: {reason}"
+                if not dry_run:
+                    self.resolve_queue_item(row["id"])
+            else:
+                applied = "keep-open"
+                changed = False
+                reason = f"review requires explicit policy choice: {reason}"
         elif row["action"] == "decay":
             applied = "manual-decay-review"
             changed = False
