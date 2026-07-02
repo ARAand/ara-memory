@@ -135,6 +135,12 @@ recall_policy_impact(query, intent, actions, outcome)
   -> produce review recommendations without automatically mutating policy commands,
      hot eligibility, pruning gates, or intent classification
 
+reconsolidation_review(scope)
+  -> review candidate-only reconsolidation witnesses for unchanged evidence capsules
+  -> keep the created frame capsule candidate-only
+  -> optionally run recall-regression as a sandbox over representative recall cases
+  -> block stronger reconsolidation when witness review or recall regression fails
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

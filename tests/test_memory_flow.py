@@ -2305,6 +2305,102 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(review.pass_count, 1)
             self.assertEqual(review.items[0].capsule_id, applied.capsule_id)
 
+    def test_reconsolidation_review_cli_runs_recall_regression_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: natural memory purpose requires reconsolidation review to prove auditable safety recall before stronger apply.",
+                source="test",
+                scope="alpha",
+            )
+            goal = Capsule.create(
+                kind=CapsuleKind.GOAL,
+                title="Goal memory: natural memory purpose",
+                body="natural memory purpose requires reconsolidation review to prove auditable safety recall before stronger apply",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["goal", "purpose", "natural-memory", "reconsolidation", "safety"],
+                status=MemoryStatus.STABLE,
+            )
+            self_memory = Capsule.create(
+                kind=CapsuleKind.SELF,
+                title="Self memory: identity and judgment",
+                body="Ara identity and judgment must stay visible during reconsolidation review.",
+                scope="global",
+                confidence=0.86,
+                salience=0.86,
+                source_event_ids=[event.id],
+                tags=["self", "identity", "judgment"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(goal)
+            memory.store.upsert_capsule(self_memory)
+            memory.build_hot(scope="alpha", budget=700)
+            approval = memory.prepare_reconsolidation(
+                "reconsolidation review auditable safety recall stronger apply",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+                include_global=False,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            manifest = Path(tmp) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "name": "reconsolidation_review_sandbox",
+                                "query": "reconsolidation review auditable safety recall",
+                                "scope": "alpha",
+                                "expected_terms": ["reconsolidation", "safety"],
+                                "budget": 900,
+                                "include_global": False,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "reconsolidation-review",
+                    "--scope",
+                    "alpha",
+                    "--regression-manifest",
+                    str(manifest),
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "ARA_MEMORY_HOME": str(root)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["passed"], payload)
+            self.assertEqual(payload["reviewed"], 1)
+            self.assertTrue(payload["regression"]["passed"])
+            self.assertEqual(payload["regression"]["cases"][0]["name"], "reconsolidation_review_sandbox")
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

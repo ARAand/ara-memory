@@ -145,7 +145,7 @@
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">최근 완료</span><span class="value">reconsolidation apply safety v0</span></div>
-      <div class="metric"><span class="label">이번 진행</span><span class="value">recall-policy feedback watch</span></div>
+      <div class="metric"><span class="label">이번 진행</span><span class="value">reconsolidation review regression sandbox</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">구현 중, 장기 목표 미완료</span></div>
     </aside>
   </header>
@@ -169,6 +169,7 @@
         <li><code>reconsolidation-prepare</code>: 프레임 fingerprint와 짧은 approval token을 만든다.</li>
         <li><code>reconsolidation-apply</code>: token을 한 번만 소비하고 candidate summary capsule과 witness만 만든다.</li>
         <li><code>reconsolidation-review</code>: 기존 evidence capsule이 바뀌지 않았고 새 capsule이 candidate인지 검증한다.</li>
+        <li><code>reconsolidation-review --regression-manifest</code>: candidate witness와 대표 recall-regression을 함께 통과해야 다음 단계로 갈 수 있다.</li>
         <li><code>recall-policy</code>: 과거 <code>recall-policy-impact</code> 결과를 Policy Feedback으로 붙인다.</li>
         <li>해로운 이력이 우세한 action은 reward가 아니라 <code>watch</code> 신호로 낮춘다.</li>
       </ul>
@@ -202,6 +203,11 @@
     <article class="panel span-8">
       <h2>남은 작업과 예상 소요</h2>
       <div class="stack">
+        <div class="row">
+          <strong>reconsolidation review regression sandbox</strong>
+          <p>완료: candidate-only witness review와 recall-regression sandbox를 하나의 review gate로 묶었다.</p>
+          <span class="badge pass">done</span>
+        </div>
         <div class="row">
           <strong>recall-policy feedback watch</strong>
           <p>완료: 정책 action별 helpful/harmful/unknown 이력을 읽고 harmful 우세 시 watch로 낮춘다.</p>

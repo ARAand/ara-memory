@@ -565,7 +565,10 @@ approval token and fingerprint. `reconsolidation-apply` consumes the token once
 and may create only one candidate summary capsule plus a witness; it cannot
 promote, supersede, rewrite, delete, or cool existing capsules. Run
 `reconsolidation-review` before trusting the candidate as evidence for any
-stronger future apply path.
+stronger future apply path. Add `--regression-manifest` and an optional
+`--regression-baseline` to make review run a recall-regression sandbox; the
+candidate witness and representative recall cases must both pass before any
+future stronger apply gate can be considered.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

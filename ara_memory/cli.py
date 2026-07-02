@@ -260,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
     reconsolidation_review.add_argument("--scope", default=None)
     reconsolidation_review.add_argument("--approval-id", default=None)
     reconsolidation_review.add_argument("--limit", type=int, default=50)
+    reconsolidation_review.add_argument("--regression-manifest", type=Path, default=None)
+    reconsolidation_review.add_argument("--regression-baseline", type=Path, default=None)
     reconsolidation_review.add_argument("--json", action="store_true")
 
     recall_policy_impact = sub.add_parser(
@@ -1257,10 +1259,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.passed else 1
 
     if args.cmd == "reconsolidation-review":
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
         result = memory.review_reconsolidation(
             scope=args.scope,
             approval_id=args.approval_id,
             limit=args.limit,
+            regression_cases=cases,
+            regression_baseline=baseline,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

@@ -222,6 +222,7 @@ class ReconsolidationReviewReport:
     fail_count: int
     items: list[ReconsolidationReviewItem]
     recommendations: list[str]
+    regression: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +235,7 @@ class ReconsolidationReviewReport:
             "fail_count": self.fail_count,
             "items": [item.as_dict() for item in self.items],
             "recommendations": self.recommendations,
+            "regression": self.regression,
         }
 
     def to_text(self) -> str:
@@ -248,6 +250,17 @@ class ReconsolidationReviewReport:
         for item in self.items[:20]:
             warning = "; ".join(item.warnings) if item.warnings else "witness invariants hold"
             lines.append(f"- [{item.status}] {item.witness_id} capsule={item.capsule_id}: {warning}")
+        if self.regression is not None:
+            cases = self.regression.get("cases", [])
+            baseline = self.regression.get("baseline_comparison", [])
+            lines.extend(
+                [
+                    "## Recall Regression Sandbox",
+                    f"status: {'pass' if self.regression.get('passed') else 'fail'}",
+                    f"cases: {_passed_count(cases)}",
+                    f"baseline: {_passed_count(baseline)}",
+                ]
+            )
         if self.recommendations:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
@@ -576,6 +589,8 @@ def review_reconsolidation_witnesses(
     scope: str | None = None,
     approval_id: str | None = None,
     limit: int = 50,
+    regression_cases: list[Any] | None = None,
+    regression_baseline: dict[str, Any] | None = None,
 ) -> ReconsolidationReviewReport:
     memory.store.init()
     clauses: list[str] = []
@@ -607,22 +622,34 @@ def review_reconsolidation_witnesses(
     watch_count = sum(1 for item in items if item.status == "watch")
     pass_count = sum(1 for item in items if item.status == "pass")
     recommendations: list[str] = []
+    regression_payload = None
+    regression_passed = True
+    if regression_cases is not None:
+        regression = memory.recall_regression(regression_cases, baseline=regression_baseline)
+        regression_payload = regression.as_dict()
+        regression_passed = bool(regression.passed)
     if not items:
         recommendations.append("Run reconsolidation-apply before reviewing applied frame witnesses.")
     if fail_count:
         recommendations.append("Block stronger reconsolidation actions until failed witnesses are repaired or explained.")
     if watch_count:
         recommendations.append("Inspect watched reconsolidation witnesses before promoting frame summaries.")
+    if regression_payload is not None:
+        if regression_passed:
+            recommendations.append("Recall-regression sandbox passed; stronger reconsolidation still requires explicit apply gates.")
+        else:
+            recommendations.insert(0, "Block stronger reconsolidation actions because recall-regression sandbox failed.")
     return ReconsolidationReviewReport(
         scope=scope,
         approval_id=approval_id,
-        passed=fail_count == 0,
+        passed=fail_count == 0 and regression_passed,
         reviewed=len(items),
         pass_count=pass_count,
         watch_count=watch_count,
         fail_count=fail_count,
         items=items,
         recommendations=recommendations,
+        regression=regression_payload,
     )
 
 
@@ -952,3 +979,10 @@ def _is_expired(expires_at: str) -> bool:
 
 def _text_digest(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
+
+
+def _passed_count(items: object) -> str:
+    if not isinstance(items, list):
+        return "0/0"
+    passed = sum(1 for item in items if isinstance(item, dict) and item.get("passed"))
+    return f"{passed}/{len(items)}"
