@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -249,6 +249,26 @@ CREATE TABLE IF NOT EXISTS relation_merge_witnesses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_relation_merge_witnesses_approval ON relation_merge_witnesses(approval_id, created_at);
+
+CREATE TABLE IF NOT EXISTS relation_merge_review_queue (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL,
+  approval_id TEXT,
+  witness_id TEXT,
+  action TEXT NOT NULL,
+  priority REAL NOT NULL,
+  reason TEXT NOT NULL,
+  review_status TEXT NOT NULL,
+  review_json TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  FOREIGN KEY(approval_id) REFERENCES relation_merge_approvals(id),
+  FOREIGN KEY(witness_id) REFERENCES relation_merge_witnesses(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relation_merge_review_queue_status ON relation_merge_review_queue(scope, status, priority);
+CREATE INDEX IF NOT EXISTS idx_relation_merge_review_queue_witness ON relation_merge_review_queue(witness_id, status);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

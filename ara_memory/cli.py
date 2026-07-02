@@ -18,7 +18,9 @@ from ara_memory.regression import (
 from ara_memory.relation_merge import (
     RELATION_MERGE_CONFIRMATION,
     apply_relation_merge_approval,
+    list_relation_merge_review_queue,
     prepare_relation_merge_approval,
+    record_relation_merge_review_queue,
     review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
@@ -412,7 +414,16 @@ def main(argv: list[str] | None = None) -> int:
     relation_merge_review.add_argument("--limit", type=int, default=50)
     relation_merge_review.add_argument("--regression-manifest", type=Path, default=None)
     relation_merge_review.add_argument("--regression-baseline", type=Path, default=None)
+    relation_merge_review.add_argument("--record-queue", action="store_true")
     relation_merge_review.add_argument("--json", action="store_true")
+    relation_merge_review_queue = sub.add_parser(
+        "relation-merge-review-queue",
+        help="List persistent relation-merge review queue items created from witness/regression review gates.",
+    )
+    relation_merge_review_queue.add_argument("--scope", default=None)
+    relation_merge_review_queue.add_argument("--status", default="open", choices=["open", "resolved"])
+    relation_merge_review_queue.add_argument("--limit", type=int, default=50)
+    relation_merge_review_queue.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
@@ -1429,11 +1440,20 @@ def main(argv: list[str] | None = None) -> int:
             baseline = load_recall_regression_baseline(args.regression_baseline)
             regression = memory.recall_regression(cases, baseline=baseline)
         passed = result.passed and (regression is None or regression.passed)
+        queue = None
+        if args.record_queue:
+            queue = record_relation_merge_review_queue(
+                memory.store,
+                result,
+                regression=regression.as_dict() if regression is not None else None,
+            )
         if args.json:
             payload = result.as_dict()
             if regression is not None:
                 payload["regression"] = regression.as_dict()
                 payload["passed"] = passed
+            if queue is not None:
+                payload["queue"] = queue.as_dict()
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(result.to_text())
@@ -1444,7 +1464,23 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"status: {'pass' if regression.passed else 'fail'}")
                 print(f"cases: {_passed_count(regression_payload.get('cases', []))}")
                 print(f"baseline: {_passed_count(regression_payload.get('baseline_comparison', []))}")
+            if queue is not None:
+                print()
+                print(queue.to_text())
         return 0 if passed else 1
+
+    if args.cmd == "relation-merge-review-queue":
+        result = list_relation_merge_review_queue(
+            memory.store,
+            scope=args.scope,
+            status=args.status,
+            limit=args.limit,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
 
     if args.cmd == "promote":
         if not memory.promote(args.capsule_id, actor=args.actor, reason=args.reason):

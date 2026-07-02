@@ -38,7 +38,9 @@ from ara_memory.projection import render_projection, search_projection, working_
 from ara_memory.relation_merge import (
     RELATION_MERGE_CONFIRMATION,
     apply_relation_merge_approval,
+    list_relation_merge_review_queue,
     prepare_relation_merge_approval,
+    record_relation_merge_review_queue,
     review_relation_merge_witnesses,
     run_relation_merge_dry_run,
 )
@@ -806,6 +808,90 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("candidate node still exists after merge", review.items[0].warnings)
             self.assertIn("candidate edge references remain after merge", review.items[0].warnings)
 
+    def test_relation_merge_review_queue_records_and_resolves_witness_risk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: relation merge review queue",
+                body="Relation merge review queue should persist unsafe witness review.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.4,
+                source_event_ids=[],
+                tags=["relation", "review"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.store.add_edge(
+                subject="backup restore procedure",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.8,
+            )
+            memory.store.add_edge(
+                subject="backup restore drill",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=capsule.id,
+                confidence=0.7,
+            )
+            approval = prepare_relation_merge_approval(
+                memory.store,
+                scope="alpha",
+                threshold=0.45,
+                limit=10,
+                node_limit=20,
+                ttl_minutes=5,
+            )
+            applied = apply_relation_merge_approval(
+                memory.store,
+                approval_token=str(approval.token),
+                confirmation=RELATION_MERGE_CONFIRMATION,
+            )
+            self.assertTrue(applied.passed)
+            with memory.store.session() as conn:
+                row = conn.execute(
+                    "SELECT * FROM relation_merge_witnesses WHERE approval_id = ?",
+                    (approval.approval_id,),
+                ).fetchone()
+                original_after = row["after_json"]
+                after = json.loads(row["after_json"])
+                before = json.loads(row["before_json"])
+                after["candidate_node"] = before["candidate_node"]
+                after["edges"] = before["edges"]
+                conn.execute(
+                    "UPDATE relation_merge_witnesses SET after_json = ? WHERE id = ?",
+                    (json.dumps(after, ensure_ascii=False, sort_keys=True), row["id"]),
+                )
+
+            failed_review = review_relation_merge_witnesses(memory.store, scope="alpha")
+            queued = record_relation_merge_review_queue(memory.store, failed_review)
+
+            self.assertEqual(queued.recorded, 1)
+            self.assertEqual(len(queued.open_items), 1)
+            self.assertEqual(queued.open_items[0]["review_status"], "fail")
+            self.assertEqual(queued.open_items[0]["action"], "inspect-relation-merge")
+
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE relation_merge_witnesses SET after_json = ? WHERE id = ?",
+                    (original_after, row["id"]),
+                )
+            repaired_review = review_relation_merge_witnesses(memory.store, scope="alpha")
+            resolved = record_relation_merge_review_queue(memory.store, repaired_review)
+            open_queue = list_relation_merge_review_queue(memory.store, scope="alpha", status="open")
+            resolved_queue = list_relation_merge_review_queue(memory.store, scope="alpha", status="resolved")
+
+            self.assertTrue(repaired_review.passed)
+            self.assertEqual(resolved.resolved, 1)
+            self.assertEqual(open_queue.open_items, [])
+            self.assertEqual(len(resolved_queue.open_items), 1)
+
     def test_relation_merge_review_cli_can_run_recall_regression_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"
@@ -860,6 +946,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "alpha",
                     "--regression-manifest",
                     str(manifest),
+                    "--record-queue",
                     "--json",
                 ],
                 cwd=Path(__file__).resolve().parents[1],
@@ -874,6 +961,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(payload["passed"])
             self.assertEqual(payload["reviewed"], 0)
             self.assertTrue(payload["regression"]["passed"])
+            self.assertEqual(payload["queue"]["recorded"], 0)
             self.assertEqual(payload["regression"]["cases"][0]["name"], "relation_merge_review_sandbox")
 
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:

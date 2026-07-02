@@ -302,6 +302,43 @@ class RelationMergeReviewReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RelationMergeReviewQueueReport:
+    scope: str | None
+    recorded: int
+    resolved: int
+    open_items: list[dict[str, Any]]
+
+    @property
+    def passed(self) -> bool:
+        return True
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "passed": self.passed,
+            "recorded": self.recorded,
+            "resolved": self.resolved,
+            "open_items": self.open_items,
+        }
+
+    def to_text(self) -> str:
+        scope = self.scope or "all"
+        lines = [
+            f"# Ara Relation Merge Review Queue: {scope}",
+            f"recorded={self.recorded}, resolved={self.resolved}, open={len(self.open_items)}",
+        ]
+        if not self.open_items:
+            lines.append("- None.")
+        for item in self.open_items[:20]:
+            lines.append(
+                "- "
+                f"{item['id']} [{item['review_status']}/{item['action']}] "
+                f"priority={float(item['priority']):.2f} {item['reason']}"
+            )
+        return "\n".join(lines)
+
+
 def run_relation_merge_dry_run(
     store: MemoryStore,
     *,
@@ -590,6 +627,86 @@ def review_relation_merge_witnesses(
         items=items,
         recommendations=recommendations,
     )
+
+
+def record_relation_merge_review_queue(
+    store: MemoryStore,
+    report: RelationMergeReviewReport,
+    *,
+    regression: dict[str, Any] | None = None,
+    limit: int = 50,
+) -> RelationMergeReviewQueueReport:
+    store.init()
+    now = utc_now()
+    recorded = 0
+    resolved = 0
+    regression_passed = True if regression is None else bool(regression.get("passed"))
+    with store.session() as conn:
+        for item in report.items:
+            if item.status == "pass":
+                resolved += _resolve_relation_review_queue(
+                    conn,
+                    scope=item.scope,
+                    witness_id=item.witness_id,
+                    now=now,
+                )
+                continue
+            reason = "; ".join(item.warnings) or f"relation merge witness status {item.status}"
+            if _upsert_relation_review_queue(
+                conn,
+                scope=item.scope,
+                approval_id=item.approval_id,
+                witness_id=item.witness_id,
+                action="inspect-relation-merge",
+                priority=0.95 if item.status == "fail" else 0.70,
+                reason=reason,
+                review_status=item.status,
+                review_json=item.as_dict(),
+                now=now,
+            ):
+                recorded += 1
+        if regression is not None:
+            if regression_passed:
+                resolved += _resolve_relation_review_queue(
+                    conn,
+                    scope=report.scope,
+                    witness_id=None,
+                    now=now,
+                    action="inspect-relation-regression",
+                )
+            elif _upsert_relation_review_queue(
+                conn,
+                scope=report.scope or "global",
+                approval_id=report.approval_id,
+                witness_id=None,
+                action="inspect-relation-regression",
+                priority=0.98,
+                reason="relation merge review recall-regression sandbox failed",
+                review_status="fail",
+                review_json=regression,
+                now=now,
+            ):
+                recorded += 1
+        open_items = _list_relation_review_queue(conn, scope=report.scope, status="open", limit=limit)
+    return RelationMergeReviewQueueReport(
+        scope=report.scope,
+        recorded=recorded,
+        resolved=resolved,
+        open_items=open_items,
+    )
+
+
+def list_relation_merge_review_queue(
+    store: MemoryStore,
+    *,
+    scope: str | None = None,
+    status: str = "open",
+    limit: int = 50,
+) -> RelationMergeReviewQueueReport:
+    store.init()
+    with store.session() as conn:
+        rows = _list_relation_review_queue(conn, scope=scope, status=status, limit=limit)
+    return RelationMergeReviewQueueReport(scope=scope, recorded=0, resolved=0, open_items=rows)
 
 
 def _node_profile(node: dict[str, Any]) -> dict[str, Any]:
@@ -1095,3 +1212,124 @@ def _is_failed_review_warning(warning: str) -> bool:
         "relation evidence_count decreased",
         "self-loop relation edge remained after merge",
     }
+
+
+def _upsert_relation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    approval_id: str | None,
+    witness_id: str | None,
+    action: str,
+    priority: float,
+    reason: str,
+    review_status: str,
+    review_json: dict[str, Any],
+    now: str,
+) -> bool:
+    existing = conn.execute(
+        f"""
+        SELECT id
+        FROM relation_merge_review_queue
+        WHERE scope = ?
+          AND action = ?
+          AND status = 'open'
+          AND {'witness_id IS NULL' if witness_id is None else 'witness_id = ?'}
+        LIMIT 1
+        """,
+        (scope, action) if witness_id is None else (scope, action, witness_id),
+    ).fetchone()
+    payload = json.dumps(review_json, ensure_ascii=False, sort_keys=True)
+    if existing:
+        conn.execute(
+            """
+            UPDATE relation_merge_review_queue
+            SET priority = ?, reason = ?, review_status = ?, review_json = ?, created_at = ?
+            WHERE id = ?
+            """,
+            (priority, reason, review_status, payload, now, existing["id"]),
+        )
+        return False
+    conn.execute(
+        """
+        INSERT INTO relation_merge_review_queue(
+          id, scope, approval_id, witness_id, action, priority, reason,
+          review_status, review_json, status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            new_id("relation_review"),
+            scope,
+            approval_id,
+            witness_id,
+            action,
+            priority,
+            reason,
+            review_status,
+            payload,
+            "open",
+            now,
+        ),
+    )
+    return True
+
+
+def _resolve_relation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str | None,
+    witness_id: str | None,
+    now: str,
+    action: str | None = None,
+) -> int:
+    clauses = ["status = 'open'"]
+    where_args: list[Any] = []
+    if scope:
+        clauses.append("scope = ?")
+        where_args.append(scope)
+    if witness_id is None:
+        clauses.append("witness_id IS NULL")
+    else:
+        clauses.append("witness_id = ?")
+        where_args.append(witness_id)
+    if action:
+        clauses.append("action = ?")
+        where_args.append(action)
+    cur = conn.execute(
+        f"""
+        UPDATE relation_merge_review_queue
+        SET status = ?, resolved_at = ?
+        WHERE {' AND '.join(clauses)}
+        """,
+        ("resolved", now, *where_args),
+    )
+    return cur.rowcount
+
+
+def _list_relation_review_queue(
+    conn: sqlite3.Connection,
+    *,
+    scope: str | None,
+    status: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    clauses = ["status = ?"]
+    args: list[Any] = [status]
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    args.append(limit)
+    return [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT *
+            FROM relation_merge_review_queue
+            WHERE {' AND '.join(clauses)}
+            ORDER BY priority DESC, created_at DESC
+            LIMIT ?
+            """,
+            args,
+        )
+    ]
