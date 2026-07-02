@@ -32,8 +32,11 @@ compare the fingerprint, merge approved relation nodes in one transaction, and
 write rollback witnesses. `relation-merge-review` audits those witnesses
 without mutating memory: it checks that the candidate node disappeared, edge
 references were rewired, duplicate evidence was coalesced, and evidence counts
-did not shrink. The next layers are review-queue integration, regression
-sandboxing, reconsolidation frames, and broader global graph policies.
+did not shrink. When given a recall-regression manifest and baseline, the same
+review command also runs a recall-regression sandbox and fails the whole gate if
+either witness review or recall stability fails. The next layers are
+review-queue integration, reconsolidation frames, and broader global graph
+policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -376,10 +379,12 @@ merged alias node, marks the approval used, and writes
 `relation_merge_witnesses` in the same transaction. `relation-merge-review`
 then reads those witnesses as a non-destructive impact audit and reports
 pass/watch/fail signals for candidate remnants, remaining edge references,
-self-loops, duplicate coalescing, and evidence-count preservation. On the
-current operating store, the strict default review threshold intentionally
-returns no high-confidence `ara-memory` candidates; fixture tests prove the
-gates can still surface, freeze, apply, and review real alias candidates when
+self-loops, duplicate coalescing, and evidence-count preservation. With
+`--regression-manifest` and `--regression-baseline`, it also runs the reviewed
+recall-regression cases as a sandbox before returning success. On the current
+operating store, the strict default review threshold intentionally returns no
+high-confidence `ara-memory` candidates; fixture tests prove the gates can still
+surface, freeze, apply, review, and regression-check real alias candidates when
 evidence is present, including Korean relation labels.
 
 `working-memory` is the smaller action layer between hot memory and cold

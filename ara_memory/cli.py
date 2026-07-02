@@ -410,6 +410,8 @@ def main(argv: list[str] | None = None) -> int:
     relation_merge_review.add_argument("--scope", default=None)
     relation_merge_review.add_argument("--approval-id", default=None)
     relation_merge_review.add_argument("--limit", type=int, default=50)
+    relation_merge_review.add_argument("--regression-manifest", type=Path, default=None)
+    relation_merge_review.add_argument("--regression-baseline", type=Path, default=None)
     relation_merge_review.add_argument("--json", action="store_true")
 
     promote = sub.add_parser("promote")
@@ -1421,11 +1423,28 @@ def main(argv: list[str] | None = None) -> int:
             approval_id=args.approval_id,
             limit=args.limit,
         )
+        regression = None
+        if args.regression_manifest:
+            cases = load_recall_regression_cases(args.regression_manifest)
+            baseline = load_recall_regression_baseline(args.regression_baseline)
+            regression = memory.recall_regression(cases, baseline=baseline)
+        passed = result.passed and (regression is None or regression.passed)
         if args.json:
-            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+            payload = result.as_dict()
+            if regression is not None:
+                payload["regression"] = regression.as_dict()
+                payload["passed"] = passed
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(result.to_text())
-        return 0 if result.passed else 1
+            if regression is not None:
+                regression_payload = regression.as_dict()
+                print()
+                print(f"## Recall Regression Sandbox")
+                print(f"status: {'pass' if regression.passed else 'fail'}")
+                print(f"cases: {_passed_count(regression_payload.get('cases', []))}")
+                print(f"baseline: {_passed_count(regression_payload.get('baseline_comparison', []))}")
+        return 0 if passed else 1
 
     if args.cmd == "promote":
         if not memory.promote(args.capsule_id, actor=args.actor, reason=args.reason):
@@ -2109,6 +2128,13 @@ def _parse_budget_list(value: str) -> list[int]:
     if not budgets:
         raise SystemExit("Provide at least one recall budget.")
     return budgets
+
+
+def _passed_count(items: object) -> str:
+    if not isinstance(items, list):
+        return "0/0"
+    passed = sum(1 for item in items if isinstance(item, dict) and item.get("passed"))
+    return f"{passed}/{len(items)}"
 
 
 if __name__ == "__main__":

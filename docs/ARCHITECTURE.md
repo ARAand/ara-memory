@@ -21,8 +21,10 @@ the live dry-run fingerprint still matches, merge the approved relation-node
 alias in one transaction, and preserve rollback witnesses. A review gate can
 now audit applied merge witnesses for candidate remnants, remaining edge
 references, self-loops, duplicate coalescing, and evidence-count preservation
-without mutating memory. There is still no global spreading layer, review-queue
-worker integration, or reconsolidation frame yet.
+without mutating memory; with regression inputs, that same review command runs
+the reviewed recall-regression sandbox before returning success. There is still
+no global spreading layer, review-queue worker integration, or reconsolidation
+frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -256,8 +258,9 @@ sleep()
   relation edges, coalesces duplicate relation edges, deletes the merged alias
   node, and records `relation_merge_witnesses` in the same transaction. The
   `relation-merge-review` command reads those witnesses as a non-destructive
-  impact audit before broader review-worker or regression-sandbox automation is
-  trusted. None of these commands mutate capsule status or source events.
+  impact audit and can run recall-regression manifest/baseline checks as a
+  sandbox before broader review-worker automation is trusted. None of these
+  commands mutate capsule status or source events.
 
 Cold memory is intentionally outside the active recall FTS index. `cold-map`
 provides the distant-memory layer between active recall and archival

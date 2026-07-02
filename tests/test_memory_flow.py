@@ -806,6 +806,76 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("candidate node still exists after merge", review.items[0].warnings)
             self.assertIn("candidate edge references remain after merge", review.items[0].warnings)
 
+    def test_relation_merge_review_cli_can_run_recall_regression_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: relation merge sandbox regression must preserve checksum envelope recall.",
+                scope="alpha",
+                source="test",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: checksum envelope recall",
+                body="relation merge sandbox regression must preserve checksum envelope recall",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["checksum", "regression"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            manifest = Path(tmp) / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "name": "relation_merge_review_sandbox",
+                                "query": "checksum envelope recall",
+                                "scope": "alpha",
+                                "expected_terms": ["checksum", "envelope"],
+                                "budget": 900,
+                                "include_global": False,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "relation-merge-review",
+                    "--scope",
+                    "alpha",
+                    "--regression-manifest",
+                    str(manifest),
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "ARA_MEMORY_HOME": str(root)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["passed"])
+            self.assertEqual(payload["reviewed"], 0)
+            self.assertTrue(payload["regression"]["passed"])
+            self.assertEqual(payload["regression"]["cases"][0]["name"], "relation_merge_review_sandbox")
+
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [
             {
