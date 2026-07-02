@@ -333,6 +333,7 @@ python -m ara_memory review-worker --scope ara-memory
 python -m ara_memory maintenance
 python -m ara_memory retention --scope ara-memory
 python -m ara_memory cold-stewardship --scope ara-memory
+python -m ara_memory cold-map "old deployment pruning evidence" --scope ara-memory --budget 900
 python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20
 python -m ara_memory provenance-compact --scope ara-memory --keep-events 8 --min-pinned-events 20 --limit 20 --apply --confirm "COMPACT PROVENANCE"
 python -m ara_memory retention-cycle --scope ara-memory --query "current memory architecture" --backup-output .ara-memory/backups/milestone.zip --backup-archive-mode objects
@@ -380,7 +381,7 @@ then create a verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
-stewardship, plus purpose-aware lifecycle policy. It is deliberately local and
+stewardship, distant-memory navigation, and purpose-aware lifecycle policy. It is deliberately local and
 deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
@@ -394,6 +395,13 @@ stay as audit-only safety evidence. Its active provenance pin report shows which
 candidate or stable memories are keeping cold source events protected. High cold
 pressure can pass stewardship only when that evidence is current; otherwise it
 remains a watch item.
+`cold-map` is the query-led navigation layer for distant memory. It scans cold
+capsule titles, tags, and bodies locally, but renders only compact group labels,
+redacted examples, tier/source counts, and source-event digests. It does not
+promote cold capsules, add them back to recall FTS, or print cold bodies. Use it
+when a query may need old evidence but active recall should stay small: the map
+shows which `evidence`, `archive`, or `reject` group to inspect, export, or
+audit without spending tokens on the full cold text.
 `provenance-compact` is the guarded follow-up when active summary capsules pin
 too many cold source events. It is dry-run by default, ranks eligible active
 summaries by releasable cold provenance, and keeps a bounded quality-and-time

@@ -1705,6 +1705,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "operational health",
                     "milestone readiness",
                     "cold-memory stewardship",
+                    "distant-memory navigation",
                     "purpose-aware lifecycle policy",
                     "scheduled worker script readiness",
                 },
@@ -1713,6 +1714,9 @@ class MemoryFlowTests(unittest.TestCase):
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)
+            cold_map = next(item for item in roadmap.items if item.name == "distant-memory navigation")
+            self.assertIn("matched=1", cold_map.evidence)
+            self.assertIn("map_tokens=", cold_map.evidence)
             self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
 
     def test_goal_roadmap_fails_when_semantic_hygiene_fails(self) -> None:
@@ -4770,6 +4774,162 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["groups"][0]["pattern"], "Project memory: Untracked file")
             self.assertEqual(payload["groups"][0]["recommended_action"], "export-before-prune")
             self.assertIn("cycle_evidence", payload)
+
+    def test_cold_map_builds_query_led_navigation_without_body_dump(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            shared_event = memory.retain(
+                kind="decision",
+                text="Decision: active cold-map provenance must stay protected.",
+                source="test",
+                scope="alpha",
+            )
+            cold_event = memory.retain(
+                kind="note",
+                text="Old note: cloud run pruning source can stay distant.",
+                source="test",
+                scope="alpha",
+            )
+            active = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="active cloud run decision",
+                body="Cloud Run current decision keeps shared provenance active.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[shared_event.id],
+                tags=["cloud", "run"],
+                status=MemoryStatus.STABLE,
+            )
+            evidence = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file cloud-run-prune.py: old content",
+                body=("Cloud Run prune raw body should not appear in the map. " * 40),
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[shared_event.id],
+                tags=["cloud", "run", "prune"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            archive = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file archive-prune.py: old content",
+                body=("Cloud Run prune archive body should not appear in the map. " * 40),
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[cold_event.id],
+                tags=["cloud", "run", "prune"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            rejected = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Command: 010-0000-0000 cloud run prune",
+                body="Sensitive rejected cold body should not appear in the map.",
+                scope="alpha",
+                confidence=0.3,
+                salience=0.2,
+                source_event_ids=[cold_event.id],
+                tags=["cloud", "direct:010-0000-0000", "prune"],
+                status=MemoryStatus.REJECTED,
+            )
+            unrelated = Capsule.create(
+                kind=CapsuleKind.PROJECT,
+                title="Project memory: Untracked file unrelated.py",
+                body="Billing-only cold evidence is unrelated.",
+                scope="alpha",
+                confidence=0.4,
+                salience=0.3,
+                source_event_ids=[cold_event.id],
+                tags=["billing"],
+                status=MemoryStatus.SUPERSEDED,
+            )
+            for capsule in (active, evidence, archive, rejected, unrelated):
+                memory.store.upsert_capsule(capsule)
+
+            report = memory.cold_map(
+                scope="alpha",
+                query="cloud run prune",
+                group_limit=5,
+                examples_per_group=1,
+                budget=900,
+            )
+            text = report.to_text()
+
+            self.assertEqual(report.status, "pass")
+            self.assertEqual(report.totals["cold_capsules"], 4)
+            self.assertEqual(report.totals["matched_capsules"], 3)
+            self.assertGreater(report.totals["matched_raw_tokens"], report.totals["estimated_map_tokens"])
+            self.assertGreater(report.totals["token_reduction_ratio"], 1.0)
+            self.assertLessEqual(estimate_tokens(text), 900)
+            self.assertTrue(any(group.tier == "evidence" for group in report.groups))
+            self.assertTrue(any(group.tier == "archive" for group in report.groups))
+            self.assertTrue(any(group.tier == "reject" for group in report.groups))
+            self.assertTrue(all(group.source_event_digest for group in report.groups))
+            self.assertIn("Ara Cold Memory Map", text)
+            self.assertIn("navigation map for distant memory", text)
+            self.assertIn("cloud", text.lower())
+            self.assertNotIn("raw body should not appear", text)
+            self.assertNotIn("archive body should not appear", text)
+            self.assertNotIn("010-0000-0000", text)
+            self.assertIn("[redacted phone-like identifier]", text)
+
+            no_match = memory.cold_map(scope="alpha", query="nonexistent comet", group_limit=5)
+            self.assertEqual(no_match.status, "watch")
+            self.assertEqual(no_match.groups, [])
+            self.assertTrue(any("No distant-memory group matched" in item for item in no_match.recommendations))
+
+    def test_cold_map_cli_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            event = memory.retain(
+                kind="note",
+                text="Old note: CLI cold map should summarize distant deploy memory.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="Project memory: Untracked file deploy.py: old content",
+                    body="distant deploy cold map evidence",
+                    scope="alpha",
+                    confidence=0.4,
+                    salience=0.3,
+                    source_event_ids=[event.id],
+                    tags=["deploy", "cold-map"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "cold-map",
+                    "deploy cold map",
+                    "--scope",
+                    "alpha",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["scope"], "alpha")
+            self.assertEqual(payload["terms"], ["deploy", "cold", "map"])
+            self.assertEqual(payload["totals"]["matched_capsules"], 1)
+            self.assertEqual(payload["groups"][0]["tier"], "archive")
+            self.assertEqual(payload["groups"][0]["source_events"], 1)
 
     def test_lifecycle_maps_memory_into_purpose_aware_tiers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

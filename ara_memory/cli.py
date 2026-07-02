@@ -661,6 +661,16 @@ def main(argv: list[str] | None = None) -> int:
     cold_stewardship.add_argument("--examples-per-group", type=int, default=2)
     cold_stewardship.add_argument("--max-cycle-age-hours", type=float, default=72.0)
     cold_stewardship.add_argument("--json", action="store_true")
+    cold_map = sub.add_parser(
+        "cold-map",
+        help="Build a compact query-led navigation map over distant cold memory without rendering cold bodies.",
+    )
+    cold_map.add_argument("query", nargs="?", default="")
+    cold_map.add_argument("--scope", default=None)
+    cold_map.add_argument("--group-limit", type=int, default=10)
+    cold_map.add_argument("--examples-per-group", type=int, default=2)
+    cold_map.add_argument("--budget", type=int, default=900)
+    cold_map.add_argument("--json", action="store_true")
     provenance_compact = sub.add_parser(
         "provenance-compact",
         help="Plan or apply guarded compaction of active capsule source-event links.",
@@ -1601,6 +1611,20 @@ def main(argv: list[str] | None = None) -> int:
             group_limit=args.group_limit,
             examples_per_group=args.examples_per_group,
             max_cycle_age_hours=args.max_cycle_age_hours,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "cold-map":
+        result = memory.cold_map(
+            scope=args.scope,
+            query=args.query,
+            group_limit=args.group_limit,
+            examples_per_group=args.examples_per_group,
+            budget=args.budget,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

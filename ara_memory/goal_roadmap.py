@@ -75,6 +75,13 @@ def build_goal_roadmap(
         repair_hot=repair_hot,
     )
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
+    cold_map = memory.cold_map(
+        scope=scope,
+        query="cold memory evidence retention pruning",
+        group_limit=3,
+        examples_per_group=0,
+        budget=700,
+    )
     lifecycle = memory.lifecycle(scope=scope, limit=1000, examples_per_tier=0)
     worker_schedule = memory.verify_worker_schedule(
         output=memory.store.root / "scripts" / "install-worker-task.ps1",
@@ -138,6 +145,12 @@ def build_goal_roadmap(
             "Run cold-stewardship to inspect cold groups and keep retention-cycle evidence current before live pruning.",
         ),
         RoadmapItem(
+            "distant-memory navigation",
+            _cold_map_status(cold_stewardship, cold_map),
+            _cold_map_evidence(cold_map),
+            "Run cold-map with a narrower query so distant memory can be inspected without rendering cold bodies.",
+        ),
+        RoadmapItem(
             "purpose-aware lifecycle policy",
             "fail" if lifecycle.status == "fail" else "watch" if lifecycle.status == "watch" else "pass",
             _lifecycle_evidence(lifecycle),
@@ -181,6 +194,24 @@ def _cold_evidence(health: Any, cold_stewardship: Any) -> str:
     if retention:
         parts.append(retention.detail)
     return "; ".join(parts) if parts else "no cold pressure signal"
+
+
+def _cold_map_status(cold_stewardship: Any, cold_map: Any) -> str:
+    if cold_stewardship.totals.get("cold_capsules", 0) == 0:
+        return "pass"
+    if cold_map.totals.get("matched_capsules", 0) > 0 and cold_map.totals.get("within_budget", False):
+        return "pass"
+    return "watch"
+
+
+def _cold_map_evidence(cold_map: Any) -> str:
+    totals = cold_map.totals
+    return (
+        f"{cold_map.status}, matched={totals['matched_capsules']}, groups={totals['groups']}, "
+        f"map_tokens={totals['estimated_map_tokens']}/{totals['budget_tokens']}, "
+        f"raw_tokens={totals['matched_raw_tokens']}, "
+        f"reduction={totals['token_reduction_ratio']:.1f}x"
+    )
 
 
 def _worker_schedule_evidence(worker_schedule: Any) -> str:

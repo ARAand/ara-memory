@@ -468,6 +468,13 @@ class AraMemory:
 
         return ColdStewardshipAnalyzer(self.store).run(**kwargs)
 
+    def cold_map(self, **kwargs: Any) -> Any:
+        from ara_memory.cold_map import ColdMemoryMapper
+
+        kwargs = dict(kwargs)
+        kwargs["scope"] = _canonical_scope(kwargs.get("scope"))
+        return ColdMemoryMapper(self.store).run(**kwargs)
+
     def provenance_compaction(self, **kwargs: Any) -> Any:
         from ara_memory.provenance_compaction import ProvenanceCompactor
 
