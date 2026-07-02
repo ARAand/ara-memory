@@ -12474,6 +12474,51 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(spool_signal.passed)
             self.assertEqual(spool_signal.severity, "error")
 
+    def test_health_fails_on_failed_relation_merge_review_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: health must stop on failed relation merge review queue items.",
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+            memory.build_hot(scope="alpha", budget=600)
+            memory.backup(output=memory.store.root / "backups" / "relation-health.zip")
+            with memory.store.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO relation_merge_review_queue(
+                        id, scope, approval_id, witness_id, action, priority, reason,
+                        review_status, review_json, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "relation_review_health_fail",
+                        "alpha",
+                        None,
+                        None,
+                        "inspect-relation-merge",
+                        0.95,
+                        "candidate edge references remain after merge",
+                        "fail",
+                        json.dumps({"passed": False}, sort_keys=True),
+                        "open",
+                        utc_now(),
+                    ),
+                )
+
+            report = memory.health(scope="alpha", query="relation health queue", recall_budget=900, hot_budget=600)
+
+            self.assertFalse(report.passed, report.as_dict())
+            signal = next(item for item in report.signals if item.name == "relation_review_pressure")
+            self.assertFalse(signal.passed)
+            self.assertEqual(signal.severity, "error")
+            self.assertEqual(signal.value["fail_count"], 1)
+
     def test_health_warns_on_recall_baseline_drift_but_fails_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

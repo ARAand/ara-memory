@@ -106,6 +106,7 @@ def run_health_check(
         ),
         _spool_signal(spool),
         _review_pressure_signal(triage.as_dict()),
+        _relation_review_pressure_signal(memory.store, scope=scope, limit=review_limit),
         _candidate_ratio_signal(retention.as_dict()),
         cold_signal,
         _retention_cycle_signal(
@@ -164,6 +165,38 @@ def _review_pressure_signal(triage: dict[str, Any]) -> HealthSignal:
     if total_open > 250:
         return HealthSignal("review_pressure", False, f"{total_open} open review items need triage", severity="warning", value=total_open)
     return HealthSignal("review_pressure", True, f"{total_open} open review items", value=total_open)
+
+
+def _relation_review_pressure_signal(store: Any, *, scope: str, limit: int) -> HealthSignal:
+    from ara_memory.relation_merge import list_relation_merge_review_queue
+
+    report = list_relation_merge_review_queue(store, scope=scope, status="open", limit=limit)
+    items = report.open_items
+    total_open = len(items)
+    fail_count = sum(1 for item in items if item.get("review_status") == "fail")
+    watch_count = sum(1 for item in items if item.get("review_status") == "watch")
+    value = {
+        "total_open": total_open,
+        "fail_count": fail_count,
+        "watch_count": watch_count,
+        "items": items[:10],
+    }
+    if fail_count:
+        return HealthSignal(
+            "relation_review_pressure",
+            False,
+            f"{fail_count} failed relation merge review item(s) require repair before further graph merges",
+            value=value,
+        )
+    if total_open:
+        return HealthSignal(
+            "relation_review_pressure",
+            False,
+            f"{total_open} open relation merge review item(s) need inspection",
+            severity="warning",
+            value=value,
+        )
+    return HealthSignal("relation_review_pressure", True, "0 open relation merge review items", value=value)
 
 
 def _candidate_ratio_signal(retention: dict[str, Any]) -> HealthSignal:
@@ -536,6 +569,16 @@ def _recommend(signals: list[HealthSignal]) -> list[str]:
             recommendations.append("Inspect .ara-memory/spool/failed and drain or explicitly reject failed envelopes.")
         elif signal.name == "review_pressure":
             recommendations.append("Run review-triage, then review-worker dry-run before applying queue changes.")
+        elif signal.name == "relation_review_pressure":
+            value = signal.value if isinstance(signal.value, dict) else {}
+            if int(value.get("fail_count", 0) or 0):
+                recommendations.append(
+                    "Run relation-merge-review-queue and repair or explain failed relation merge witnesses before applying more graph merges."
+                )
+            else:
+                recommendations.append(
+                    "Run relation-merge-review-queue, inspect open relation merge review items, then rerun relation-merge-review --record-queue."
+                )
         elif signal.name == "candidate_ratio":
             recommendations.append("Run candidate-pressure to identify dominant candidate kinds before promoting, merging, or cooling memories.")
         elif signal.name == "cold_ratio":

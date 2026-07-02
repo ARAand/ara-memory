@@ -370,15 +370,15 @@
         </p>
         <div class="meta" aria-label="현재 빌드 메타데이터">
           <span class="pill">branch: codex/ara-memory-natural-memory-gates</span>
-          <span class="pill">base commit: 99b6174</span>
-          <span class="pill">state: uncommitted relation review queue work</span>
+          <span class="pill">base commit: 3d15f6d</span>
+          <span class="pill">state: relation review health integration</span>
           <span class="pill">scope: ara-memory</span>
           <span class="pill">elapsed: 26h</span>
         </div>
       </div>
       <aside class="stamp">
-        <strong>2026-07-02 16:51 +09:00</strong>
-        증거 기반 스냅샷. relation merge review queue 영속화와 전체 테스트를 현재 작업트리에서 재확인했습니다.
+        <strong>2026-07-02 19:25 +09:00</strong>
+        증거 기반 스냅샷. relation merge review queue가 health gate까지 올라왔고, 전체 테스트를 현재 작업트리에서 재확인했습니다.
       </aside>
     </header>
 
@@ -388,11 +388,11 @@
         <article class="card">
           <div class="label">작업트리</div>
           <div class="value watch">ready</div>
-          <p class="detail">브랜치는 원격과 맞춰져 있고, relation merge review queue 변경이 커밋 대기 중입니다.</p>
+          <p class="detail">relation merge review queue의 health 신호 통합이 커밋 대기 중입니다.</p>
         </article>
         <article class="card">
           <div class="label">테스트</div>
-          <div class="value ok">339</div>
+          <div class="value ok">340</div>
           <p class="detail"><code>python -m unittest discover -s tests</code> 통과, skipped=1.</p>
         </article>
         <article class="card">
@@ -420,14 +420,15 @@
             <li>schema v14 기준 relation_nodes 5742개, relation_edges 21692개가 temporal edge에서 정규화됐고 relation_merge_review_queue가 추가됐습니다.</li>
             <li>temporal edge를 normalized relation_nodes / relation_edges로 정규화하고, bounded 2-hop graph spreading activation이 relation graph를 우선 사용합니다.</li>
             <li>semantic relation merge는 dry-run, prepare approval, one-use apply, witness review, recall-regression sandbox, review queue 기록까지 생겼고 apply는 fingerprint 재검사와 rollback witness를 요구합니다.</li>
-            <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
+            <li>relation_review_pressure health 신호가 open fail queue를 hard fail로, open watch queue를 warning으로, empty queue를 OK로 보고합니다.</li>
+            <li>unit test 340개, recall regression, context eval이 현재 작업트리 기준으로 통과했습니다.</li>
           </ul>
         </article>
         <article class="panel">
           <h3>아직 아닌 것</h3>
           <ul>
             <li>사람 같은 기억의 핵심인 재구성, 망각, 감정적 salience, 자기 목적성은 아직 v0 단계입니다.</li>
-            <li>relation node 의미 병합은 relation-specific review queue까지 들어갔지만 자동 worker, global spreading, reconsolidation은 남아 있습니다.</li>
+            <li>relation node 의미 병합은 relation-specific review queue와 health gate까지 들어갔지만 자동 worker, global spreading, reconsolidation은 남아 있습니다.</li>
             <li>cold memory가 70%라 비파괴 retention evidence는 통과했지만, protected-only drift와 실제 prunable drift를 계속 구분해야 합니다.</li>
             <li>보상해킹 방어는 테스트와 게이트가 있으나, 장기 자기평가 루프는 아직 충분히 적대적으로 검증되지 않았습니다.</li>
           </ul>
@@ -539,8 +540,8 @@
             </tr>
             <tr>
               <td>Relation merge review worker</td>
-              <td>relation_merge_review_queue를 worker/health/review triage 흐름과 연결</td>
-              <td>3-5h</td>
+              <td>relation_merge_review_queue를 worker/review triage 흐름과 연결하고 자동 처리 정책 정의</td>
+              <td>2-4h</td>
               <td>높음</td>
             </tr>
             <tr>
@@ -584,7 +585,7 @@
         <article class="panel">
           <h3>최소 다음 버전</h3>
           <p>
-            8-16시간이면 relation merge review integration, global spreading policy, privacy gate 일부까지 넣은
+            8-14시간이면 relation merge review worker, global spreading policy, privacy gate 일부까지 넣은
             “사용 가능한 v0.2”로 갈 수 있습니다.
           </p>
         </article>
@@ -597,7 +598,7 @@
         </article>
       </div>
       <div class="callout watch-border" style="margin-top:14px;">
-        Ara 판단: 운영 게이트는 초록이고 relation merge는 review queue 영속화까지 올라왔습니다. 다음 작업은 relation review worker, global spreading sandbox, reconsolidation frame입니다.
+        Ara 판단: 운영 게이트는 relation_review_pressure까지 연결됐고 현재 queue는 비어 있습니다. 다음 작업은 relation review worker, global spreading sandbox, reconsolidation frame입니다.
         이제는 기억을 보존하는 능력에서 기억을 재구성하는 능력으로 넘어가야 합니다.
       </div>
     </section>
@@ -635,7 +636,7 @@
         </div>
         <div class="timeline-item">
           <div class="timebox">4-10h</div>
-          <div>relation_merge_review_queue를 worker, health, recall-impact audit와 연결합니다.</div>
+          <div>relation_merge_review_queue를 worker와 recall-impact audit에 연결합니다.</div>
         </div>
         <div class="timeline-item">
           <div class="timebox">10-18h</div>

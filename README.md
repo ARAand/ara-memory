@@ -386,7 +386,9 @@ self-loops, duplicate coalescing, and evidence-count preservation. With
 recall-regression cases as a sandbox before returning success. With
 `--record-queue`, watch/fail witness items and regression failures are persisted
 to `relation_merge_review_queue`; passing re-reviews resolve stale open queue
-items for the same witness or regression gate. On the current operating store,
+items for the same witness or regression gate. `health` now also reports
+`relation_review_pressure`: failed open relation-review rows are hard failures,
+open watch rows are warnings, and an empty queue is OK. On the current operating store,
 the strict default review threshold intentionally returns no high-confidence
 `ara-memory` candidates; fixture tests prove the gates can still surface,
 freeze, apply, review, queue, and regression-check real alias candidates when

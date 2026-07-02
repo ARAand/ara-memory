@@ -264,8 +264,11 @@ sleep()
   sandbox before broader review-worker automation is trusted. With
   `--record-queue`, watch/fail witness items and regression failures are written
   to `relation_merge_review_queue`, while passing re-reviews resolve stale open
-  rows for the same witness or regression gate. None of these commands mutate
-  capsule status or source events.
+  rows for the same witness or regression gate. Health includes the same queue
+  as `relation_review_pressure`, so failed open rows stop the health gate before
+  further graph merges, open watch rows stay visible as warnings, and an empty
+  queue is explicitly OK. None of these commands mutate capsule status or source
+  events.
 
 Cold memory is intentionally outside the active recall FTS index. `cold-map`
 provides the distant-memory layer between active recall and archival
