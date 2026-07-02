@@ -2208,6 +2208,47 @@ class MemoryFlowTests(unittest.TestCase):
             updated_unconsolidated = memory.store.list_unconsolidated_events(limit=10)
             self.assertEqual({row["id"] for row in updated_unconsolidated}, {first.id})
 
+    def test_source_event_update_rejects_invalid_provenance_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            first = memory.retain(kind="decision", text="Decision: first source.", source="test", scope="alpha")
+            second = memory.retain(kind="decision", text="Decision: second source.", source="test", scope="alpha")
+            capsule = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="summary with two sources",
+                body="both sources should remain when witness is invalid",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[first.id, second.id],
+                tags=["summary"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            updated = memory.store.update_capsule_source_events_batch(
+                [
+                    {
+                        "capsule_id": capsule.id,
+                        "source_event_ids": [first.id],
+                        "expected_source_event_ids": [first.id, second.id],
+                        "witness_original_source_event_ids": [second.id],
+                        "reason": "invalid witness should not allow source rewrite",
+                    }
+                ],
+                actor="test",
+                action="compact-provenance",
+            )
+
+            self.assertFalse(updated)
+            self.assertEqual(
+                json.loads(memory.store.get_capsule(capsule.id)["source_event_ids_json"]),
+                [first.id, second.id],
+            )
+            with memory.store.session() as conn:
+                witnesses = conn.execute("SELECT COUNT(*) AS c FROM provenance_witnesses").fetchone()
+            self.assertEqual(witnesses["c"], 0)
+
     def test_provenance_compaction_plans_active_summary_source_link_reduction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -2417,9 +2458,24 @@ class MemoryFlowTests(unittest.TestCase):
                     "SELECT action, actor FROM memory_actions WHERE capsule_id = ? ORDER BY created_at DESC LIMIT 1",
                     (summary.id,),
                 ).fetchone()
+                witness = conn.execute(
+                    """
+                    SELECT original_source_event_count, retained_source_event_count,
+                           original_source_event_ids_json, retained_source_event_ids_json
+                    FROM provenance_witnesses
+                    WHERE capsule_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (summary.id,),
+                ).fetchone()
             self.assertEqual(len(link_rows), 2)
             self.assertEqual(action["action"], "compact-provenance")
             self.assertEqual(action["actor"], "provenance-compaction")
+            self.assertEqual(witness["original_source_event_count"], 5)
+            self.assertEqual(witness["retained_source_event_count"], 2)
+            self.assertEqual(json.loads(witness["original_source_event_ids_json"]), [event.id for event in events])
+            self.assertEqual(json.loads(witness["retained_source_event_ids_json"]), updated_ids)
             after_apply = memory.cold_stewardship(scope="alpha", group_limit=2, examples_per_group=0)
             self.assertEqual(after_apply.totals["protected_source_events"], 2)
             self.assertEqual(after_apply.totals["prunable_source_events"], 3)
@@ -2487,7 +2543,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("baseline-guarded", report.recommendations[0])
             self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 4)
 
-    def test_provenance_compaction_elides_recall_unstable_candidates(self) -> None:
+    def test_provenance_compaction_witness_preserves_recall_preflight_source_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
             events = [
@@ -2557,18 +2613,23 @@ class MemoryFlowTests(unittest.TestCase):
             )
 
             self.assertTrue(report.passed, report.as_dict())
-            self.assertEqual(report.items, [])
+            self.assertEqual(len(report.items), 1)
             self.assertIsNotNone(report.recall_preflight)
             self.assertTrue(report.recall_preflight["passed"])
-            self.assertEqual(report.recall_preflight["auto_elision"]["removed_candidate_count"], 1)
-            self.assertIn("elided", report.recommendations[0])
-            self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 4)
+            self.assertEqual(report.recall_preflight["auto_elision"]["removed_candidate_count"], 0)
+            self.assertEqual(report.totals["applied_capsules"], 1)
+            self.assertEqual(len(json.loads(memory.store.get_capsule(summary.id)["source_event_ids_json"])), 1)
             with memory.store.session() as conn:
                 actions = conn.execute(
                     "SELECT COUNT(*) AS c FROM memory_actions WHERE action = ?",
                     ("compact-provenance",),
                 ).fetchone()
-            self.assertEqual(actions["c"], 0)
+                witnesses = conn.execute(
+                    "SELECT COUNT(*) AS c FROM provenance_witnesses WHERE capsule_id = ?",
+                    (summary.id,),
+                ).fetchone()
+            self.assertEqual(actions["c"], 1)
+            self.assertEqual(witnesses["c"], 1)
 
     def test_provenance_compaction_apply_blocks_when_recall_preflight_has_no_safe_elision(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

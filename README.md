@@ -401,10 +401,15 @@ forever. The sampler prefers decision, verification, regression, health,
 backup, retention, identity, purpose, and risk evidence while still preserving
 temporal coverage. Apply mode requires `--apply --confirm "COMPACT PROVENANCE"` and uses atomic
 compare-and-set checks on capsule status and source links, so a stale plan does
-not silently overwrite newer provenance. The default scope is summaries only;
-use `--include-non-summary` only after reviewing the dry-run. After applying,
-rerun `cold-stewardship`, `health`, and `recall-regression` before any
-retention-cycle or prune decision. For important scopes, pass
+not silently overwrite newer provenance. Each applied compaction writes a
+`provenance_witnesses` row in the same transaction, preserving the original
+source-event IDs, retained IDs, counts, and digests before active direct links
+are shortened. Recall packs show source provenance as bounded `count,digest`
+summaries instead of raw event-ID lists; detailed lineage is verified from
+storage and witnesses. The default scope is summaries only; use
+`--include-non-summary` only after reviewing the dry-run. After applying, rerun
+`cold-stewardship`, `health`, and `recall-regression` before any retention-cycle
+or prune decision. For important scopes, pass
 `--recall-manifest` and `--recall-baseline` with `--apply`; Ara simulates the
 planned source-link rewrite in a shadow store and blocks the live apply if
 recall-regression fails. Capsules that were visible or selected in the supplied
@@ -414,7 +419,8 @@ plan before apply; live mutation is blocked if no recall-stable plan remains.
 That lets compaction reduce cold pressure without silently rewriting the
 evidence path that a reviewed recall case depends on. Important scopes should keep a reviewed
 recall-regression manifest because quality-aware provenance compaction changes
-which raw source events remain directly linked from active summaries.
+which raw source events remain directly linked from active summaries while the
+witness table preserves the full audit lineage.
 `lifecycle` classifies every selected capsule into `core`, `working`,
 `guarded`, `evidence`, `archive`, or `reject` tiers. This is the deterministic
 policy layer between purpose and storage: hot memory should come from reviewed
@@ -629,14 +635,18 @@ visible capsule set drifts too far; old baselines fall back to selected capsule
 overlap. Regression details also record bounded selected and visible
 `source_event_ids`, their full counts, truncation flags, and a digest of the full
 source-event set, so consolidation can replace capsule IDs without failing the
-gate when the same underlying evidence remains visible. When lineage details are
-truncated, local comparisons recompute the full source-event set from capsule
-provenance; if old capsule rows are unavailable, the digest must still match or
-the lineage comparison is treated as incomplete rather than silently passing.
+gate when the same underlying evidence remains visible. Source-event overlap is
+measured as prior-evidence coverage, not symmetric Jaccard, so additional
+audited evidence does not fail a case when the baseline evidence is still
+covered; JSON also reports `source_event_jaccard` for diagnostics. When lineage
+details are truncated, local comparisons recompute the full source-event set
+from capsule provenance plus provenance witnesses; if old capsule rows are
+unavailable, the digest must still match or the lineage comparison is treated as
+incomplete rather than silently passing.
 JSON details include `capsules_visible`, `visible_capsule_ids`,
 `visible_source_event_count`, `visible_source_event_digest`, `overlap_basis`,
-`evidence_overlap`, `capsule_id_overlap`, and `source_event_overlap`. For
-budget-selection QA, run `recall-plan --json` and review `visible_capsules`,
+`evidence_overlap`, `capsule_id_overlap`, `source_event_overlap`, and
+`source_event_jaccard`. For budget-selection QA, run `recall-plan --json` and review `visible_capsules`,
 `query_terms_visible_count`, `fallback_used`, and `quality_score`.
 
 Create a routine portable snapshot after important milestones:

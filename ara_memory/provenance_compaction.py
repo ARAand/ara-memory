@@ -184,6 +184,11 @@ class ProvenanceCompactor:
                         "capsule_id": item.capsule_id,
                         "source_event_ids": item.retained_source_event_ids,
                         "expected_source_event_ids": item.expected_source_event_ids,
+                        "witness_original_source_event_ids": item.expected_source_event_ids,
+                        "witness_reason": (
+                            f"provenance witness for compacting {item.source_event_count} "
+                            f"source links to {item.proposed_source_event_count}"
+                        ),
                         "expected_statuses": ACTIVE_STATUSES,
                         "reason": (
                             f"compacted active provenance links from {item.source_event_count} "
@@ -554,6 +559,11 @@ def _recall_preflight(
                     "capsule_id": item.capsule_id,
                     "source_event_ids": item.retained_source_event_ids,
                     "expected_source_event_ids": item.expected_source_event_ids,
+                    "witness_original_source_event_ids": item.expected_source_event_ids,
+                    "witness_reason": (
+                        f"shadow provenance witness for compacting {item.source_event_count} "
+                        f"source links to {item.proposed_source_event_count}"
+                    ),
                     "expected_statuses": ACTIVE_STATUSES,
                     "reason": "recall preflight provenance compaction simulation",
                 }
@@ -638,6 +648,7 @@ def _stabilize_items_with_recall_preflight(
                 "passed": bool(last_preflight.get("passed")),
                 "candidate_count": len(active_items),
                 "elided_candidate_ids": sorted(offender_ids),
+                "failures": _recall_preflight_failure_summaries(last_preflight),
             }
         )
         if last_preflight.get("passed") or not offender_ids:
@@ -695,6 +706,29 @@ def _recall_preflight_offender_ids(
             if capsule_id in candidate_ids
         )
     return visible_offenders or selected_offenders
+
+
+def _recall_preflight_failure_summaries(recall_preflight: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in recall_preflight.get("baseline_comparison", []):
+        if not isinstance(item, dict) or item.get("passed"):
+            continue
+        out.append(
+            {
+                "name": item.get("name"),
+                "failures": item.get("failures", []),
+                "capsule_id_overlap": item.get("capsule_id_overlap"),
+                "source_event_overlap": item.get("source_event_overlap"),
+                "overlap_basis": item.get("overlap_basis"),
+            }
+        )
+    if out:
+        return out
+    for item in recall_preflight.get("cases", []):
+        if not isinstance(item, dict) or item.get("passed"):
+            continue
+        out.append({"name": item.get("name"), "failures": item.get("failures", [])})
+    return out
 
 
 def _copy_recall_store(store: MemoryStore, shadow_root: Path) -> None:

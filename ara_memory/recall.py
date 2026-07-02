@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords, is_search_term
@@ -424,9 +425,17 @@ def _format_capsule(cap: dict) -> str:
     return (
         f"- [{cap['kind']}/{cap['status']}] {cap['title']}\n"
         f"  confidence={cap['confidence']:.2f}; salience={cap['salience']:.2f}; "
-        f"sources={','.join(cap['source_event_ids'])}; tags={tags}\n"
+        f"sources={_format_source_summary(cap['source_event_ids'])}; tags={tags}\n"
         f"  {body}"
     )
+
+
+def _format_source_summary(source_event_ids: list[str]) -> str:
+    unique_ids = list(dict.fromkeys(str(event_id) for event_id in source_event_ids if str(event_id)))
+    if not unique_ids:
+        return "count=0"
+    digest = sha256("\n".join(sorted(unique_ids)).encode("utf-8")).hexdigest()[:12]
+    return f"count={len(unique_ids)},digest={digest}"
 
 
 def _enforce_budget(parts: list[str], budget: int) -> str:

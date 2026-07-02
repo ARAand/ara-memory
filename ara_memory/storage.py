@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from ara_memory.compressors import extract_keywords, is_search_term
-from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, utc_now
+from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, utc_now
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -112,6 +112,23 @@ CREATE TABLE IF NOT EXISTS capsule_source_events (
   FOREIGN KEY(capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS provenance_witnesses (
+  id TEXT PRIMARY KEY,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  original_source_event_ids_json TEXT NOT NULL,
+  retained_source_event_ids_json TEXT NOT NULL,
+  original_source_event_count INTEGER NOT NULL,
+  retained_source_event_count INTEGER NOT NULL,
+  original_source_event_digest TEXT NOT NULL,
+  retained_source_event_digest TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS capsules_fts USING fts5(
   id UNINDEXED,
   title,
@@ -141,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_capsules_scope_status ON capsules(scope, status);
 CREATE INDEX IF NOT EXISTS idx_capsules_status_updated ON capsules(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_status_updated ON capsules(scope, status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_capsule_source_events_event ON capsule_source_events(event_id, capsule_id);
+CREATE INDEX IF NOT EXISTS idx_provenance_witnesses_capsule ON provenance_witnesses(capsule_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
 
@@ -745,6 +763,8 @@ class MemoryStore:
                         source_event_ids=update["source_event_ids"],
                         expected_source_event_ids=update.get("expected_source_event_ids"),
                         expected_statuses=update.get("expected_statuses"),
+                        witness_original_source_event_ids=update.get("witness_original_source_event_ids"),
+                        witness_reason=str(update.get("witness_reason") or update.get("reason") or ""),
                         actor=actor,
                         reason=str(update.get("reason") or ""),
                         action=action,
@@ -766,6 +786,8 @@ class MemoryStore:
         source_event_ids: list[str],
         expected_source_event_ids: list[str] | None,
         expected_statuses: Iterable[str | MemoryStatus] | None,
+        witness_original_source_event_ids: list[str] | None,
+        witness_reason: str,
         actor: str,
         reason: str,
         action: str,
@@ -798,6 +820,15 @@ class MemoryStore:
                 )
             if existing != set(unique_ids):
                 return None
+        witness_payload: tuple[list[str], str, str | None] | None = None
+        if witness_original_source_event_ids is not None:
+            original_ids = _unique_source_event_ids(witness_original_source_event_ids)
+            if not original_ids or not set(unique_ids).issubset(set(original_ids)):
+                return None
+            original_digest = _source_event_ids_digest(original_ids)
+            if not original_digest:
+                return None
+            witness_payload = (original_ids, original_digest, _source_event_ids_digest(unique_ids))
         now = utc_now()
         clauses = ["id = ?"]
         args: list[Any] = [capsule_id]
@@ -819,6 +850,35 @@ class MemoryStore:
             "INSERT OR IGNORE INTO capsule_source_events(capsule_id, event_id) VALUES (?, ?)",
             [(capsule_id, event_id) for event_id in unique_ids],
         )
+        if witness_payload is not None:
+            original_ids, original_digest, retained_digest = witness_payload
+            conn.execute(
+                """
+                INSERT INTO provenance_witnesses(
+                  id, capsule_id, scope, action, actor, reason,
+                  original_source_event_ids_json, retained_source_event_ids_json,
+                  original_source_event_count, retained_source_event_count,
+                  original_source_event_digest, retained_source_event_digest,
+                  created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_id("wit"),
+                    capsule_id,
+                    row["scope"],
+                    action,
+                    actor,
+                    witness_reason,
+                    json.dumps(original_ids, ensure_ascii=False),
+                    json.dumps(unique_ids, ensure_ascii=False),
+                    len(original_ids),
+                    len(unique_ids),
+                    original_digest,
+                    retained_digest,
+                    utc_now(),
+                ),
+            )
         conn.execute(
             """
             INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
@@ -827,6 +887,34 @@ class MemoryStore:
             (action, capsule_id, row["scope"], reason, actor, utc_now()),
         )
         return str(row["scope"])
+
+    def provenance_witness_source_event_ids_for_capsules(self, capsule_ids: list[str]) -> list[str]:
+        self.init()
+        if not capsule_ids:
+            return []
+        unique_capsule_ids = list(dict.fromkeys(str(capsule_id) for capsule_id in capsule_ids if str(capsule_id)))
+        source_ids: set[str] = set()
+        with self.session() as conn:
+            for chunk in _chunks(unique_capsule_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT original_source_event_ids_json
+                    FROM provenance_witnesses
+                    WHERE capsule_id IN ({placeholders})
+                    """,
+                    chunk,
+                )
+                for row in rows:
+                    try:
+                        source_ids.update(
+                            str(event_id)
+                            for event_id in json.loads(row["original_source_event_ids_json"])
+                            if str(event_id)
+                        )
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+        return sorted(source_ids)
 
     def get_capsule(self, capsule_id: str) -> sqlite3.Row | None:
         self.init()
@@ -1222,6 +1310,13 @@ def _event_fingerprint(event: Event) -> str:
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _source_event_ids_digest(source_event_ids: Iterable[Any]) -> str | None:
+    normalized = sorted(str(event_id) for event_id in source_event_ids if str(event_id))
+    if not normalized:
+        return None
+    return sha256("\n".join(normalized).encode("utf-8")).hexdigest()
 
 
 def _fingerprint_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

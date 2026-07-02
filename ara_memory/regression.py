@@ -209,6 +209,7 @@ def _compare_to_baseline(
         overlap_basis = str(overlap_info["basis"])
         capsule_overlap = float(overlap_info["capsule_id_overlap"])
         source_overlap = overlap_info["source_event_overlap"]
+        source_jaccard = overlap_info["source_event_jaccard"]
         source_guard = bool(overlap_info["source_event_guard"])
         source_validated = bool(overlap_info["source_event_validated"])
         source_can_substitute = (
@@ -251,6 +252,7 @@ def _compare_to_baseline(
                     "overlap_basis": overlap_basis,
                     "capsule_id_overlap": capsule_overlap,
                     "source_event_overlap": source_overlap,
+                    "source_event_jaccard": source_jaccard,
                     "source_event_guard": source_guard,
                     "source_event_validated": source_validated,
                     "source_event_digest_match": overlap_info["source_event_digest_match"],
@@ -337,8 +339,13 @@ def _overlap_info_for_kind(
     )
     prior_source_ids = prior_source["ids"]
     current_source_ids = current_source["ids"]
-    source_overlap = (
+    source_jaccard = (
         _overlap_ratio(prior_source_ids, current_source_ids)
+        if prior_source_ids and current_source_ids
+        else None
+    )
+    source_overlap = (
+        _coverage_ratio(prior_source_ids, current_source_ids)
         if prior_source_ids and current_source_ids
         else None
     )
@@ -346,6 +353,7 @@ def _overlap_info_for_kind(
     if prior_source["digest"] and current_source["digest"]:
         source_digest_match = prior_source["digest"] == current_source["digest"]
         if source_digest_match and not (prior_source["complete"] and current_source["complete"]):
+            source_jaccard = 1.0
             source_overlap = 1.0
     source_guard = bool(
         prior_source["ids"]
@@ -374,6 +382,7 @@ def _overlap_info_for_kind(
             "source_event_guard": source_guard,
             "source_event_validated": source_validated,
             "source_event_digest_match": source_digest_match,
+            "source_event_jaccard": source_jaccard,
         }
     return {
         "prior_ids": prior_ids,
@@ -389,6 +398,7 @@ def _overlap_info_for_kind(
         "source_event_guard": source_guard,
         "source_event_validated": source_validated,
         "source_event_digest_match": source_digest_match,
+        "source_event_jaccard": source_jaccard,
     }
 
 
@@ -450,6 +460,7 @@ def _source_event_ids_for_capsules(memory: AraMemory, capsule_ids: list[str]) ->
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
         source_ids.update(str(item) for item in capsule.get("source_event_ids", []) if str(item))
+    source_ids.update(memory.store.provenance_witness_source_event_ids_for_capsules(capsule_ids))
     return sorted(source_ids)
 
 
@@ -459,6 +470,14 @@ def _overlap_ratio(left: set[str], right: set[str]) -> float:
     if not left or not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _coverage_ratio(prior: set[str], current: set[str]) -> float:
+    if not prior:
+        return 1.0
+    if not current:
+        return 0.0
+    return len(prior & current) / len(prior)
 
 
 def _source_event_ids_digest(source_ids: set[str] | list[str]) -> str | None:
