@@ -70,6 +70,11 @@ def create_backup(
     excluded_paths = {output_path}
     signing_key = _load_or_create_backup_signing_key(store.root)
     archive_mode = _resolve_archive_mode(include_archive=include_archive, archive_mode=archive_mode)
+    if archive_mode == ARCHIVE_MODE_NONE and _active_spool_has_encrypted_archive_refs(store.root / "spool"):
+        raise ValueError(
+            "archive_mode=none cannot preserve pending encrypted spool artifact snapshots; "
+            "drain the spool or use archive_mode=objects."
+        )
     archive_key_escrow = create_archive_key_escrow(store.root, signing_key) if archive_mode != ARCHIVE_MODE_NONE else None
     if (
         archive_mode != ARCHIVE_MODE_NONE
@@ -342,6 +347,38 @@ def _resolve_archive_mode(*, include_archive: bool, archive_mode: str | None) ->
     if not include_archive and normalized != ARCHIVE_MODE_NONE:
         raise ValueError("include_archive=False cannot be combined with an archive_mode other than 'none'")
     return normalized
+
+
+def _active_spool_has_encrypted_archive_refs(spool_root: Path) -> bool:
+    for state in ("pending", "processing"):
+        state_dir = spool_root / state
+        if not state_dir.exists():
+            continue
+        for path in sorted(state_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if _payload_has_encrypted_spool_archive_ref(payload):
+                return True
+    return False
+
+
+def _payload_has_encrypted_spool_archive_ref(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("spool_snapshot_encrypted") is True:
+            return True
+        snapshot_path = value.get("spool_snapshot_path") or value.get("snapshot_path")
+        if value.get("encrypted") is True and _looks_like_archive_object_ref(snapshot_path):
+            return True
+        return any(_payload_has_encrypted_spool_archive_ref(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_payload_has_encrypted_spool_archive_ref(item) for item in value)
+    return False
+
+
+def _looks_like_archive_object_ref(value: Any) -> bool:
+    return isinstance(value, str) and value.replace("\\", "/").startswith("archive/objects/")
 
 
 def _write_file(zf: zipfile.ZipFile, path: Path, arcname: str, *, entry_hashes: dict[str, str]) -> None:

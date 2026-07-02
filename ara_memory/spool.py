@@ -10,6 +10,7 @@ import hmac
 from pathlib import Path
 from typing import Any
 
+from ara_memory.archive_crypto import decrypt_archive_object, ensure_encrypted_archive_object, read_archive_object_header
 from ara_memory.models import new_id, utc_now
 from ara_memory.privacy import guard_turn_payload, privacy_safe_label
 from ara_memory.turn import remember_turn
@@ -420,30 +421,46 @@ def _turn_text_size(value: Any) -> int:
 
 def _validate_artifact_snapshot_metadata(turn_payload: dict[str, Any], *, root: Path) -> None:
     snapshot_root = (root / "spool" / "snapshots").resolve()
+    archive_objects_root = (root / "archive" / "objects").resolve()
     for key in ("files", "images"):
         for item in _as_list(turn_payload.get(key)):
             path, _, metadata = _artifact_item(item)
             resolved = _resolve_snapshot_path(path, root=root)
-            try:
-                resolved.relative_to(snapshot_root)
-            except ValueError as exc:
-                raise ValueError("Spooled artifacts must use enqueue-time snapshots.") from exc
             if not resolved.is_file():
                 raise ValueError("Spooled artifact snapshot is missing.")
             expected = metadata.get("spool_snapshot_sha256")
             if not isinstance(expected, str) or not expected:
                 raise ValueError("Spooled artifact snapshot is missing sha256 metadata.")
-            if _sha256_file(resolved) != expected:
-                raise ValueError("Spooled artifact snapshot sha256 mismatch.")
+            encrypted = metadata.get("spool_snapshot_encrypted")
+            if encrypted not in (None, False, True):
+                raise ValueError("Spooled artifact encrypted flag must be boolean.")
+            if encrypted is True:
+                try:
+                    resolved.relative_to(archive_objects_root)
+                except ValueError as exc:
+                    raise ValueError("Encrypted spooled artifacts must use encrypted archive objects.") from exc
+                header = read_archive_object_header(resolved)
+                if not header:
+                    raise ValueError("Encrypted spooled artifact snapshot is missing archive header.")
+                if header.get("plaintext_sha256") != expected:
+                    raise ValueError("Encrypted spooled artifact snapshot sha256 metadata mismatch.")
+                if _sha256_bytes(decrypt_archive_object(root, resolved)) != expected:
+                    raise ValueError("Encrypted spooled artifact snapshot sha256 mismatch.")
+            else:
+                try:
+                    resolved.relative_to(snapshot_root)
+                except ValueError as exc:
+                    raise ValueError("Spooled artifacts must use enqueue-time snapshots.") from exc
+                if _sha256_file(resolved) != expected:
+                    raise ValueError("Spooled artifact snapshot sha256 mismatch.")
             if isinstance(item, dict):
-                item["path"] = str(resolved)
+                item["path"] = _portable_root_path(resolved, root=root)
                 item_metadata = dict(item.get("metadata")) if isinstance(item.get("metadata"), dict) else {}
-                item_metadata["spool_snapshot_path"] = str(resolved)
+                item_metadata["spool_snapshot_path"] = _portable_root_path(resolved, root=root)
                 item["metadata"] = item_metadata
 
 
 def _restore_snapshot_artifact_paths(guarded_turn: dict[str, Any], raw_turn: dict[str, Any], *, root: Path) -> None:
-    snapshot_root = (root / "spool" / "snapshots").resolve()
     for key in ("files", "images"):
         guarded_items = guarded_turn.get(key)
         raw_items = raw_turn.get(key)
@@ -455,17 +472,28 @@ def _restore_snapshot_artifact_paths(guarded_turn: dict[str, Any], raw_turn: dic
             try:
                 raw_path, _, _ = _artifact_item(raw_items[index])
                 resolved = _resolve_snapshot_path(raw_path, root=root)
-                resolved.relative_to(snapshot_root)
+                if not _is_spooled_artifact_path(resolved, root=root):
+                    continue
             except (TypeError, ValueError):
                 continue
-            guarded_item["path"] = str(resolved)
+            guarded_item["path"] = _portable_root_path(resolved, root=root)
 
 
 def _resolve_snapshot_path(path: Path, *, root: Path) -> Path:
+    if not path.is_absolute():
+        candidate = (root / path).resolve()
+        if candidate.exists():
+            return candidate
     resolved = path.resolve()
     snapshot_root = (root / "spool" / "snapshots").resolve()
+    archive_objects_root = (root / "archive" / "objects").resolve()
     try:
         resolved.relative_to(snapshot_root)
+        return resolved
+    except ValueError:
+        pass
+    try:
+        resolved.relative_to(archive_objects_root)
         return resolved
     except ValueError:
         pass
@@ -475,7 +503,21 @@ def _resolve_snapshot_path(path: Path, *, root: Path) -> Path:
             candidate = (root / Path(*parts[index:])).resolve()
             if candidate.exists():
                 return candidate
+        if parts[index].lower() == "archive" and parts[index + 1].lower() == "objects":
+            candidate = (root / Path(*parts[index:])).resolve()
+            if candidate.exists():
+                return candidate
     return resolved
+
+
+def _is_spooled_artifact_path(path: Path, *, root: Path) -> bool:
+    for base in ((root / "spool" / "snapshots").resolve(), (root / "archive" / "objects").resolve()):
+        try:
+            path.relative_to(base)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def _stabilize_after_drain(
@@ -685,34 +727,40 @@ def _snapshot_artifact_item(
     if not resolved.is_file():
         return item, None
     digest = _sha256_file(resolved)
-    snapshot_dir = root / "spool" / "snapshots" / _safe_name(spool_id) / "artifacts"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    archived = ensure_encrypted_archive_object(root, resolved, digest)
+    snapshot_path = archived.path
+    snapshot_portable_path = _portable_root_path(snapshot_path, root=root)
     safe_suffix = resolved.suffix if resolved.suffix and all(ch.isalnum() or ch == "." for ch in resolved.suffix) else ""
-    snapshot_name = f"{role}-{index:03d}-{digest[:12]}{safe_suffix}"
-    snapshot_path = snapshot_dir / snapshot_name
-    if not snapshot_path.exists():
-        shutil.copy2(resolved, snapshot_path)
     updated_metadata = dict(metadata)
     updated_metadata.update(
         {
-            "spool_original_path": str(resolved),
-            "spool_snapshot_path": str(snapshot_path),
+            "spool_original_name": privacy_safe_label(resolved.name, label="file"),
+            "spool_original_path_sha256": _sha256_text(str(resolved)),
+            "spool_snapshot_path": snapshot_portable_path,
             "spool_snapshot_sha256": digest,
             "spool_snapshot_bytes": resolved.stat().st_size,
+            "spool_snapshot_encrypted": True,
+            "spool_snapshot_algorithm": "archive-object",
+            "spool_snapshot_archive_key_id": archived.key_id,
+            "spool_snapshot_original_suffix": safe_suffix,
         }
     )
     updated = {
-        "path": str(snapshot_path),
+        "path": snapshot_portable_path,
         "caption": caption,
         "metadata": updated_metadata,
     }
     return updated, {
         "role": role,
         "index": index,
-        "original_path": str(resolved),
-        "snapshot_path": str(snapshot_path),
+        "original_name": privacy_safe_label(resolved.name, label="file"),
+        "original_path_sha256": _sha256_text(str(resolved)),
+        "snapshot_path": snapshot_portable_path,
         "sha256": digest,
         "bytes": resolved.stat().st_size,
+        "encrypted": True,
+        "algorithm": "archive-object",
+        "archive_key_id": archived.key_id,
     }
 
 
@@ -743,6 +791,22 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return sha256(data).hexdigest()
+
+
+def _sha256_text(text: str) -> str:
+    return sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _portable_root_path(path: Path, *, root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def _options(value: Any) -> dict[str, Any]:

@@ -2519,6 +2519,30 @@ class MemoryFlowTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 memory.backup(output=root / "invalid.zip", include_archive=False, archive_mode="full")
 
+    def test_backup_no_archive_rejects_active_encrypted_spool_artifact_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.txt"
+            artifact.write_text("pending spool artifact needs archive objects\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            memory.spool_turn(
+                {
+                    "turn_id": "backup-no-archive-spool-artifact",
+                    "prompt": "Remember the pending encrypted artifact.",
+                    "files": [{"path": str(artifact), "caption": "pending artifact"}],
+                },
+                scope="alpha",
+                consolidate=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "archive_mode=none"):
+                memory.backup(output=root / "none.zip", include_archive=False)
+            with self.assertRaisesRegex(ValueError, "archive_mode=none"):
+                memory.backup(output=root / "explicit-none.zip", archive_mode="none")
+
+            result = memory.backup(output=root / "objects.zip")
+            self.assertEqual(result.manifest["archive_mode"], "objects")
+
     def test_backup_cli_archive_mode_defaults_and_conflicts_are_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -5233,6 +5257,7 @@ class MemoryFlowTests(unittest.TestCase):
             root = Path(tmp)
             artifact = root / "artifact.md"
             artifact.write_text("Snapshot evidence must survive backup restore.\n", encoding="utf-8")
+            artifact_bytes = artifact.read_bytes()
             source = AraMemory(root / "source")
             source.spool_turn(
                 {
@@ -5245,6 +5270,16 @@ class MemoryFlowTests(unittest.TestCase):
             )
             backup_path = root / "backup.zip"
             source.backup(output=backup_path)
+            raw_artifact_path = str(artifact.resolve()).encode("utf-8")
+            json_artifact_path = str(artifact.resolve()).replace("\\", "\\\\").encode("utf-8")
+            with zipfile.ZipFile(backup_path, "r") as zf:
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    member = zf.read(name)
+                    self.assertNotIn(b"Snapshot evidence must survive backup restore.", member)
+                    self.assertNotIn(raw_artifact_path, member)
+                    self.assertNotIn(json_artifact_path, member)
 
             restored_root = root / "restored"
             result = source.restore_backup(backup_path, restored_root)
@@ -5258,7 +5293,16 @@ class MemoryFlowTests(unittest.TestCase):
             event = restored.store.get_events([event_id])[0]
             self.assertIn("Snapshot evidence", event["text"])
             metadata = json.loads(event["metadata_json"])
-            self.assertTrue(str(metadata["spool_snapshot_path"]).startswith(str(restored_root)))
+            self.assertFalse(Path(metadata["spool_snapshot_path"]).is_absolute())
+            self.assertTrue(str(metadata["spool_snapshot_path"]).startswith("archive/objects/"))
+            restored_snapshot_path = restored_root / metadata["spool_snapshot_path"]
+            self.assertTrue(restored_snapshot_path.exists())
+            self.assertTrue(read_archive_object_header(restored_snapshot_path))
+            self.assertEqual(
+                decrypt_archive_object(restored_root, restored_snapshot_path),
+                artifact_bytes,
+            )
+            self.assertTrue(metadata["spool_snapshot_encrypted"])
 
     def test_verify_backup_rejects_foreign_key_orphans(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5556,6 +5600,7 @@ class MemoryFlowTests(unittest.TestCase):
             root = Path(tmp)
             artifact = root / "artifact.md"
             artifact.write_text("Version one evidence should be retained.\n", encoding="utf-8")
+            artifact_bytes = artifact.read_bytes()
             memory = AraMemory(root / "memory")
             record = memory.spool_turn(
                 {
@@ -5568,9 +5613,22 @@ class MemoryFlowTests(unittest.TestCase):
                 hot_budget=0,
             )
             payload = json.loads(Path(record.path).read_text(encoding="utf-8"))
+            payload_bytes = Path(record.path).read_bytes()
+            raw_artifact_path = str(artifact.resolve()).encode("utf-8")
+            json_artifact_path = str(artifact.resolve()).replace("\\", "\\\\").encode("utf-8")
+            self.assertNotIn(raw_artifact_path, payload_bytes)
+            self.assertNotIn(json_artifact_path, payload_bytes)
             self.assertEqual(len(payload["snapshots"]["artifacts"]), 1)
-            snapshot_path = Path(payload["snapshots"]["artifacts"][0]["snapshot_path"])
+            snapshot_relative_path = payload["snapshots"]["artifacts"][0]["snapshot_path"]
+            self.assertTrue(snapshot_relative_path.startswith("archive/objects/"))
+            snapshot_path = memory.store.root / snapshot_relative_path
             self.assertTrue(snapshot_path.exists())
+            self.assertTrue(read_archive_object_header(snapshot_path))
+            self.assertNotIn(b"Version one evidence", snapshot_path.read_bytes())
+            self.assertEqual(
+                decrypt_archive_object(memory.store.root, snapshot_path),
+                artifact_bytes,
+            )
 
             artifact.write_text("Version two should not be retained by this spooled turn.\n", encoding="utf-8")
             report = memory.drain_spool(limit=10)
@@ -5581,8 +5639,93 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Version one evidence", event["text"])
             self.assertNotIn("Version two", event["text"])
             metadata = json.loads(event["metadata_json"])
-            self.assertEqual(metadata["spool_original_path"], str(artifact.resolve()))
-            self.assertEqual(metadata["spool_snapshot_path"], str(snapshot_path))
+            self.assertNotIn("spool_original_path", metadata)
+            self.assertEqual(metadata["spool_original_name"], artifact.name)
+            self.assertEqual(
+                metadata["spool_original_path_sha256"],
+                hashlib.sha256(str(artifact.resolve()).encode("utf-8")).hexdigest(),
+            )
+            self.assertEqual(metadata["spool_snapshot_path"], snapshot_relative_path)
+            self.assertTrue(metadata["spool_snapshot_encrypted"])
+            self.assertTrue(metadata["spool_snapshot_loaded_from_archive"])
+
+    def test_spool_artifact_snapshot_encrypted_flag_must_be_boolean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Flag type evidence.\n", encoding="utf-8")
+            memory = AraMemory(root / "memory")
+            record = memory.spool_turn(
+                {
+                    "turn_id": "turn_snapshot_flag_type",
+                    "prompt": "This turn has a typed encrypted snapshot flag.",
+                    "files": [{"path": str(artifact), "caption": "flag artifact"}],
+                },
+                scope="spool-snapshot",
+                consolidate=False,
+                hot_budget=0,
+            )
+            payload = json.loads(Path(record.path).read_text(encoding="utf-8"))
+            payload["turn"]["files"][0]["metadata"]["spool_snapshot_encrypted"] = "true"
+            payload["seal"] = spool_module._seal_payload(payload, root=memory.store.root)
+
+            with self.assertRaisesRegex(ValueError, "encrypted flag"):
+                spool_module.validate_spool_envelope(payload, root=memory.store.root)
+
+    def test_legacy_plaintext_spool_artifact_snapshot_still_drains_from_root_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.md"
+            artifact.write_text("Legacy snapshot evidence.\n", encoding="utf-8")
+            artifact_bytes = artifact.read_bytes()
+            memory = AraMemory(root / "memory")
+            record = memory.spool_turn(
+                {
+                    "turn_id": "turn_legacy_snapshot_artifact",
+                    "prompt": "Legacy plaintext spool snapshots should still drain.",
+                    "files": [{"path": str(artifact), "caption": "legacy snapshot"}],
+                },
+                scope="spool-legacy-snapshot",
+                consolidate=False,
+                hot_budget=0,
+            )
+            path = Path(record.path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            encrypted_relative = payload["turn"]["files"][0]["metadata"]["spool_snapshot_path"]
+            encrypted_path = memory.store.root / encrypted_relative
+            legacy_relative = "spool/snapshots/legacy/artifact.md"
+            legacy_path = memory.store.root / legacy_relative
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_bytes(decrypt_archive_object(memory.store.root, encrypted_path))
+
+            item = payload["turn"]["files"][0]
+            metadata = item["metadata"]
+            metadata["spool_snapshot_path"] = legacy_relative
+            metadata.pop("spool_snapshot_encrypted", None)
+            metadata.pop("spool_snapshot_algorithm", None)
+            metadata.pop("spool_snapshot_archive_key_id", None)
+            metadata.pop("spool_snapshot_original_suffix", None)
+            item["path"] = legacy_relative
+            snapshot = payload["snapshots"]["artifacts"][0]
+            snapshot["snapshot_path"] = legacy_relative
+            snapshot.pop("encrypted", None)
+            snapshot.pop("algorithm", None)
+            snapshot.pop("archive_key_id", None)
+            payload["seal"] = spool_module._seal_payload(payload, root=memory.store.root)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+            artifact.write_text("Edited live artifact must not replace legacy snapshot.\n", encoding="utf-8")
+            report = memory.drain_spool(limit=1)
+
+            self.assertTrue(report.passed, report.as_dict())
+            event_id = report.items[0].result["artifact_events_retained"][0]
+            event = memory.store.get_events([event_id])[0]
+            self.assertIn("Legacy snapshot evidence", event["text"])
+            self.assertNotIn("Edited live artifact", event["text"])
+            metadata = json.loads(event["metadata_json"])
+            self.assertEqual(metadata["spool_snapshot_path"], legacy_relative)
+            self.assertEqual(metadata["original_path"], legacy_relative)
+            self.assertEqual(decrypt_archive_object(memory.store.root, encrypted_path), artifact_bytes)
 
     def test_spool_turn_snapshots_worktree_at_enqueue_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7367,7 +7510,10 @@ class MemoryFlowTests(unittest.TestCase):
 
             pending_payload = Path(record.path).read_text(encoding="utf-8")
             self.assertNotIn(secret, pending_payload)
-            self.assertIn("[redacted openai style key]", pending_payload)
+            self.assertNotIn(str(artifact.resolve()), pending_payload)
+            self.assertNotIn(str(artifact.resolve()).replace("\\", "\\\\"), pending_payload)
+            self.assertIn("private-file-", pending_payload)
+            self.assertIn("spool_original_path_sha256", pending_payload)
             report = memory.drain_spool(limit=1)
             self.assertTrue(report.passed, report.as_dict())
 

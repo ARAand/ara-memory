@@ -159,7 +159,9 @@ sleep()
   ZIPs. Use `backup --archive-mode full` only for an explicit forensic snapshot
   of the whole archive tree.
 - `.ara-memory/hot/`: tiny always-on Markdown state files compiled from stable capsules.
-- `.ara-memory/spool/`: durable pending/done/failed turn envelopes and enqueue-time snapshots for crash-safe ingress.
+- `.ara-memory/spool/`: durable pending/done/failed turn envelopes, encrypted
+  archive-object snapshot references, and legacy enqueue-time snapshots for
+  crash-safe ingress.
 - `.ara-memory/.backup-signing-key`: local HMAC trust key for backup manifests;
   it is intentionally excluded from backup ZIPs.
 - `.ara-memory/.archive-object-key`: local AES-GCM archive object key; it is
@@ -180,14 +182,15 @@ evidence and performs compression later.
 
 `spool-turn` is the unattended boundary. It writes a privacy-guarded copy of the
 envelope to an atomic local file queue before touching the memory database,
-copies existing file/image artifacts into `spool/snapshots`, and stores a
-bounded worktree snapshot inside the envelope. It also seals the pending JSON
+stores existing file/image artifacts as encrypted `archive/objects`, and stores
+a bounded worktree snapshot inside the envelope. It also seals the pending JSON
 with a local HMAC key stored under the memory root. `drain-spool` verifies the
 seal, strict option types, integer bounds, and enqueue-time artifact snapshots
-before processing the envelope through `remember-turn`; successful records move
-to `done`, and failed records move to `failed` with the sealed guarded envelope
-and result/error details intact. Artifact bytes, snapshot paths, and explicit
-raw overrides remain private local evidence. This is the
+before decrypting encrypted artifact bytes in memory for `remember-turn`;
+successful records move to `done`, and failed records move to `failed` with the
+sealed guarded envelope and result/error details intact. Spool envelopes,
+snapshot path metadata, explicit raw overrides, and legacy `spool/snapshots`
+files remain private local evidence. This is the
 preferred bridge for always-on capture because a Codex crash, DB lock, missing
 artifact, later file edit/delete, or later worker failure does not erase or
 rewrite the user's prompt, files, or worktree evidence. If a worker dies after

@@ -5,9 +5,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ara_memory.archive_crypto import decrypt_archive_object
 from ara_memory.compressors import compact_text, estimate_tokens
 from ara_memory.core import AraMemory
-from ara_memory.ingest import ingest_file
+from ara_memory.ingest import ingest_artifact_bytes, ingest_file
 from ara_memory.models import new_id, utc_now
 from ara_memory.worktree import capture_worktree, retain_worktree_snapshot
 
@@ -43,9 +44,24 @@ def remember_turn(
     artifact_entries = []
     for index, item in enumerate(artifact_items):
         path, caption, item_metadata = _artifact_item(item)
-        if not path.resolve().is_file():
+        if item_metadata.get("spool_snapshot_encrypted") is True:
+            snapshot_path = _memory_root_path(memory.store.root, Path(str(item_metadata.get("spool_snapshot_path") or path)))
+            if not snapshot_path.is_file():
+                raise FileNotFoundError(str(snapshot_path))
+            content = decrypt_archive_object(memory.store.root, snapshot_path)
+            expected = item_metadata.get("spool_snapshot_sha256")
+            if not isinstance(expected, str) or _sha256_bytes(content) != expected:
+                raise ValueError("Encrypted spooled artifact sha256 mismatch.")
+            artifact_entries.append((index, snapshot_path, caption, item_metadata, content))
+            continue
+        resolved = (
+            _memory_root_path(memory.store.root, Path(str(item_metadata.get("spool_snapshot_path") or path)))
+            if _is_spooled_artifact_metadata(item_metadata)
+            else path.resolve()
+        )
+        if not resolved.is_file():
             raise FileNotFoundError(str(path))
-        artifact_entries.append((index, path, caption, item_metadata))
+        artifact_entries.append((index, resolved, caption, item_metadata, None))
 
     prompt = _text(turn.get("prompt") or turn.get("user"))
     if prompt:
@@ -109,7 +125,34 @@ def remember_turn(
             ).id
         )
 
-    for index, path, caption, item_metadata in artifact_entries:
+    for index, path, caption, item_metadata, content in artifact_entries:
+        artifact_metadata = {
+            **base_metadata,
+            **item_metadata,
+            "file": _artifact_file_metadata(path, root=memory.store.root, metadata=item_metadata),
+            "turn_role": "artifact",
+            "turn_index": index,
+        }
+        if _is_spooled_artifact_metadata(item_metadata):
+            artifact_metadata["original_path"] = artifact_metadata["file"]
+        if content is not None:
+            artifact_metadata["spool_snapshot_loaded_from_archive"] = True
+            file_event_ids.append(
+                ingest_artifact_bytes(
+                    memory,
+                    name=_artifact_display_name(path, item_metadata),
+                    content=content,
+                    archive_relative_path=_root_relative_path(path, root=memory.store.root),
+                    digest=str(item_metadata["spool_snapshot_sha256"]),
+                    scope=scope,
+                    source=source,
+                    caption=caption,
+                    max_text_chars=max_text_chars,
+                    metadata_extra=artifact_metadata,
+                    allow_raw_private=allow_raw_private,
+                )
+            )
+            continue
         file_event_ids.append(
             ingest_file(
                 memory,
@@ -118,13 +161,7 @@ def remember_turn(
                 source=source,
                 caption=caption,
                 max_text_chars=max_text_chars,
-                metadata_extra={
-                    **base_metadata,
-                    **item_metadata,
-                    "file": str(path),
-                    "turn_role": "artifact",
-                    "turn_index": index,
-                },
+                metadata_extra=artifact_metadata,
                 allow_raw_private=allow_raw_private,
             )
         )
@@ -339,6 +376,38 @@ def _artifact_item(item: Any) -> tuple[Path, str, dict[str, Any]]:
     raise ValueError(f"Unsupported artifact item: {item!r}")
 
 
+def _memory_root_path(root: Path, path: Path) -> Path:
+    if path.is_absolute():
+        return path.resolve()
+    return (root / path).resolve()
+
+
+def _root_relative_path(path: Path, *, root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def _artifact_file_metadata(path: Path, *, root: Path, metadata: dict[str, Any]) -> str:
+    if _is_spooled_artifact_metadata(metadata):
+        return _root_relative_path(path, root=root)
+    return str(path)
+
+
+def _is_spooled_artifact_metadata(metadata: dict[str, Any]) -> bool:
+    return "spool_snapshot_sha256" in metadata or "spool_snapshot_path" in metadata
+
+
+def _artifact_display_name(path: Path, metadata: dict[str, Any]) -> str:
+    for key in ("spool_original_name", "original_name"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return path.name or "artifact"
+
+
 def _command_text(command: Any) -> str:
     if isinstance(command, str):
         return command.strip()
@@ -362,7 +431,7 @@ def _turn_episode_text(
     event_ids: list[str],
     file_event_ids: list[str],
     worktree_event_ids: list[str],
-    artifacts: list[tuple[int, Path, str, dict[str, Any]]],
+    artifacts: list[tuple[int, Path, str, dict[str, Any], bytes | None]],
 ) -> str:
     parts = ["Turn episode:"]
     prompt = _text(turn.get("prompt") or turn.get("user"))
@@ -378,7 +447,7 @@ def _turn_episode_text(
     commands = [item for item in commands if item]
     if commands:
         parts.append("Command outcomes: " + " | ".join(commands[:5]))
-    artifact_notes = [_artifact_episode_summary(path, caption, item_metadata) for _, path, caption, item_metadata in artifacts]
+    artifact_notes = [_artifact_episode_summary(path, caption, item_metadata) for _, path, caption, item_metadata, _ in artifacts]
     if artifact_notes:
         parts.append("Artifacts: " + " | ".join(artifact_notes[:5]))
     if worktree_event_ids:
@@ -404,7 +473,7 @@ def _command_summary(command: Any) -> str:
 
 
 def _artifact_episode_summary(path: Path, caption: str, metadata: dict[str, Any]) -> str:
-    bits = [path.name]
+    bits = [_artifact_display_name(path, metadata)]
     if caption:
         bits.append(f"caption={caption}")
     digest = metadata.get("sha256")
@@ -491,3 +560,7 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()

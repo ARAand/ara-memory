@@ -167,11 +167,12 @@ local HMAC seal; `drain-spool` rejects unsealed or edited pending JSON before
 retaining any events.
 
 Spool envelopes are still private local evidence: pending, done, and failed
-queue files contain a sealed, privacy-guarded enqueue envelope, while artifact
-bytes, snapshot paths, malformed raw sidecars, and explicit raw overrides remain
-private plaintext until a future encrypted or metadata-only spool mode exists.
-The pre-retain privacy guard applies again when those envelopes are drained into
-text events, before ledger/SQLite/FTS storage.
+queue files contain a sealed, privacy-guarded enqueue envelope. New file/image
+artifact snapshot payloads are stored as encrypted `archive/objects`, while
+snapshot path metadata, malformed raw sidecars, explicit raw overrides, and any
+legacy `spool/snapshots` files can still contain plaintext local evidence. The
+pre-retain privacy guard applies again when those envelopes are drained into text
+events, before ledger/SQLite/FTS storage.
 
 New file/image archive objects are encrypted under `archive/objects`. Existing
 plaintext objects from older stores should be migrated explicitly:
@@ -638,14 +639,19 @@ uncompressed size, suspicious compression ratios, and filesystem-normalized path
 collisions before hashing or parsing large members.
 Default backups use `--archive-mode objects`: they include sha256-addressed
 file/image artifacts encrypted at rest under `archive/objects` and the full
-spool directory, including pending/done/failed envelopes, snapshots, and
-`.seal-key`, so sealed pending work remains drainable after restore without
-recursively embedding derived evidence bundles. Spool snapshots, the ledger, and
-SQLite rows can still contain plaintext local evidence. They intentionally exclude older `archive/cold`
+spool directory, including pending/done/failed envelopes, encrypted archive
+snapshot references, legacy snapshots when present, and `.seal-key`, so sealed
+pending work remains drainable after restore without recursively embedding
+derived evidence bundles. Spool envelopes/path metadata, legacy snapshots, the
+ledger, and SQLite rows can still contain plaintext local evidence. They
+intentionally exclude older `archive/cold`
 exports, `archive/retention-cycles` reports, and `archive/failed-backups` ZIPs.
 Use `backup --archive-mode full` for an explicit forensic snapshot of the entire
 archive tree. `backup --no-archive` or `--archive-mode none` omits archived
-artifacts; do not use it when restored file/image artifacts are required.
+artifacts; do not use it when restored file/image artifacts are required. It is
+rejected while pending or processing spool records still reference encrypted
+archive-object snapshots, because those queued turns would not be drainable
+after restore.
 The backup signing key lives at `.ara-memory/.backup-signing-key` and is not
 stored inside backup ZIPs. Preserve it as local trust material if old backups
 must remain cryptographically verifiable on another machine.
@@ -707,8 +713,8 @@ timestamp, and final verification result.
 - Recognized hidden-reasoning fields and line-prefixed text are redacted from
   retained text events by default. Decisions and reasons are stored as explicit
   summaries with provenance. Archive object payloads are encrypted at rest;
-  spool snapshots, ledger entries, and SQLite rows remain private local evidence
-  and may still contain plaintext.
+  spool envelopes/path metadata, legacy snapshots, ledger entries, and SQLite
+  rows remain private local evidence and may still contain plaintext.
 - Long-term memories start as candidates and are promoted only after repeated
   evidence, high salience, or explicit user confirmation.
 - Goals are first-class capsules, separate from decisions and procedures, so
