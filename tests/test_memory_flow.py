@@ -2305,6 +2305,70 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(review.pass_count, 1)
             self.assertEqual(review.items[0].capsule_id, applied.capsule_id)
 
+    def test_reconsolidation_review_fails_when_created_candidate_drifted_after_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs an auditable reconsolidation apply path before stronger memory mutation.",
+                source="test",
+                scope="alpha",
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: auditable reconsolidation",
+                    body="Ara needs reconsolidation that preserves purpose and keeps apply actions reviewable.",
+                    scope="alpha",
+                    confidence=0.88,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "reconsolidation"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: apply starts candidate-only",
+                    body="Reconsolidation apply should first create a candidate summary with witness review.",
+                    scope="alpha",
+                    confidence=0.84,
+                    salience=0.86,
+                    source_event_ids=[event.id],
+                    tags=["decision", "apply"],
+                    status=MemoryStatus.STABLE,
+                )
+            )
+            memory.build_hot(scope="alpha", budget=900)
+
+            approval = memory.prepare_reconsolidation(
+                "reconsolidation apply path should preserve purpose decision and review evidence",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            self.assertTrue(approval.prepared, approval.as_dict())
+            applied = memory.apply_reconsolidation(
+                approval_token=approval.token or "",
+                confirmation="APPLY RECONSOLIDATION FRAME",
+            )
+            self.assertTrue(applied.passed, applied.as_dict())
+            self.assertIsNotNone(applied.capsule_id)
+
+            with memory.store.session() as conn:
+                conn.execute(
+                    "UPDATE capsules SET body = body || ? WHERE id = ?",
+                    ("\nmutated after witness", applied.capsule_id),
+                )
+
+            review = memory.review_reconsolidation(scope="alpha")
+
+            self.assertFalse(review.passed, review.as_dict())
+            self.assertEqual(review.fail_count, 1)
+            self.assertIn("created frame capsule changed field body_digest", review.items[0].warnings)
+
     def test_reconsolidation_review_cli_runs_recall_regression_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"

@@ -844,36 +844,30 @@ def _capsule_snapshot(memory: Any, frame: ReconsolidationReport, *, new_capsule_
         row = memory.store.get_capsule(capsule_id)
         if row is not None:
             cap = row_to_capsule(row)
-            capsules.append(
-                {
-                    "id": cap["id"],
-                    "kind": cap["kind"],
-                    "status": cap["status"],
-                    "scope": cap["scope"],
-                    "source_event_ids": cap["source_event_ids"],
-                    "title_digest": _text_digest(cap["title"]),
-                    "body_digest": _text_digest(cap["body"]),
-                }
-            )
+            capsules.append(_capsule_compare_snapshot(cap))
     new_capsule = None
     if new_capsule_id:
         row = memory.store.get_capsule(new_capsule_id)
         if row is not None:
             cap = row_to_capsule(row)
-            new_capsule = {
-                "id": cap["id"],
-                "kind": cap["kind"],
-                "status": cap["status"],
-                "scope": cap["scope"],
-                "source_event_ids": cap["source_event_ids"],
-                "title_digest": _text_digest(cap["title"]),
-                "body_digest": _text_digest(cap["body"]),
-            }
+            new_capsule = _capsule_compare_snapshot(cap)
     return {
         "frame_fingerprint": _frame_fingerprint(frame),
         "evidence_capsule_count": len(capsules),
         "evidence_capsules": capsules,
         "new_capsule": new_capsule,
+    }
+
+
+def _capsule_compare_snapshot(capsule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": capsule["id"],
+        "kind": capsule["kind"],
+        "status": capsule["status"],
+        "scope": capsule["scope"],
+        "source_event_ids": capsule["source_event_ids"],
+        "title_digest": _text_digest(capsule["title"]),
+        "body_digest": _text_digest(capsule["body"]),
     }
 
 
@@ -899,6 +893,7 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
                 break
     capsule_id = str(row["capsule_id"])
     capsule_row = memory.store.get_capsule(capsule_id)
+    capsule: dict[str, Any] | None = None
     if capsule_row is None:
         warnings.append("created frame capsule is missing")
     else:
@@ -913,6 +908,12 @@ def _review_witness(memory: Any, row: dict[str, Any]) -> ReconsolidationReviewIt
     after_new = after.get("new_capsule")
     if not isinstance(after_new, dict) or after_new.get("id") != capsule_id:
         warnings.append("after snapshot missing created frame capsule")
+    elif capsule is not None:
+        current_new = _capsule_compare_snapshot(capsule)
+        for key in ("kind", "status", "scope", "source_event_ids", "title_digest", "body_digest"):
+            if current_new.get(key) != after_new.get(key):
+                warnings.append(f"created frame capsule changed field {key}")
+                break
     status = "pass"
     if warnings:
         status = "fail" if any(_is_failed_witness_warning(item) for item in warnings) else "watch"
@@ -932,7 +933,7 @@ def _is_failed_witness_warning(warning: str) -> bool:
         "after snapshot fingerprint mismatch",
         "evidence capsule set changed during apply",
         "created frame capsule is missing",
-    } or warning.startswith("evidence capsule ")
+    } or warning.startswith("evidence capsule ") or warning.startswith("created frame capsule changed field ")
 
 
 def _token_hash(token: str) -> str:

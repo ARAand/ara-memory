@@ -137,7 +137,8 @@ recall_policy_impact(query, intent, actions, outcome)
 
 reconsolidation_review(scope)
   -> review candidate-only reconsolidation witnesses for unchanged evidence capsules
-  -> keep the created frame capsule candidate-only
+  -> compare the created frame capsule against the witness after-snapshot for kind, status, scope, source links, and content digests
+  -> keep the created frame capsule candidate-only and fail review if it drifted after witness creation
   -> optionally run recall-regression as a sandbox over representative recall cases
   -> block stronger reconsolidation when witness review or recall regression fails
 
