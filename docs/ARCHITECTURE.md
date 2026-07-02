@@ -6,9 +6,12 @@ Ara Memory OS treats memory as a typed, temporal, auditable substrate.
 It deliberately avoids a vectorDB-first design. Similarity search can be added
 later, but it is not the center of recall.
 
-The working-memory model is associative: recall combines explicit purpose,
-scope, temporal edges, graph neighbors, FTS/BM25 matches, and budget selection
-instead of treating memory as one flat similarity search space.
+The working-memory model is an associative substrate rather than a finished
+human-like memory. Recall combines explicit purpose, scope, temporal edges,
+graph neighbors, FTS/BM25 matches, and budget selection instead of treating
+memory as one flat similarity search space. It is still lexical/salience-heavy:
+there is no full ESPA router, spreading activation layer, or reconsolidation
+frame yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -38,9 +41,10 @@ remember_turn(envelope)
 
 govern_turn(envelope)
   -> model-free capture plan
+  -> agency_review gate for action_allowed and refusal/ask/repair stances
   -> recall_candidates probe over small budgets
   -> working_memory projection only when visible evidence exists
-  -> action recommendation: capture, working-memory, recall-context, or current evidence
+  -> action recommendation: capture, agency-review, working-memory, recall-context, or current evidence
   -> no event retention and no AI API call
 
 spool_turn(envelope)
@@ -97,6 +101,20 @@ working_memory(prompt, scope, files, errors)
   -> suppress unrelated fallback capsules when there is no direct evidence
   -> project only budget-visible items into Keep / Risk / Next Action
   -> optional working-memory-impact event for outcome feedback
+
+agency_review(prompt, proposed_action, scope)
+  -> inspect purpose-check and identity-check before accepting the frame
+  -> run recall-policy and working-memory without reading the raw ledger
+  -> return a stance: proceed, ask-before-acting, repair-memory-first, ask-or-roadmap, or refuse-or-reframe
+  -> split review completion from action permission with action_allowed
+  -> optionally append an agency_review audit note
+  -> never execute actions or mutate routing automatically
+
+govern_turn(turn)
+  -> plan turn ingress without storing the turn
+  -> run agency_review before recommending capture, recall, or working-memory actions
+  -> block anti-judgment, destructive, or safety-deferred frames from being treated as normal clearance
+  -> still keep the operation local and model-free
 
 audit()
   -> poisoning heuristics
@@ -347,9 +365,26 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     impact rows may nudge ranking only when their cue overlaps the current
     query, and the boost or penalty is capped. Recall-policy-impact rows are
     audit evidence only and must not nudge routing automatically.
+28. Treat self-directed agency as a review gate, not an executor. `agency-review`
+    may refuse or reframe an anti-judgment prompt, ask before irreversible work,
+    or require purpose/identity repair before proceeding, but it must not launch
+    actions, mutate policy, or claim free will without visible evidence.
+    `passed` means the review had enough evidence to complete; `action_allowed`
+    is the automation gate and is true only for proceed.
+29. Store agency-review records as audit notes, not decision memories. They may
+    explain a turn but must not become self-certifying evidence that future
+    agency reviews use to prove Ara's judgment.
+30. Prefer projection and routing over rereading raw memory. The next natural
+    memory layer should split raw body, search projection, and render projection,
+    then route recall through episodic, semantic, procedural, and affective axes.
+    Affective signals are caution/context signals, not reward or promotion scores.
 
 ## Future Extension Points
 
+- Projection split: raw body stays private/local, search projection stays short
+  and indexable, render projection is the only text normally shown to a model.
+- ESPA memory axes: episodic, semantic, procedural, and affective routing over
+  SQLite metadata/FTS before considering optional embeddings.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

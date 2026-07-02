@@ -34,6 +34,7 @@ class TurnGovernanceReport:
     cue: str
     recall_query: str
     capture_plan: dict[str, Any]
+    agency_review: dict[str, Any]
     recall_probe: dict[str, Any]
     working_memory: dict[str, Any]
     cost: dict[str, Any]
@@ -51,6 +52,7 @@ class TurnGovernanceReport:
             "cue": self.cue,
             "recall_query": self.recall_query,
             "capture_plan": self.capture_plan,
+            "agency_review": self.agency_review,
             "recall_probe": self.recall_probe,
             "working_memory": self.working_memory,
             "cost": self.cost,
@@ -77,6 +79,12 @@ class TurnGovernanceReport:
             "- capture: "
             f"{self.capture_plan.get('recommended_mode')} "
             f"raw_tokens={self.capture_plan.get('raw_text', {}).get('estimated_tokens_if_recalled_whole', 0)}"
+        )
+        lines.append(
+            "- agency_review: "
+            f"stance={self.agency_review.get('stance')} "
+            f"action_allowed={self.agency_review.get('action_allowed')} "
+            f"reasons={len(self.agency_review.get('reasons', []))}"
         )
         lines.append(
             "- recall_probe: "
@@ -158,7 +166,26 @@ def govern_turn(
         else None
     )
     working_payload = _working_payload(working)
-    risks = _risks(capture_plan, selected_probe, working_payload, command_errors)
+    agency = (
+        memory.agency_review(
+            prompt=cue,
+            scope=scope,
+            proposed_action="plan turn capture, recall, and working-memory actions",
+            active_files=active_files,
+            command_errors=command_errors,
+            budgets=budgets,
+            working_budget=working_budget,
+            recall_budget=int(selected_probe["budget"]),
+            include_global=include_global,
+            include_hot=include_hot,
+            include_health=False,
+            record=False,
+        )
+        if cue
+        else None
+    )
+    agency_payload = _agency_payload(agency)
+    risks = _risks(capture_plan, selected_probe, working_payload, command_errors, agency_payload)
     cost = _cost_payload(
         capture_plan,
         working_payload,
@@ -170,6 +197,7 @@ def govern_turn(
         capture_plan,
         selected_probe,
         working_payload,
+        agency_payload,
         scope=scope,
         recall_query=recall_query,
         include_global=include_global,
@@ -180,6 +208,7 @@ def govern_turn(
         cue=cue,
         recall_query=recall_query,
         capture_plan=capture_plan,
+        agency_review=agency_payload,
         recall_probe=selected_probe,
         working_memory=working_payload,
         cost=cost,
@@ -271,10 +300,35 @@ def _working_payload(working: Any) -> dict[str, Any]:
     }
 
 
+def _agency_payload(agency: Any) -> dict[str, Any]:
+    if agency is None:
+        return {
+            "stance": "skip",
+            "passed": True,
+            "action_allowed": True,
+            "reasons": [],
+            "recommended_actions": [],
+            "control_tokens": 0,
+        }
+    return {
+        "stance": agency.stance,
+        "passed": bool(agency.passed),
+        "action_allowed": bool(agency.action_allowed),
+        "reasons": list(agency.reasons),
+        "recommended_actions": list(agency.recommended_actions),
+        "control_tokens": int(agency.diagnostics.get("control_tokens", 0)),
+        "purpose_passed": bool(agency.evidence.get("purpose", {}).get("passed", False)),
+        "identity_passed": bool(agency.evidence.get("identity", {}).get("passed", False)),
+        "recall_policy_status": agency.evidence.get("recall_policy", {}).get("status"),
+        "working_items": int(agency.evidence.get("working_memory", {}).get("items", 0)),
+    }
+
+
 def _actions(
     capture_plan: dict[str, Any],
     recall_probe: dict[str, Any],
     working: dict[str, Any],
+    agency: dict[str, Any],
     *,
     scope: str,
     recall_query: str,
@@ -291,6 +345,20 @@ def _actions(
     ]
     no_global = " --no-global" if not include_global else ""
     no_hot = " --no-hot" if not include_hot else ""
+    agency_stance = str(agency.get("stance", "skip"))
+    if agency_stance not in {"skip", "proceed"}:
+        if agency_stance in {"refuse-or-reframe", "defer-for-safety", "ask-before-acting"}:
+            status = "block"
+        else:
+            status = "watch"
+        actions.append(
+            GovernanceAction(
+                name="agency-review",
+                status=status,
+                reason=_agency_reason(agency),
+                command=f"python -m ara_memory agency-review \"{_shell_hint(recall_query)}\" --scope {scope}{no_global}{no_hot}",
+            )
+        )
     if int(working.get("items", 0)) > 0:
         actions.append(
             GovernanceAction(
@@ -325,6 +393,7 @@ def _risks(
     recall_probe: dict[str, Any],
     working: dict[str, Any],
     command_errors: list[str],
+    agency: dict[str, Any],
 ) -> list[str]:
     risks: list[str] = []
     if capture_plan.get("artifacts", {}).get("missing", 0):
@@ -337,7 +406,28 @@ def _risks(
         risks.append("watch: prior working-memory impact changed ranking; treat it as bounded evidence")
     if int(working.get("items", 0)) == 0 and int(recall_probe.get("visible_capsules", 0)) == 0:
         risks.append("watch: no visible memory evidence for this cue")
+    agency_stance = str(agency.get("stance", "skip"))
+    if agency_stance == "refuse-or-reframe":
+        risks.append("block: agency review rejected the instruction frame")
+    elif agency_stance == "ask-before-acting":
+        risks.append("block: agency review requires explicit approval before irreversible work")
+    elif agency_stance == "defer-for-safety":
+        risks.append("block: agency review deferred the turn for a safety gate")
+    elif agency_stance in {"repair-memory-first", "ask-or-roadmap"}:
+        risks.append(f"watch: agency review recommends {agency_stance}")
     return risks
+
+
+def _agency_reason(agency: dict[str, Any]) -> str:
+    reasons = ", ".join(str(item) for item in agency.get("reasons", [])[:3])
+    actions = ", ".join(str(item) for item in agency.get("recommended_actions", [])[:2])
+    if reasons and actions:
+        return f"{agency.get('stance')} because {reasons}; next: {actions}"
+    if reasons:
+        return f"{agency.get('stance')} because {reasons}"
+    if actions:
+        return f"{agency.get('stance')}; next: {actions}"
+    return str(agency.get("stance", "review needed"))
 
 
 def _cost_payload(

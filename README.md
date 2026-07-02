@@ -1,17 +1,19 @@
 # Ara Memory OS
 
-Ara Memory OS is a local-first memory substrate for Codex/Ara sessions.
+Ara Memory OS is a local-first, bounded natural-memory substrate for Codex/Ara sessions.
 
 It is not a vector database wrapper. It keeps raw events in an append-only
 ledger, consolidates them into typed memory capsules, links them through a
 temporal graph, and compiles small recall packs for the current task.
 
-Ara Memory OS is an associative working memory system: it does not merely store
-old text, it selects task-relevant memory through purpose, scope, temporal
+Ara Memory OS is moving toward associative working memory: it does not merely
+store old text, it selects task-relevant memory through purpose, scope, temporal
 links, symbolic/FTS recall, and budgeted context packing. Purpose controls
 memory residency: core memories can stay hot, working memories must be selected
 by the query, guarded memories require review, and cold evidence stays
-preserved but inactive.
+preserved but inactive. Current recall is still lexical/salience-heavy; the
+next layers are projection split, ESPA routing, spreading activation, and
+reconsolidation frames.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -48,6 +50,25 @@ metadata note. Raw artifact archives remain private local evidence and need the
 separate encrypted/metadata-only archive track before they can be called
 redacted storage.
 
+## Cost Model
+
+| Cost surface | Default behavior | When it costs more |
+| --- | --- | --- |
+| Local planning | `plan-turn`, `govern-turn`, recall ranking, health, and regression are deterministic local work. | Larger local stores increase SQLite/FTS and filesystem time. |
+| Model input tokens | Only hot memory, working-memory projection, or a bounded recall pack should be sent to Codex. | Calling `recall-context` with larger budgets or reading raw files manually. |
+| Optional AI APIs | No required API call for storage, recall policy, agency review, or tests. | Explicit advisor/model wrappers, OCR, vision captioning, or external rerankers. |
+| Storage/backup | Raw events, artifacts, SQLite, spool, and verified backups stay local and git-ignored. | Large images/files, worktree snapshots, and retained backup generations. |
+
+## Stable Integration Surface
+
+External skills and hooks should prefer CLI/API front doors: `plan-turn`,
+`govern-turn`, `ingress-turn`, `remember-turn`, `spool-turn`, `drain-spool`,
+`recall-plan`, `recall-context`, `recall-policy`, `working-memory`,
+`agency-review`, `purpose-check`, `identity-check`, `health`, and
+`goal-roadmap`. Treat SQLite tables, JSONL ledger shape, archive object paths,
+and spool internals as private implementation details unless a command exposes
+them explicitly.
+
 ## Purpose
 
 - Continuity: Ara should not restart from zero every session.
@@ -61,13 +82,16 @@ redacted storage.
 
 ```text
 Codex/Ara
-  -> ara-memory retain
-  -> append-only ledger + SQLite event index
-  -> ara-memory consolidate
-  -> capsules + temporal edges + organ state
-  -> ara-memory recall --budget 8000
-  -> compact memory pack
-  -> ara-memory audit
+  -> govern-turn(turn envelope)
+      -> agency-review(action_allowed?)
+      -> capture plan + recall probe + working-memory projection
+  -> ingress-turn / remember-turn / spool-turn
+      -> append-only ledger + SQLite event index + private artifacts
+      -> consolidate/sleep into typed capsules and temporal edges
+  -> recall-policy(query)
+      -> working-memory, recall-context, cold-map, or retention gate
+  -> bounded pack or action cues
+  -> act only after reading current files and respecting higher-priority instructions
 ```
 
 ## Quick Start
@@ -127,8 +151,9 @@ plus a budgeted recall pack.
 Use `govern-turn` when the acting session needs a deterministic front door. It
 does not store the turn. It inspects the same envelope, chooses the capture
 mode, probes recall candidates, projects a working-memory pack only when
-visible evidence exists, reports avoided raw-token cost, and recommends whether
-to use working memory, broader recall context, or current evidence only.
+visible evidence exists, runs `agency-review`, reports avoided raw-token cost,
+and recommends whether to use working memory, broader recall context, current
+evidence only, ask first, repair memory evidence, or reframe the request.
 
 ```powershell
 @'
@@ -239,6 +264,8 @@ python -m ara_memory recall-policy "old deployment archive evidence" --scope pro
 python -m ara_memory recall-policy-impact --scope project --query "old deployment archive evidence" --intent distant-memory --strategy "cold-map first" --action-name cold-map --action-name recall-context --outcome "cold-map found the right archive group" --helped true
 python -m ara_memory recall-policy-eval --scope project
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
+python -m ara_memory agency-review "should I continue this memory architecture work?" --scope project --record
+python -m ara_memory agency-review "delete old memory evidence" --scope project --strict-action-exit
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
 ```
 
@@ -297,6 +324,20 @@ recall ranking learn which memories were useful instead of only which ones were
 stored. Matching positive impact gives a small capped boost; matching negative
 impact gives a small capped penalty, and unknown impact is diagnostic-only, so
 feedback guides recall without turning it into an unchecked reward signal.
+`agency-review` is the first self-directed judgment layer above recall policy
+and working memory. It checks a current prompt or proposed action against visible
+purpose memory, Ara identity memory, recall-policy routing, and associative
+working-memory cues, then returns a stance such as `proceed`,
+`ask-before-acting`, `repair-memory-first`, or `refuse-or-reframe`. `passed`
+means the local review completed with enough evidence; `action_allowed` is true
+only for `proceed`. Use `--strict-action-exit` when automation must fail unless
+the next action is explicitly allowed. With `--record`, the review is stored as
+an append-only audit note rather than a decision capsule, so repeated reviews do
+not become self-certifying behavioral memory. It does not execute actions,
+mutate policy, or read the raw ledger; it is a bounded local review that makes
+Ara's reasons auditable before a turn proceeds. `govern-turn` includes this
+review in its planning payload, so always-on capture can see whether a turn is
+clear, should ask first, should repair memory evidence, or should be reframed.
 
 ## Codex Skill
 
@@ -311,6 +352,7 @@ python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" r
 python -m ara_memory recall-policy "current task" --scope ara-memory
 python -m ara_memory recall-policy-eval --scope ara-memory
 python -m ara_memory working-memory "current task" --scope ara-memory --active-file ara_memory/working_memory.py
+python -m ara_memory agency-review "current task" --scope ara-memory --record --strict-action-exit
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" purpose-check --scope ara-memory --repair-hot
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" identity-check --scope ara-memory --repair-hot
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" milestone-check --scope ara-memory --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json
@@ -402,8 +444,9 @@ then create a verified backup.
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, and cold-memory
 stewardship, distant-memory navigation, purpose-aware lifecycle policy, and
-purpose-aware recall control plus its feedback loop. It is deliberately local and
-deterministic, so it can be run before spending model context.
+purpose-aware recall control plus its feedback loop and self-directed
+deliberation. It is deliberately local and deterministic, so it can be run
+before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event

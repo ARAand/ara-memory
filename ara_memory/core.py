@@ -367,6 +367,11 @@ class AraMemory:
 
         return govern_turn(self, turn, **kwargs)
 
+    def agency_review(self, **kwargs: Any) -> Any:
+        from ara_memory.agency import build_agency_review
+
+        return build_agency_review(self, **kwargs)
+
     def purpose_check(self, **kwargs: Any) -> Any:
         from ara_memory.purpose import run_purpose_check
 

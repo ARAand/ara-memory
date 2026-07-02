@@ -274,6 +274,34 @@ def main(argv: list[str] | None = None) -> int:
     govern_turn.add_argument("--output-usd-per-million", type=float, default=0.0)
     govern_turn.add_argument("--json", action="store_true")
 
+    agency_review = sub.add_parser(
+        "agency-review",
+        help="Review a requested action against purpose, identity, recall policy, and working memory.",
+    )
+    agency_review.add_argument("prompt", nargs="?", default=None)
+    agency_review.add_argument("--scope", default="global")
+    agency_review.add_argument("--proposed-action", default="")
+    agency_review.add_argument("--constraint", action="append", default=[])
+    agency_review.add_argument("--active-file", action="append", default=[])
+    agency_review.add_argument("--command-error", action="append", default=[])
+    agency_review.add_argument(
+        "--budgets",
+        default="800,1600",
+        help="Comma-separated active recall budgets for the underlying recall-policy check.",
+    )
+    agency_review.add_argument("--working-budget", type=int, default=700)
+    agency_review.add_argument("--recall-budget", type=int, default=1200)
+    agency_review.add_argument("--no-global", action="store_true")
+    agency_review.add_argument("--no-hot", action="store_true")
+    agency_review.add_argument("--health", action="store_true")
+    agency_review.add_argument("--record", action="store_true")
+    agency_review.add_argument(
+        "--strict-action-exit",
+        action="store_true",
+        help="Exit non-zero unless the review explicitly allows proceeding.",
+    )
+    agency_review.add_argument("--json", action="store_true")
+
     purpose_check = sub.add_parser("purpose-check")
     purpose_check.add_argument("--scope", default="global")
     purpose_check.add_argument("--query", default="purpose of Ara natural memory and long-running goal")
@@ -1158,6 +1186,31 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.passed else 1
+
+    if args.cmd == "agency-review":
+        prompt = args.prompt if args.prompt is not None else sys.stdin.read().strip()
+        result = memory.agency_review(
+            prompt=prompt,
+            scope=args.scope,
+            proposed_action=args.proposed_action,
+            constraints=args.constraint,
+            active_files=args.active_file,
+            command_errors=args.command_error,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            include_health=args.health,
+            record=args.record,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        if args.strict_action_exit:
+            return 0 if result.action_allowed else 1
+        return 0 if result.passed or result.stance in {"refuse-or-reframe", "ask-before-acting", "ask-or-roadmap"} else 1
 
     if args.cmd == "purpose-check":
         result = memory.purpose_check(

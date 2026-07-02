@@ -92,6 +92,15 @@ def build_goal_roadmap(
         cold_group_limit=3,
     )
     recall_policy_eval = memory.evaluate_recall_policy(scope=scope, include_global=False, min_evaluated=3)
+    agency = memory.agency_review(
+        prompt="continue building Ara Memory OS natural memory with self-directed judgment",
+        scope=scope,
+        proposed_action="choose the next implementation step from purpose, identity, recall policy, and working memory",
+        budgets=[800, 1600],
+        include_hot=True,
+        include_health=False,
+        record=False,
+    )
     worker_schedule = memory.verify_worker_schedule(
         output=memory.store.root / "scripts" / "install-worker-task.ps1",
         scope=scope,
@@ -176,6 +185,12 @@ def build_goal_roadmap(
             "fail" if recall_policy_eval.status == "fail" else "watch" if recall_policy_eval.status == "watch" else "pass",
             _recall_policy_eval_evidence(recall_policy_eval),
             "Record recall-policy-impact after real turns so recall routing can be audited without reward hacking.",
+        ),
+        RoadmapItem(
+            "self-directed deliberation",
+            "pass" if agency.action_allowed else "watch",
+            _agency_evidence(agency),
+            "Run agency-review and repair purpose, identity, recall policy, or working-memory evidence before claiming autonomous judgment.",
         ),
         RoadmapItem(
             "scheduled worker script readiness",
@@ -276,6 +291,17 @@ def _recall_policy_eval_evidence(recall_policy_eval: Any) -> str:
         f"{recall_policy_eval.status}, impacts={totals['impacts']}, "
         f"evaluated={totals['evaluated']}, helpful={totals['helpful']}, "
         f"harmful={totals['harmful']}, unknown={totals['unknown']}"
+    )
+
+
+def _agency_evidence(agency: Any) -> str:
+    policy = agency.evidence.get("recall_policy", {})
+    working = agency.evidence.get("working_memory", {})
+    return (
+        f"stance={agency.stance}, reasons={len(agency.reasons)}, "
+        f"action_allowed={agency.action_allowed}, "
+        f"intent={policy.get('intent')}, actions={len(policy.get('actions', []))}, "
+        f"working_items={working.get('items', 0)}, control_tokens={agency.diagnostics.get('control_tokens', 0)}"
     )
 
 
