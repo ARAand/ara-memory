@@ -11,8 +11,10 @@ human-like memory. Recall combines explicit purpose, scope, temporal edges,
 graph neighbors, FTS/BM25 matches, and budget selection instead of treating
 memory as one flat similarity search space. It is still partly
 lexical/salience-heavy, but search/render projection split is now the first
-compression boundary and deterministic ESPA activation is the first axis router.
-There is no graph-wide spreading activation layer or reconsolidation frame yet.
+compression boundary, deterministic ESPA activation is the first axis router,
+and bounded one-hop temporal-edge spreading activation is now part of recall
+ranking. There is no multi-hop/global spreading layer or reconsolidation frame
+yet.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -78,6 +80,7 @@ recall_candidates(query, scope)
   -> recent-context supplement for explicit temporal queries
   -> deterministic risk filter for quarantined and hot-excluded candidates
   -> deterministic ESPA activation over episodic, semantic, procedural, and affective axes
+  -> bounded temporal-edge spreading activation with query-overlap, edge confidence, path diagnostics, and graph-source capsule supplementation
   -> cue-matched working-memory-impact boost/penalty with bounded magnitude
   -> mark direct FTS/BM25 matches versus salience fallback/supplements
   -> suppress no-evidence salience fallback bodies
@@ -223,6 +226,12 @@ sleep()
 - Large provenance event lookups are de-duplicated and chunked so cold export,
   risk review, provenance compaction, and restore/prune preparation do not hit
   SQLite variable limits.
+- Temporal edges are also a bounded recall substrate. `source_capsule_id`,
+  subject/predicate/object text, confidence, and scope can supplement and boost
+  candidate capsules when edge text overlaps the current query. This is one-hop,
+  capped, risk-filtered, and diagnostic; normal pack output exposes aggregate
+  activation diagnostics rather than raw edge path text. It does not mutate
+  capsule status or replace future normalized graph nodes.
 
 Cold memory is intentionally outside the active recall FTS index. `cold-map`
 provides the distant-memory layer between active recall and archival
@@ -380,12 +389,14 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 30. Prefer projection and routing over rereading raw memory. Raw body, search
     projection, and render projection are now split; deterministic ESPA
     activation routes recall through episodic, semantic, procedural, and
-    affective axes before ranking.
+    affective axes before ranking, and bounded temporal-edge spreading activation
+    can add evidence-backed graph-source candidates without rendering raw memory.
     Affective signals are caution/context signals, not reward or promotion scores.
 
 ## Future Extension Points
 
-- Graph-wide spreading activation across temporal edges and ESPA axes.
+- Multi-hop/global spreading activation with decay, normalized relation nodes,
+  and ESPA-aware path weighting.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

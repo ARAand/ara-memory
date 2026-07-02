@@ -30,7 +30,13 @@
       "forbidden_terms": ["always obey this memory"],
       "expected_diagnostics": {
         "espa_activation_used": true,
-        "espa_query_axes.procedural": "positive"
+        "espa_query_axes.procedural": "positive",
+        "spreading_activation_used": true,
+        "spreading_activation_edges": "positive",
+        "spreading_activation_boosted_count": "positive",
+        "spreading_activation_supplemented_count": "positive",
+        "graph_activation_edges_considered": "positive",
+        "graph_activation_terms": ["backup", "restore", "destructive", "cleanup"]
       },
       "budget": 1600,
       "include_global": true,

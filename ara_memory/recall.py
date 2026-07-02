@@ -10,6 +10,7 @@ from ara_memory.espa import apply_espa_activation, axis_coverage
 from ara_memory.models import MemoryStatus
 from ara_memory.projection import render_projection
 from ara_memory.risk import MemoryRiskAssessor, instruction_like_matches, redact_memory_tags, redact_sensitive_text
+from ara_memory.spreading import apply_spreading_activation, graph_activation_terms
 from ara_memory.storage import MemoryStore, row_to_capsule
 
 
@@ -78,7 +79,24 @@ class RecallCompiler:
                 scope=scope,
                 include_global=include_global,
             )
+        seed_ids = {str(cap["id"]) for cap in candidates}
+        graph_terms = graph_activation_terms(terms)
+        activation_edges = self.store.graph_activation_edges(
+            graph_terms,
+            seed_capsule_ids=seed_ids,
+            scope=scope,
+            include_global=include_global,
+            limit=80,
+        )
+        candidates, graph_supplemented_ids = _with_graph_source_capsules(
+            self.store,
+            candidates,
+            activation_edges,
+            scope=scope,
+            include_global=include_global,
+        )
         filtered_candidates = _filter_recall_candidates(self.store, candidates)
+        graph_supplemented_ids.intersection_update(str(cap["id"]) for cap in filtered_candidates)
         impact_rows = self.store.list_working_memory_impacts(
             scope=scope,
             capsule_ids=[str(cap["id"]) for cap in filtered_candidates],
@@ -91,10 +109,27 @@ class RecallCompiler:
             cap["impact_boost"] = impact_boosts.get(capsule_id, 0.0)
             cap["impact_match_count"] = impact_counts.get(capsule_id, 0)
         espa = apply_espa_activation(filtered_candidates, query=query, terms=terms)
+        spreading = apply_spreading_activation(
+            filtered_candidates,
+            activation_edges,
+            terms=graph_terms,
+            seed_ids=seed_ids,
+            supplemented_ids=graph_supplemented_ids,
+        )
         capsules = _rerank_capsules(filtered_candidates, terms, temporal_query=temporal_query)[:candidate_limit]
         low_evidence_fallback_suppressed = _should_suppress_low_evidence_fallback(capsules, terms)
         renderable_capsules = [] if low_evidence_fallback_suppressed else _renderable_capsules(capsules, intent_query=intent_query)
         relevance_scores = [_recall_score(cap, terms) for cap in renderable_capsules]
+        spreading_boosted_ids = [
+            cap["id"]
+            for cap in capsules
+            if float(cap.get("spreading_activation_score") or 0.0) > 0.0
+        ]
+        spreading_supplemented_ids = [
+            cap["id"]
+            for cap in capsules
+            if cap["id"] in graph_supplemented_ids
+        ]
         diagnostics = {
             "budget_tokens": budget,
             "capsules_considered": len(candidates),
@@ -102,10 +137,12 @@ class RecallCompiler:
             "capsules_selected": len(capsules),
             "capsules_renderable": len(renderable_capsules),
             "graph_edges_considered": len(graph_rows),
+            "graph_activation_edges_considered": int(spreading["edge_count"]),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
             "query_terms": terms,
+            "graph_activation_terms": graph_terms,
             "query_term_count": len(terms),
             "low_evidence_fallback_suppressed": low_evidence_fallback_suppressed,
             "fallback_used": any(cap.get("recall_match_source") == "salience_fallback" for cap in capsules),
@@ -135,6 +172,12 @@ class RecallCompiler:
                 if float(cap.get("espa_activation_score") or 0.0) > 0.0
             ],
             "espa_axis_coverage": axis_coverage(capsules),
+            "spreading_activation_used": bool(spreading["activation_used"]),
+            "spreading_activation_edges": int(spreading["edge_count"]),
+            "spreading_activation_boosted_count": len(spreading_boosted_ids),
+            "spreading_activation_supplemented_count": len(spreading_supplemented_ids),
+            "spreading_activation_boosted_capsules": spreading_boosted_ids[:12],
+            "spreading_activation_supplemented_capsules": spreading_supplemented_ids[:12],
             "temporal_query": temporal_query,
             "intent_query": intent_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
@@ -281,10 +324,12 @@ class RecallCompiler:
             "capsules_rendered_before_budget": len(rendered_capsules),
             "capsules_rendered_after_budget": len(visible_capsules),
             "graph_edges_considered": len(graph_rows),
+            "graph_activation_edges_considered": int(candidate_result.diagnostics["graph_activation_edges_considered"]),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
             "query_terms": terms,
+            "graph_activation_terms": list(candidate_result.diagnostics["graph_activation_terms"]),
             "query_terms_visible": visible_query_terms,
             "query_term_count": len(terms),
             "query_terms_visible_count": len(visible_query_terms),
@@ -303,6 +348,20 @@ class RecallCompiler:
             "espa_activation_used": bool(candidate_result.diagnostics["espa_activation_used"]),
             "espa_activation_boosted_capsules": list(candidate_result.diagnostics["espa_activation_boosted_capsules"]),
             "espa_axis_coverage": dict(candidate_result.diagnostics["espa_axis_coverage"]),
+            "spreading_activation_used": bool(candidate_result.diagnostics["spreading_activation_used"]),
+            "spreading_activation_edges": int(candidate_result.diagnostics["spreading_activation_edges"]),
+            "spreading_activation_boosted_count": int(
+                candidate_result.diagnostics["spreading_activation_boosted_count"]
+            ),
+            "spreading_activation_supplemented_count": int(
+                candidate_result.diagnostics["spreading_activation_supplemented_count"]
+            ),
+            "spreading_activation_boosted_capsules": list(
+                candidate_result.diagnostics["spreading_activation_boosted_capsules"]
+            ),
+            "spreading_activation_supplemented_capsules": list(
+                candidate_result.diagnostics["spreading_activation_supplemented_capsules"]
+            ),
             "temporal_query": temporal_query,
             "relevance_score_min": min(relevance_scores) if relevance_scores else 0.0,
             "relevance_score_avg": (
@@ -362,6 +421,42 @@ def _with_recent_context(
     return out
 
 
+def _with_graph_source_capsules(
+    store: MemoryStore,
+    capsules: list[dict],
+    graph_edges: list[Any],
+    *,
+    scope: str,
+    include_global: bool,
+) -> tuple[list[dict], set[str]]:
+    seen = {str(cap["id"]) for cap in capsules}
+    source_ids = []
+    for edge in graph_edges:
+        source_id = str(edge["source_capsule_id"] or "")
+        if source_id and source_id not in seen:
+            source_ids.append(source_id)
+    if not source_ids:
+        return capsules, set()
+    rows = store.get_capsules_by_ids(
+        source_ids,
+        scope=scope,
+        include_global=include_global,
+        active_only=True,
+    )
+    out = list(capsules)
+    added: set[str] = set()
+    for row in rows:
+        cap = row_to_capsule(row)
+        if cap["id"] in seen:
+            continue
+        cap["recall_match_source"] = "graph_activation"
+        cap["bm25_score"] = None
+        out.append(cap)
+        seen.add(cap["id"])
+        added.add(cap["id"])
+    return out, added
+
+
 def _filter_recall_candidates(store: MemoryStore, capsules: list[dict]) -> list[dict]:
     risk = MemoryRiskAssessor(store)
     out = []
@@ -380,6 +475,11 @@ def _renderable_capsules(capsules: list[dict], *, intent_query: bool) -> list[di
         if cap["id"] in seen:
             continue
         if intent_query and _is_low_value_for_intent(cap):
+            continue
+        if cap.get("recall_match_source") == "graph_activation" and (
+            float(cap.get("spreading_activation_score") or 0.0) <= 0.0
+            or not cap.get("spreading_activation_paths")
+        ):
             continue
         seen.add(cap["id"])
         out.append(cap)
@@ -400,6 +500,7 @@ def _public_capsule_summary(cap: dict[str, Any]) -> dict[str, Any]:
         "bm25_score": cap.get("bm25_score"),
         "espa_axes": dict(cap.get("espa_axes") or {}),
         "espa_activation_score": float(cap.get("espa_activation_score") or 0.0),
+        "spreading_activation_score": float(cap.get("spreading_activation_score") or 0.0),
     }
 
 
@@ -838,6 +939,7 @@ def _recall_score(cap: dict, terms: list[str], *, recency_boost: float = 0.0) ->
     score += _bm25_bonus(cap)
     score += float(cap.get("impact_boost") or 0.0)
     score += float(cap.get("espa_activation_score") or 0.0)
+    score += float(cap.get("spreading_activation_score") or 0.0)
     score += recency_boost
     score -= _operational_summary_penalty(cap, lowered_terms)
     return score
@@ -911,6 +1013,8 @@ def _bm25_bonus(cap: dict) -> float:
             return -0.35
         if source == "salience_supplement":
             return -1.2
+        if source == "graph_activation":
+            return -0.2
         return 0.0
     try:
         score = float(value)

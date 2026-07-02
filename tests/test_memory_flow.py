@@ -37,6 +37,7 @@ from ara_memory.models import Capsule, CapsuleKind, MemoryStatus, utc_now
 from ara_memory.projection import render_projection, search_projection, working_projection
 from ara_memory.regression import RecallRegressionCase
 from ara_memory.risk import redact_sensitive_text
+from ara_memory.spreading import apply_spreading_activation
 from ara_memory.turn import plan_turn_ingress, remember_turn
 from ara_memory.worktree import capture_worktree
 
@@ -221,6 +222,175 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(result.capsules[0]["id"], failure.id)
             self.assertGreater(result.diagnostics["espa_query_axes"]["affective"], 0.0)
             self.assertIn(failure.id, result.diagnostics["espa_activation_boosted_capsules"])
+
+    def test_spreading_activation_supplements_graph_source_capsule(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: sealed packet rehearsal",
+                body="Open the safe packet, validate checksum, then rehearse the protected recovery sequence.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.22,
+                source_event_ids=[],
+                tags=["archive", "packet"],
+                status=MemoryStatus.STABLE,
+            )
+            lexical_seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Restore drill overview",
+                body="Restore drill overview records the general exercise and handoff.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.86,
+                source_event_ids=[],
+                tags=["restore", "drill", "overview"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(target)
+            memory.store.upsert_capsule(lexical_seed)
+            for index in range(55):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.SUMMARY,
+                        title=f"High salience unrelated memory {index}",
+                        body="This memory is intentionally unrelated to the graph activation query.",
+                        scope="alpha",
+                        confidence=0.9,
+                        salience=0.98,
+                        source_event_ids=[],
+                        tags=["unrelated", f"noise-{index}"],
+                        status=MemoryStatus.STABLE,
+                    )
+                )
+            memory.store.add_edge(
+                subject="restore",
+                predicate="requires",
+                object_="sealed packet drill",
+                scope="alpha",
+                source_capsule_id=target.id,
+                confidence=0.95,
+            )
+
+            result = memory.recall_candidates(
+                "restore drill",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+                candidate_limit=18,
+            )
+
+            self.assertTrue(result.diagnostics["spreading_activation_used"])
+            self.assertGreater(result.diagnostics["spreading_activation_edges"], 0)
+            self.assertGreater(result.diagnostics["graph_activation_edges_considered"], 0)
+            self.assertEqual(result.diagnostics["graph_activation_terms"], ["restore", "drill"])
+            self.assertGreater(result.diagnostics["spreading_activation_boosted_count"], 0)
+            self.assertGreater(result.diagnostics["spreading_activation_supplemented_count"], 0)
+            self.assertIn(target.id, result.diagnostics["spreading_activation_supplemented_capsules"])
+            self.assertIn(target.id, result.diagnostics["spreading_activation_boosted_capsules"])
+            selected_ids = [cap["id"] for cap in result.capsules]
+            self.assertIn(target.id, selected_ids)
+            public = result.as_dict(include_capsules=True)["capsules"]
+            target_summary = next(cap for cap in public if cap["id"] == target.id)
+            self.assertGreater(target_summary["spreading_activation_score"], 0.0)
+            self.assertNotIn("spreading_activation_paths", target_summary)
+            pack = memory.recall(
+                "restore drill",
+                scope="alpha",
+                budget=1600,
+                include_global=False,
+            )
+            self.assertNotIn("graph_path=", pack)
+
+    def test_spreading_activation_does_not_outrank_direct_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            direct = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: restore drill canonical runbook",
+                body="Restore drill canonical runbook says verify backup, restore sandbox, and validate service.",
+                scope="alpha",
+                confidence=0.92,
+                salience=0.78,
+                source_event_ids=[],
+                tags=["restore", "drill", "runbook"],
+                status=MemoryStatus.STABLE,
+            )
+            associated = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: sealed packet rehearsal",
+                body="Open the sealed packet and rehearse the protected recovery sequence.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.22,
+                source_event_ids=[],
+                tags=["archive", "packet"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(direct)
+            memory.store.upsert_capsule(associated)
+            memory.store.add_edge(
+                subject="restore",
+                predicate="requires",
+                object_="sealed packet drill",
+                scope="alpha",
+                source_capsule_id=associated.id,
+                confidence=0.95,
+            )
+
+            result = memory.recall_candidates(
+                "restore drill",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+                candidate_limit=8,
+            )
+
+            selected_ids = [cap["id"] for cap in result.capsules]
+            self.assertIn(associated.id, result.diagnostics["spreading_activation_boosted_capsules"])
+            self.assertLess(selected_ids.index(direct.id), selected_ids.index(associated.id))
+
+    def test_spreading_activation_requires_query_edge_overlap(self) -> None:
+        capsules = [
+            {
+                "id": "cap-1",
+                "kind": "procedure",
+                "status": "stable",
+                "scope": "alpha",
+                "title": "Procedure: unrelated edge",
+                "body": "Procedure body.",
+                "confidence": 0.9,
+                "salience": 0.7,
+                "tags": [],
+                "source_event_ids": [],
+            }
+        ]
+        edges = [
+            {
+                "subject": "unrelated",
+                "predicate": "mentions",
+                "object": "different topic",
+                "scope": "alpha",
+                "source_capsule_id": "cap-1",
+                "confidence": 0.95,
+            }
+        ]
+
+        spreading = apply_spreading_activation(
+            capsules,
+            edges,
+            terms=["restore", "drill"],
+            seed_ids={"cap-1"},
+            supplemented_ids=set(),
+        )
+
+        self.assertFalse(spreading["activation_used"])
+        self.assertEqual(capsules[0]["spreading_activation_score"], 0.0)
 
     def test_espa_axis_profiles_are_bounded_and_explainable(self) -> None:
         query_axes = query_axis_profile("어떻게 위험한 기억 삭제를 복구할까?", ["기억", "삭제", "복구"])
@@ -1032,6 +1202,77 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(matched_plan.as_dict()["diagnostics"]["quality_score"], matched_alt["quality_score"])
             self.assertIn("visible=", matched_plan.to_text())
             self.assertIn("quality=", matched_plan.to_text())
+
+    def test_recall_plan_carries_graph_activation_aggregates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: sealed packet rehearsal",
+                body="Open the sealed packet and rehearse the protected recovery sequence.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.22,
+                source_event_ids=[],
+                tags=["archive", "packet"],
+                status=MemoryStatus.STABLE,
+            )
+            lexical_seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Restore drill overview",
+                body="Restore drill overview records the general exercise and handoff.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.86,
+                source_event_ids=[],
+                tags=["restore", "drill", "overview"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(target)
+            memory.store.upsert_capsule(lexical_seed)
+            for index in range(55):
+                memory.store.upsert_capsule(
+                    Capsule.create(
+                        kind=CapsuleKind.SUMMARY,
+                        title=f"High salience unrelated plan memory {index}",
+                        body="This memory keeps graph-source recall from arriving as a salience supplement.",
+                        scope="alpha",
+                        confidence=0.9,
+                        salience=0.98,
+                        source_event_ids=[],
+                        tags=["unrelated", f"plan-noise-{index}"],
+                        status=MemoryStatus.STABLE,
+                    )
+                )
+            memory.store.add_edge(
+                subject="restore",
+                predicate="requires",
+                object_="sealed packet drill",
+                scope="alpha",
+                source_capsule_id=target.id,
+                confidence=0.95,
+            )
+
+            plan = memory.recall_plan(
+                "restore drill",
+                scope="alpha",
+                budgets=[900],
+                include_hot=False,
+                include_global=False,
+            )
+
+            payload = plan.as_dict()
+            alternative = payload["alternatives"][0]
+            diagnostics = payload["diagnostics"]
+            self.assertTrue(alternative["spreading_activation_used"])
+            self.assertGreater(alternative["graph_activation_edges"], 0)
+            self.assertGreater(alternative["spreading_activation_boosted_count"], 0)
+            self.assertGreater(alternative["spreading_activation_supplemented_count"], 0)
+            self.assertTrue(diagnostics["spreading_activation_used"])
+            self.assertGreater(diagnostics["spreading_activation_boosted_count"], 0)
+            self.assertIn("Graph activation contributed locally", " ".join(payload["rationale"]))
+            self.assertNotIn("sealed packet drill", plan.to_text())
 
     def test_recall_plan_recommends_small_useful_budget_and_cost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -114,6 +114,14 @@ def build_recall_plan(
                 "rendered_capsules": int(diagnostics.get("capsules_rendered_before_budget", 0)),
                 "visible_capsules": int(diagnostics.get("capsules_rendered_after_budget", 0)),
                 "graph_edges": int(diagnostics["graph_edges_considered"]),
+                "graph_activation_edges": int(diagnostics.get("graph_activation_edges_considered", 0)),
+                "spreading_activation_used": bool(diagnostics.get("spreading_activation_used", False)),
+                "spreading_activation_boosted_count": int(
+                    diagnostics.get("spreading_activation_boosted_count", 0)
+                ),
+                "spreading_activation_supplemented_count": int(
+                    diagnostics.get("spreading_activation_supplemented_count", 0)
+                ),
                 "query_term_count": int(diagnostics.get("query_term_count", 0)),
                 "query_terms_visible_count": int(diagnostics.get("query_terms_visible_count", 0)),
                 "visible_section_count": int(diagnostics.get("visible_section_count", 0)),
@@ -238,6 +246,13 @@ def _rationale(
         items.append("Selected pack used salience fallback; treat it as lower-confidence context.")
     elif selected.get("salience_supplement_used"):
         items.append("Selected pack mixed FTS hits with salience supplements to preserve useful context.")
+    if selected.get("spreading_activation_used"):
+        items.append(
+            "Graph activation contributed locally: "
+            f"edges={selected.get('graph_activation_edges', 0)}, "
+            f"boosted={selected.get('spreading_activation_boosted_count', 0)}, "
+            f"supplemented={selected.get('spreading_activation_supplemented_count', 0)}."
+        )
     if include_hot:
         delta = int(selected["estimated_tokens"]) - without_hot_tokens
         items.append(f"Hot memory adds about {max(0, delta)} tokens at this budget.")
@@ -281,6 +296,12 @@ def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
         "query_terms_visible_count": int(selected.get("query_terms_visible_count", 0)),
         "visible_section_count": int(selected.get("visible_section_count", 0)),
         "sections_truncated": int(selected.get("sections_truncated", 0)),
+        "graph_activation_edges": int(selected.get("graph_activation_edges", 0)),
+        "spreading_activation_used": bool(selected.get("spreading_activation_used", False)),
+        "spreading_activation_boosted_count": int(selected.get("spreading_activation_boosted_count", 0)),
+        "spreading_activation_supplemented_count": int(
+            selected.get("spreading_activation_supplemented_count", 0)
+        ),
         "fallback_used": bool(selected.get("fallback_used", False)),
         "low_evidence_fallback_suppressed": bool(selected.get("low_evidence_fallback_suppressed", False)),
         "salience_supplement_used": bool(selected.get("salience_supplement_used", False)),

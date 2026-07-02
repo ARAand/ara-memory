@@ -181,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_provenance_witnesses_capsule ON provenance_witnes
 CREATE INDEX IF NOT EXISTS idx_capsule_redaction_witnesses_capsule ON capsule_redaction_witnesses(capsule_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
+CREATE INDEX IF NOT EXISTS idx_edges_source_capsule_active ON temporal_edges(scope, source_capsule_id, valid_to, confidence, created_at);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -657,6 +658,80 @@ class MemoryStore:
                 )
             )
 
+    def graph_activation_edges(
+        self,
+        terms: Iterable[str],
+        *,
+        seed_capsule_ids: Iterable[str],
+        scope: str,
+        limit: int = 80,
+        include_global: bool = True,
+    ) -> list[sqlite3.Row]:
+        self.init()
+        terms = [t for t in terms if len(t) >= 3]
+        seed_ids = list(dict.fromkeys(str(capsule_id) for capsule_id in seed_capsule_ids if str(capsule_id)))
+        if not terms and not seed_ids:
+            return []
+        scope_filter = "(scope = ? OR scope = 'global')" if include_global else "scope = ?"
+        rows: list[sqlite3.Row] = []
+        seen_edge_ids: set[int] = set()
+
+        def append_rows(query_rows: list[sqlite3.Row]) -> None:
+            for row in query_rows:
+                row_id = int(row["id"])
+                if row_id in seen_edge_ids:
+                    continue
+                rows.append(row)
+                seen_edge_ids.add(row_id)
+                if len(rows) >= limit:
+                    break
+
+        with self.session() as conn:
+            if seed_ids:
+                placeholders = ", ".join("?" for _ in seed_ids)
+                seed_limit = min(limit, max(12, min(48, len(seed_ids) * 4)))
+                append_rows(
+                    list(
+                        conn.execute(
+                            f"""
+                            SELECT *
+                            FROM temporal_edges
+                            WHERE source_capsule_id IN ({placeholders})
+                              AND {scope_filter}
+                              AND valid_to IS NULL
+                              AND source_capsule_id IS NOT NULL
+                            ORDER BY confidence DESC, created_at DESC
+                            LIMIT ?
+                            """,
+                            tuple([*seed_ids, scope, seed_limit]),
+                        )
+                    )
+                )
+            if terms and len(rows) < limit:
+                term_clause = " OR ".join(["subject LIKE ? OR predicate LIKE ? OR object LIKE ?" for _ in terms])
+                args: list[Any] = []
+                for term in terms:
+                    args.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+                args.extend([scope, limit - len(rows)])
+                append_rows(
+                    list(
+                        conn.execute(
+                            f"""
+                            SELECT *
+                            FROM temporal_edges
+                            WHERE ({term_clause})
+                              AND {scope_filter}
+                              AND valid_to IS NULL
+                              AND source_capsule_id IS NOT NULL
+                            ORDER BY confidence DESC, created_at DESC
+                            LIMIT ?
+                            """,
+                            tuple(args),
+                        )
+                    )
+                )
+        return rows
+
     def stats(self) -> dict[str, int]:
         self.init()
         with self.session() as conn:
@@ -1065,6 +1140,44 @@ class MemoryStore:
         self.init()
         with self.session() as conn:
             return conn.execute("SELECT * FROM capsules WHERE id = ?", (capsule_id,)).fetchone()
+
+    def get_capsules_by_ids(
+        self,
+        capsule_ids: list[str],
+        *,
+        scope: str | None = None,
+        include_global: bool = True,
+        active_only: bool = True,
+    ) -> list[sqlite3.Row]:
+        self.init()
+        unique_ids = list(dict.fromkeys(str(capsule_id) for capsule_id in capsule_ids if str(capsule_id)))
+        if not unique_ids:
+            return []
+        rows: list[sqlite3.Row] = []
+        scope_clause = ""
+        if scope:
+            scope_clause = "AND (scope = ? OR scope = 'global')" if include_global and scope != "global" else "AND scope = ?"
+        status_clause = "AND status IN ('candidate', 'stable')" if active_only else ""
+        with self.session() as conn:
+            for chunk in _chunks(unique_ids, SQLITE_IN_CHUNK_SIZE):
+                placeholders = ", ".join("?" for _ in chunk)
+                params: list[Any] = [*chunk]
+                if scope:
+                    params.append(scope)
+                rows.extend(
+                    conn.execute(
+                        f"""
+                        SELECT *
+                        FROM capsules
+                        WHERE id IN ({placeholders})
+                          {status_clause}
+                          {scope_clause}
+                        ORDER BY salience DESC, updated_at DESC
+                        """,
+                        tuple(params),
+                    )
+                )
+        return rows
 
     def get_events(self, event_ids: list[str]) -> list[sqlite3.Row]:
         self.init()

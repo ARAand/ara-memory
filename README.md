@@ -15,8 +15,12 @@ preserved but inactive. Current recall is still partly lexical/salience-heavy,
 but the first projection and ESPA routing layers are in place: FTS indexes a
 search projection, recall/working-memory render a bounded model-facing
 projection, and a deterministic episodic/semantic/procedural/affective router
-adds capped local activation before ranking. The next layers are graph-wide
-spreading activation and reconsolidation frames.
+adds capped local activation before ranking. Recall also runs a bounded one-hop
+spreading activation pass over temporal edges: edge text must overlap the query,
+edge confidence controls a capped boost, graph-source capsules can supplement
+the candidate set after risk filtering, and normal outputs expose only compact
+activation diagnostics rather than graph path text. The next layers are multi-hop
+decay, normalized relation nodes, and reconsolidation frames.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -57,7 +61,7 @@ redacted storage.
 
 | Cost surface | Default behavior | When it costs more |
 | --- | --- | --- |
-| Local planning | `plan-turn`, `govern-turn`, ESPA routing, recall ranking, health, and regression are deterministic local work. | Larger local stores increase SQLite/FTS and filesystem time. |
+| Local planning | `plan-turn`, `govern-turn`, ESPA routing, temporal-edge spreading activation, recall ranking, health, and regression are deterministic local work. | Larger local stores increase SQLite/FTS and filesystem time. |
 | Model input tokens | Only hot memory, working-memory projection, or a bounded recall pack should be sent to Codex. Capsule body text is passed through render projection before display. | Calling `recall-context` with larger budgets or reading raw files manually. |
 | Optional AI APIs | No required API call for storage, recall policy, agency review, or tests. | Explicit advisor/model wrappers, OCR, vision captioning, or external rerankers. |
 | Storage/backup | Raw events, artifacts, SQLite, spool, and verified backups stay local and git-ignored. | Large images/files, worktree snapshots, and retained backup generations. |
@@ -322,6 +326,17 @@ diagnostic-only, and local: it does not call an AI API, does not mutate capsule
 status, and does not turn affective/risk signals into reward. `recall` and
 `recall-candidates` expose `espa_query_axes`, `espa_activation_used`, and
 `espa_axis_coverage` diagnostics.
+After ESPA, recall applies deterministic spreading activation over temporal
+edges. Low-value graph terms are filtered before SQLite lookup, seed-source
+edges get a reserved bucket, duplicate active edges are de-duplicated during
+activation, and every boost requires query overlap in the edge subject,
+predicate, or object. Graph-supplemented capsules render only when they have a
+positive spreading score and an internal activation path; normal pack output does
+not print that path text. `recall` and `recall-candidates` expose
+`graph_activation_terms`,
+`graph_activation_edges_considered`, `spreading_activation_used`,
+`spreading_activation_boosted_count`, `spreading_activation_supplemented_count`,
+and capped boosted/supplemented capsule id lists.
 Queries such as `latest`, `recent`, `current`, `today`, `last`, and Korean
 temporal equivalents trigger recent-context supplementation and recency-aware
 reranking; `recall --diagnostics` exposes `temporal_query` and
@@ -722,12 +737,17 @@ python -m ara_memory recall-regression --manifest examples/recall_regression_man
 ```
 
 Each case checks expected terms against rendered memory evidence, excluding
-query echo, hot memory, matched tags, and graph hints. Forbidden terms still
-scan the full pack. Cases must include visible capsule evidence, so a selected
-capsule that is later trimmed away cannot pass the gate. With a baseline, the
-gate also fails when a previously passing case breaks, token use jumps, or the
-visible capsule set drifts too far; old baselines fall back to selected capsule
-overlap. Regression details also record bounded selected and visible
+query echo, hot memory, matched tags, and the separate graph-hints section.
+Forbidden terms still scan the full pack. Graph activation paths count only when
+they are attached internally to a selected/rendered capsule with positive
+spreading score, but normal regression evidence still comes from rendered
+capsule text rather than raw path text. Expected diagnostics can gate
+`spreading_activation_used`, `graph_activation_edges_considered`, or other
+`spreading_*` fields the same way ESPA diagnostics are gated. Cases must include
+visible capsule evidence, so a selected capsule that is later trimmed away cannot
+pass the gate. With a baseline, the gate also fails when a previously passing
+case breaks, token use jumps, or the visible capsule set drifts too far; old
+baselines fall back to selected capsule overlap. Regression details also record bounded selected and visible
 `source_event_ids`, their full counts, truncation flags, and a digest of the full
 source-event set, so consolidation can replace capsule IDs without failing the
 gate when the same underlying evidence remains visible. Source-event overlap is
@@ -863,8 +883,9 @@ timestamp, and final verification result.
 - Lifecycle tiers separate long-running purpose, identity, and preference
   anchors from working, guarded, evidence, archive, and reject memory so token
   reduction is a policy choice rather than accidental truncation.
-- Retrieval is graph/symbol/BM25 plus deterministic ESPA activation first, with
-  optional embeddings left as a later extension point.
+- Retrieval is graph/symbol/BM25 plus deterministic ESPA and bounded temporal-edge
+  spreading activation first, with optional embeddings left as a later extension
+  point.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/SECURITY.md](docs/SECURITY.md) for the technical model and threat model.
