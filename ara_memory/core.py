@@ -457,6 +457,11 @@ class AraMemory:
 
         return record_memory_impact(self, **kwargs)
 
+    def evaluate_memory_impact(self, **kwargs: Any) -> Any:
+        from ara_memory.working_memory import evaluate_memory_impact
+
+        return evaluate_memory_impact(self, **kwargs)
+
     def govern_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.governor import govern_turn
 

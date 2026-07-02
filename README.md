@@ -294,6 +294,7 @@ python -m ara_memory recall-policy "old deployment archive evidence" --scope pro
 python -m ara_memory recall-policy-impact --scope project --query "old deployment archive evidence" --intent distant-memory --strategy "cold-map first" --action-name cold-map --action-name recall-context --outcome "cold-map found the right archive group" --helped true
 python -m ara_memory recall-policy-eval --scope project
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
+python -m ara_memory working-memory-impact-eval --scope project
 python -m ara_memory agency-review "should I continue this memory architecture work?" --scope project --record
 python -m ara_memory agency-review "delete old memory evidence" --scope project --strict-action-exit
 python -m ara_memory recall "current project memory" --scope project --hot --budget 2500
@@ -429,6 +430,10 @@ the projected capsule ids as `working-memory-impact` rows. This reuses the same
 bounded impact table as manual feedback: helpful/harmful outcomes can nudge
 future cue-matched ranking, unknown remains diagnostic, and no route or memory
 is promoted automatically.
+`working-memory-impact-eval` groups that feedback by capsule and source so weak
+or harmful memory habits become reviewable instead of silently biasing recall.
+It is read-only: it reports pass/watch/fail and recommendations, but does not
+promote, quarantine, decay, or reroute memory by itself.
 `agency-review` is the first self-directed judgment layer above recall policy
 and working memory. It checks a current prompt or proposed action against visible
 purpose memory, Ara identity memory, recall-policy routing, and associative
@@ -457,6 +462,7 @@ python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" r
 python -m ara_memory recall-policy "current task" --scope ara-memory
 python -m ara_memory recall-policy-eval --scope ara-memory
 python -m ara_memory working-memory "current task" --scope ara-memory --active-file ara_memory/working_memory.py
+python -m ara_memory working-memory-impact-eval --scope ara-memory
 python -m ara_memory agency-review "current task" --scope ara-memory --record --strict-action-exit
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" purpose-check --scope ara-memory --repair-hot
 python "$env:USERPROFILE\.codex\skills\ara-memory\scripts\ara_memory_skill.py" identity-check --scope ara-memory --repair-hot

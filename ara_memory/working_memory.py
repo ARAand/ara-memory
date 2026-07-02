@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 import json
 import re
 from dataclasses import dataclass
@@ -101,6 +102,77 @@ class WorkingMemoryReport:
 
     def to_text(self) -> str:
         return _render_working_memory_text(self.cue, self.items, self.budget)
+
+
+@dataclass(slots=True)
+class WorkingMemoryImpactGroup:
+    key: str
+    total: int
+    helpful: int
+    harmful: int
+    unknown: int
+
+    @property
+    def evaluated(self) -> int:
+        return self.helpful + self.harmful
+
+    @property
+    def helpful_rate(self) -> float | None:
+        if self.evaluated == 0:
+            return None
+        return self.helpful / self.evaluated
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "total": self.total,
+            "evaluated": self.evaluated,
+            "helpful": self.helpful,
+            "harmful": self.harmful,
+            "unknown": self.unknown,
+            "helpful_rate": self.helpful_rate,
+        }
+
+
+@dataclass(slots=True)
+class WorkingMemoryImpactEvalReport:
+    scope: str
+    status: str
+    totals: dict[str, Any]
+    capsules: list[WorkingMemoryImpactGroup]
+    sources: list[WorkingMemoryImpactGroup]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "status": self.status,
+            "totals": self.totals,
+            "capsules": [item.as_dict() for item in self.capsules],
+            "sources": [item.as_dict() for item in self.sources],
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Working Memory Impact Eval: {self.scope}",
+            f"status: {self.status}",
+            "totals: "
+            f"impacts={self.totals['impacts']}, evaluated={self.totals['evaluated']}, "
+            f"helpful={self.totals['helpful']}, harmful={self.totals['harmful']}, "
+            f"unknown={self.totals['unknown']}",
+            "## By Capsule",
+        ]
+        lines.extend(_impact_group_lines(self.capsules))
+        lines.append("## By Source")
+        lines.extend(_impact_group_lines(self.sources))
+        lines.append("## Recommendations")
+        lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
 
 
 def _render_working_memory_text(
@@ -237,6 +309,29 @@ def record_memory_impact(
     )
     memory.store.record_working_memory_impact(event)
     return event
+
+
+def evaluate_memory_impact(
+    memory: Any,
+    *,
+    scope: str = "global",
+    include_global: bool = True,
+    limit: int = 500,
+    min_evaluated: int = 3,
+) -> WorkingMemoryImpactEvalReport:
+    rows = _working_memory_impact_rows(memory, scope=scope, include_global=include_global, limit=limit)
+    totals = _impact_totals(rows)
+    capsules = _impact_groups(rows, key="capsule_id")
+    sources = _impact_groups(rows, key="source")
+    status = _impact_status(totals, min_evaluated=min_evaluated)
+    return WorkingMemoryImpactEvalReport(
+        scope=scope,
+        status=status,
+        totals=totals,
+        capsules=capsules,
+        sources=sources,
+        recommendations=_impact_recommendations(totals, capsules, min_evaluated=min_evaluated),
+    )
 
 
 def _build_items(capsules: list[dict[str, Any]], cue: CueFrame) -> list[WorkingMemoryItem]:
@@ -463,3 +558,126 @@ def _file_cue(value: Any) -> str:
     name = path.name or str(path)
     suffix = path.suffix.lower()
     return f"{name}{' ' + suffix if suffix else ''}".strip()
+
+
+def _working_memory_impact_rows(
+    memory: Any,
+    *,
+    scope: str,
+    include_global: bool,
+    limit: int,
+) -> list[dict[str, Any]]:
+    memory.init()
+    if limit <= 0:
+        return []
+    scope_filter = "(w.scope = ? OR w.scope = 'global')" if include_global and scope != "global" else "w.scope = ?"
+    with memory.store.session() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT w.*, e.source
+            FROM working_memory_impacts w
+            LEFT JOIN events e ON e.id = w.event_id
+            WHERE {scope_filter}
+            ORDER BY w.created_at DESC, w.id ASC
+            LIMIT ?
+            """,
+            (scope, limit),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["cue_terms"] = json.loads(item.pop("cue_terms_json"))
+        out.append(item)
+    return out
+
+
+def _impact_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    helpful = sum(1 for row in rows if row.get("helped") == 1)
+    harmful = sum(1 for row in rows if row.get("helped") == 0)
+    unknown = sum(1 for row in rows if row.get("helped") is None)
+    evaluated = helpful + harmful
+    return {
+        "impacts": len(rows),
+        "evaluated": evaluated,
+        "helpful": helpful,
+        "harmful": harmful,
+        "unknown": unknown,
+        "helpful_rate": helpful / evaluated if evaluated else None,
+        "capsules": len({row.get("capsule_id") for row in rows}),
+        "sources": len({row.get("source") for row in rows}),
+    }
+
+
+def _impact_groups(rows: list[dict[str, Any]], *, key: str) -> list[WorkingMemoryImpactGroup]:
+    grouped: dict[str, Counter[str]] = defaultdict(Counter)
+    for row in rows:
+        group_key = str(row.get(key) or "unknown")
+        helped = row.get("helped")
+        if helped == 1:
+            grouped[group_key]["helpful"] += 1
+        elif helped == 0:
+            grouped[group_key]["harmful"] += 1
+        else:
+            grouped[group_key]["unknown"] += 1
+        grouped[group_key]["total"] += 1
+    items = [
+        WorkingMemoryImpactGroup(
+            key=key,
+            total=int(counts["total"]),
+            helpful=int(counts["helpful"]),
+            harmful=int(counts["harmful"]),
+            unknown=int(counts["unknown"]),
+        )
+        for key, counts in grouped.items()
+    ]
+    return sorted(items, key=lambda item: (-item.total, -item.harmful, -item.helpful, item.key))
+
+
+def _impact_status(totals: dict[str, Any], *, min_evaluated: int) -> str:
+    if totals["impacts"] == 0:
+        return "watch"
+    if totals["evaluated"] < min_evaluated:
+        return "watch"
+    if totals["harmful"] > totals["helpful"]:
+        return "fail"
+    return "pass"
+
+
+def _impact_recommendations(
+    totals: dict[str, Any],
+    capsules: list[WorkingMemoryImpactGroup],
+    *,
+    min_evaluated: int,
+) -> list[str]:
+    if totals["impacts"] == 0:
+        return ["Record working-memory-impact after reviewed turns so projection quality becomes auditable."]
+    recommendations: list[str] = []
+    if totals["evaluated"] < min_evaluated:
+        recommendations.append(
+            f"Collect at least {min_evaluated} reviewed working-memory outcomes before trusting habit feedback."
+        )
+    weak_capsules = [
+        item
+        for item in capsules
+        if item.evaluated > 0 and item.harmful >= item.helpful
+    ]
+    for item in weak_capsules[:3]:
+        recommendations.append(
+            f"Review capsule '{item.key}' because helpful={item.helpful}, harmful={item.harmful}."
+        )
+    if not recommendations:
+        recommendations.append("Working-memory impact is bounded ranking evidence only; keep reviewing outcomes.")
+    return recommendations
+
+
+def _impact_group_lines(groups: list[WorkingMemoryImpactGroup]) -> list[str]:
+    if not groups:
+        return ["- None"]
+    lines = []
+    for item in groups[:8]:
+        rate = "n/a" if item.helpful_rate is None else f"{item.helpful_rate:.2f}"
+        lines.append(
+            f"- {item.key}: total={item.total}, evaluated={item.evaluated}, "
+            f"helpful={item.helpful}, harmful={item.harmful}, unknown={item.unknown}, helpful_rate={rate}"
+        )
+    return lines

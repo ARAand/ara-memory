@@ -553,6 +553,16 @@ def main(argv: list[str] | None = None) -> int:
     memory_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
     memory_impact.add_argument("--json", action="store_true")
 
+    memory_impact_eval = sub.add_parser(
+        "working-memory-impact-eval",
+        help="Evaluate recorded working-memory impact outcomes by capsule and source.",
+    )
+    memory_impact_eval.add_argument("--scope", default="global")
+    memory_impact_eval.add_argument("--limit", type=int, default=500)
+    memory_impact_eval.add_argument("--min-evaluated", type=int, default=3)
+    memory_impact_eval.add_argument("--no-global", action="store_true")
+    memory_impact_eval.add_argument("--json", action="store_true")
+
     govern_turn = sub.add_parser(
         "govern-turn",
         help="Plan capture and recall actions for a turn without storing anything.",
@@ -1872,6 +1882,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(payload, ensure_ascii=False))
         return 0
+
+    if args.cmd == "working-memory-impact-eval":
+        result = memory.evaluate_memory_impact(
+            scope=args.scope,
+            include_global=not args.no_global,
+            limit=args.limit,
+            min_evaluated=args.min_evaluated,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "govern-turn":
         payload = _read_json_arg(args.file)

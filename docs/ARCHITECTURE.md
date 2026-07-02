@@ -140,6 +140,13 @@ recall_policy_impact(query, intent, actions, outcome)
   -> produce review recommendations without automatically mutating policy commands,
      hot eligibility, pruning gates, or intent classification
 
+working_memory_impact_eval(scope)
+  -> read working_memory_impacts joined to source events
+  -> group reviewed outcomes by capsule id and source
+  -> report pass/watch/fail for helpful versus harmful cue-matched habits
+  -> recommend review for capsules with harmful >= helpful
+  -> never mutate ranking, memory status, policy routes, or review queues
+
 reconsolidation_review(scope)
   -> review candidate-only reconsolidation witnesses for unchanged evidence capsules
   -> compare the approval rollback witness preview against the approved frame fingerprint
@@ -551,6 +558,10 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
      reviewed. The record may populate working-memory-impact rows for projected
      capsule IDs, but it must not auto-promote memories, mutate policy routing,
      or claim that the projection was useful without an explicit outcome.
+26c. Evaluate working-memory impact as a read-only habit audit. Helpful or
+     harmful projection outcomes may explain future ranking behavior, but the
+     eval command must only report and recommend review; it must not directly
+     change ranking, status, lifecycle tier, or review queue state.
 27. Treat feedback as bounded evidence, not reward maximization: working-memory
     impact rows may nudge ranking only when their cue overlaps the current
     query, and the boost or penalty is capped. Recall-policy-impact rows are

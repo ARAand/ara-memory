@@ -8626,6 +8626,45 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["totals"]["helpful"], 1)
             self.assertEqual(payload["actions"][0]["key"], "cold-map")
 
+    def test_working_memory_impact_eval_cli_output_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="cli projection cue",
+                capsule_ids=["cap_cli"],
+                outcome="helped cli projection",
+                helped=True,
+            )
+
+            evaluation = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "working-memory-impact-eval",
+                    "--scope",
+                    "alpha",
+                    "--min-evaluated",
+                    "1",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(evaluation.returncode, 0, evaluation.stderr)
+            payload = json.loads(evaluation.stdout)
+            self.assertEqual(payload["status"], "pass")
+            self.assertEqual(payload["totals"]["impacts"], 1)
+            self.assertEqual(payload["totals"]["helpful"], 1)
+            self.assertEqual(payload["capsules"][0]["key"], "cap_cli")
+
     def test_recall_policy_impact_cli_requires_explicit_policy_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory_root = Path(tmp) / "memory"
@@ -16424,6 +16463,70 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertEqual([row["capsule_id"] for row in rows], ["cap_a", "cap_b"])
             self.assertEqual(rows[0]["cue_terms"], ["recall", "fallback"])
+
+    def test_working_memory_impact_eval_groups_capsules_and_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy memory cue",
+                capsule_ids=["cap_good"],
+                outcome="helped deploy decision",
+                helped=True,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy memory cue",
+                capsule_ids=["cap_bad"],
+                outcome="hurt deploy decision",
+                helped=False,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy memory cue",
+                capsule_ids=["cap_bad"],
+                outcome="hurt again",
+                helped=False,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="deploy memory cue",
+                capsule_ids=["cap_unknown"],
+                outcome="not reviewed yet",
+                helped=None,
+            )
+
+            report = memory.evaluate_memory_impact(scope="alpha", include_global=False, min_evaluated=2)
+            payload = report.as_dict()
+
+            self.assertEqual(payload["status"], "fail")
+            self.assertEqual(payload["totals"]["impacts"], 4)
+            self.assertEqual(payload["totals"]["evaluated"], 3)
+            self.assertEqual(payload["totals"]["helpful"], 1)
+            self.assertEqual(payload["totals"]["harmful"], 2)
+            self.assertEqual(payload["capsules"][0]["key"], "cap_bad")
+            self.assertIn("Review capsule 'cap_bad'", " ".join(payload["recommendations"]))
+
+    def test_working_memory_impact_eval_warns_without_reviewed_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            empty = memory.evaluate_memory_impact(scope="alpha", include_global=False, min_evaluated=1)
+            self.assertEqual(empty.status, "watch")
+            self.assertIn("Record working-memory-impact", " ".join(empty.recommendations))
+
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="unknown memory cue",
+                capsule_ids=["cap_unknown"],
+                outcome="not reviewed",
+                helped=None,
+            )
+            unknown = memory.evaluate_memory_impact(scope="alpha", include_global=False, min_evaluated=1)
+            self.assertEqual(unknown.status, "watch")
+            self.assertEqual(unknown.totals["evaluated"], 0)
 
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

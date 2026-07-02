@@ -142,7 +142,7 @@
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v23</span></div>
-      <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
+      <div class="metric"><span class="label">헬스</span><span class="value">ara-memory 90 / 100 watch</span></div>
       <div class="metric"><span class="label">로드맵</span><span class="value">ara-memory pass, global fail</span></div>
       <div class="metric"><span class="label">최근 백업</span><span class="value">검증됨</span></div>
       <div class="metric"><span class="label">현재 상태</span><span class="value">원격과 동기화, 워킹트리 clean</span></div>
@@ -161,6 +161,7 @@
         <li>reconsolidation prepare/apply/review, shadow rollback, live rollback 승인 토큰, action witness 계열.</li>
         <li><code>govern-turn</code> now reports a <code>projection_gate</code> for working-memory overlap, next-action coverage, and token budget.</li>
         <li><code>govern-turn --record-working-impact</code> can store reviewed projection outcomes as bounded working-memory impact feedback.</li>
+        <li><code>working-memory-impact-eval</code> audits helpful versus harmful cue-matched memory habits without mutating recall.</li>
       </ul>
     </article>
 
@@ -173,20 +174,22 @@
         <li><code>prepare-live-reconsolidation-action-rollback</code>은 one-use rollback approval token을 만든다.</li>
         <li><code>reconsolidation-action-rollback-approvals</code>는 준비된 rollback approval을 읽기 전용으로 재검사한다.</li>
         <li><code>live-reconsolidation-action-rollback</code>은 prepared token을 소비해 기록된 <code>cool</code> status transition만 되돌린다.</li>
+        <li><code>working-memory-impact-eval</code>은 작업기억 피드백을 capsule/source별로 읽기 전용 평가한다.</li>
       </ul>
     </article>
 
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,583</li>
-        <li>capsules: 3,486</li>
-        <li>relation nodes: 6,525</li>
-        <li>relation edges: 25,346</li>
+        <li>source events: 1,617</li>
+        <li>capsules: 3,556</li>
+        <li>relation nodes: 6,648</li>
+        <li>relation edges: 25,861</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue: open 187</li>
+        <li>review queue: open 0</li>
         <li>distant-memory raw-to-map reduction: 907.6x</li>
-        <li>latest verified backup: <code>.ara-memory\backups\projection-impact-v23.zip</code></li>
+        <li>storage: 355,170,311 bytes, backups: 141,422,956 bytes</li>
+        <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
   </section>
@@ -230,6 +233,11 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
+          <strong>Working-memory impact eval</strong>
+          <p>Completed: working-memory-impact-eval groups feedback by capsule and source, reports pass/watch/fail, and recommends review for harmful memory habits without changing recall state.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
           <strong>rewrite / promote / delete executor</strong>
           <p>현재 live executor는 cool 중심이다. 더 강한 변경 권한은 action별 approval, snapshot, witness, rollback을 분리해서 열어야 한다.</p>
           <span class="badge watch">4-7h</span>
@@ -255,15 +263,15 @@
     <article class="span-4">
       <h2>판단</h2>
       <ul>
-        <li><span class="badge pass">건강함</span> health, doctor, recall regression, backup은 통과 중이다.</li>
+        <li><span class="badge watch">watch</span> ara-memory health는 90/100이고, doctor, recall regression, 최신 backup 검증은 통과 중이다.</li>
         <li><span class="badge pass">프로젝트 pass</span> <code>ara-memory</code> scope의 goal-roadmap과 milestone은 통과한다.</li>
-        <li><span class="badge watch">전체 fail</span> 기본 global roadmap은 아직 목적 연속성, milestone readiness, worker readiness가 섞여 fail로 보인다.</li>
+        <li><span class="badge watch">전체 fail</span> 기본 global health/roadmap은 candidate/stable 비율과 목적 연속성, worker readiness가 섞여 fail로 보인다.</li>
         <li><span class="badge watch">미완성</span> promote/rewrite/delete live executor와 그 rollback은 아직 단계적으로 열어야 한다.</li>
-        <li><span class="badge watch">부채</span> review queue 187건은 정리해야 할 기억 품질 부채다.</li>
+        <li><span class="badge watch">부채</span> candidate/stable 비율 147은 정리해야 할 기억 품질 부채다.</li>
         <li><span class="badge info">방향</span> 지금은 “더 많이 저장”이 아니라 “안전하게 바꾸고 정확히 불러오기”가 병목이다.</li>
       </ul>
       <p class="note">
-        현실적인 잔여 시간은 안전 게이트까지 3-6시간, 강한 executor와 stress test까지 포함하면 12-20시간이다.
+        현실적인 잔여 시간은 최소 운영 가능 게이트까지 3-5시간, 강한 executor와 stress test까지 포함하면 11-18시간이다.
         사람 같은 자연스러운 기억의 1차 골격은 섰지만, 자유롭게 자기 기억을 고치는 단계는 아직 승인과 되돌림 장치가 더 필요하다.
       </p>
     </article>
