@@ -13969,6 +13969,110 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("changed after rollback approval", blocked["recommendations"][0])
             self.assertEqual(memory.store.get_capsule(candidate.id)["status"], MemoryStatus.QUARANTINED.value)
 
+    def test_mutation_preflight_rewrite_is_read_only_and_rollback_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project epsilon rewrite preflight should preserve rollback evidence.",
+                source="test",
+                scope="epsilon",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="old rewrite title",
+                body="Project epsilon rewrite preflight should preserve rollback evidence.",
+                scope="epsilon",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["rewrite", "preflight"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.mutation_preflight(
+                capsule_id=capsule.id,
+                action="rewrite",
+                title="new rewrite title",
+                body="Project epsilon rewrite preflight keeps a rollback projection.",
+                tags=["rewrite", "preflight", "reviewed"],
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            self.assertEqual(report.status, "pass")
+            self.assertEqual(report.before["title"], "old rewrite title")
+            self.assertEqual(report.after["title"], "new rewrite title")
+            self.assertEqual(report.rollback["restore"], report.before)
+            self.assertEqual(
+                memory.store.get_capsule(capsule.id)["title"],
+                "old rewrite title",
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "mutation-preflight",
+                    "--capsule-id",
+                    capsule.id,
+                    "--action",
+                    "rewrite",
+                    "--title",
+                    "cli rewrite title",
+                    "--body",
+                    "Project epsilon CLI rewrite preflight keeps rollback evidence.",
+                    "--tag",
+                    "rewrite",
+                    "--tag",
+                    "cli",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["passed"])
+            self.assertEqual(payload["after"]["title"], "cli rewrite title")
+
+    def test_mutation_preflight_blocks_stable_delete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project zeta stable delete should require stronger approval.",
+                source="test",
+                scope="zeta",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="stable delete candidate",
+                body="Project zeta stable delete should require stronger approval.",
+                scope="zeta",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["delete", "preflight"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.mutation_preflight(capsule_id=capsule.id, action="delete")
+
+            self.assertFalse(report.passed)
+            self.assertEqual(report.status, "fail")
+            self.assertIn("stable memory delete requires", report.blocked_reasons[0])
+            self.assertEqual(report.after["status"], MemoryStatus.REJECTED.value)
+            self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.STABLE.value)
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

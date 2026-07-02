@@ -512,6 +512,14 @@ live_review_rollback(token)
   -> require witness and capsule snapshots have not drifted
   -> compare-and-set capsule status back to witness before_status
   -> write memory_review_rollback_witnesses and consume approval
+
+mutation_preflight(capsule, action)
+  -> read current capsule projection
+  -> build before, after, and rollback snapshots
+  -> run deterministic risk checks on proposed rewrite projection
+  -> map delete to reversible rejected status only
+  -> block stable delete and all physical deletion
+  -> return digest-bound plan without live mutation
 ```
 
 Manual promotion uses the shared deterministic risk gate but remains an

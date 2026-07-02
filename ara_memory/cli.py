@@ -835,6 +835,13 @@ def main(argv: list[str] | None = None) -> int:
     live_review_rollback.add_argument("--approval-token", required=True)
     live_review_rollback.add_argument("--confirm", required=True)
     live_review_rollback.add_argument("--json", action="store_true")
+    mutation_preflight = sub.add_parser("mutation-preflight")
+    mutation_preflight.add_argument("--capsule-id", required=True)
+    mutation_preflight.add_argument("--action", required=True, choices=["rewrite", "delete"])
+    mutation_preflight.add_argument("--title", default=None)
+    mutation_preflight.add_argument("--body", default=None)
+    mutation_preflight.add_argument("--tag", action="append", default=None)
+    mutation_preflight.add_argument("--json", action="store_true")
     review_worker = sub.add_parser("review-worker")
     review_worker.add_argument("--scope", default=None)
     review_worker.add_argument("--limit", type=int, default=25)
@@ -2365,6 +2372,20 @@ def main(argv: list[str] | None = None) -> int:
             for item in result.get("recommendations", []):
                 print(f"- {item}")
         return 0 if result.get("passed") else 1
+
+    if args.cmd == "mutation-preflight":
+        result = memory.mutation_preflight(
+            capsule_id=args.capsule_id,
+            action=args.action,
+            title=args.title,
+            body=args.body,
+            tags=args.tag,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "review-worker":
         result = memory.review_worker(scope=args.scope, limit=args.limit, dry_run=not args.apply)

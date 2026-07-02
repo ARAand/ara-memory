@@ -16,6 +16,7 @@ from ara_memory.hot import HotState, HotStateBuilder
 from ara_memory.maintenance import MaintenanceReport, run_maintenance
 from ara_memory.memory_lifecycle import MemoryLifecycleReport
 from ara_memory.models import Event, EventKind, MemoryStatus
+from ara_memory.mutation_preflight import MutationPreflight
 from ara_memory.privacy import guard_event_payload, privacy_safe_label
 from ara_memory.prune import (
     LivePruneApproval,
@@ -209,6 +210,23 @@ class AraMemory:
 
     def live_review_rollback(self, approval_token: str, *, confirm: str) -> dict[str, Any]:
         return self.store.live_review_rollback(approval_token, confirm=confirm)
+
+    def mutation_preflight(
+        self,
+        *,
+        capsule_id: str,
+        action: str,
+        title: str | None = None,
+        body: str | None = None,
+        tags: list[str] | None = None,
+    ) -> Any:
+        return MutationPreflight(self.store).run(
+            capsule_id=capsule_id,
+            action=action,
+            title=title,
+            body=body,
+            tags=tags,
+        )
 
     def sleep(self, *, scope: str = "global", dry_run: bool = False) -> SleepReport:
         scope = _canonical_scope(scope) or "global"

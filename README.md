@@ -823,6 +823,12 @@ change. To roll back one witnessed status transition, run
 execute `live-review-rollback --approval-token TOKEN --confirm "ROLL BACK REVIEW WITNESS"`.
 The live rollback is one-use, token-gated, and blocks if the target capsule
 changed after approval.
+`mutation-preflight` is the read-only gate for future rewrite/delete executors.
+For rewrites it builds before/after/rollback capsule projections and checks
+deterministic risk without mutating the live store. For delete it only plans a
+reversible soft-delete to `rejected`; physical deletion remains outside this
+gate, and stable memory delete is blocked until a stronger shadow-delete
+approval exists.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,
