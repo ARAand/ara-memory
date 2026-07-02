@@ -1673,6 +1673,19 @@ class MemoryFlowTests(unittest.TestCase):
             )
             memory.store.upsert_capsule(goal)
             memory.store.upsert_capsule(self_memory)
+            memory.store.upsert_capsule(
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="Project memory: old goal evidence",
+                    body="Cold project evidence shares provenance with the active goal.",
+                    scope="alpha",
+                    confidence=0.3,
+                    salience=0.2,
+                    source_event_ids=[event.id],
+                    tags=["cold"],
+                    status=MemoryStatus.SUPERSEDED,
+                )
+            )
             memory.build_hot(scope="alpha", budget=700)
             memory.backup(output=Path(tmp) / "backup.zip")
 
@@ -1696,6 +1709,9 @@ class MemoryFlowTests(unittest.TestCase):
                 },
             )
             self.assertIn("Ara Goal Roadmap", roadmap.to_text())
+            cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
+            self.assertIn("evidence=1", cold.evidence)
+            self.assertIn("top active pin", cold.evidence)
             self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
 
     def test_goal_roadmap_fails_when_semantic_hygiene_fails(self) -> None:
@@ -3775,16 +3791,39 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertAlmostEqual(report.totals["cold_ratio"], 0.75)
             self.assertEqual(report.totals["protected_source_events"], 1)
             self.assertEqual(report.totals["prunable_source_events"], 1)
+            self.assertEqual(report.totals["evidence_capsules"], 1)
+            self.assertEqual(report.totals["archive_capsules"], 1)
+            self.assertEqual(report.totals["reject_capsules"], 1)
+            self.assertEqual(
+                {tier.name: tier.count for tier in report.lifecycle_tiers},
+                {"evidence": 1, "archive": 1, "reject": 1},
+            )
+            self.assertEqual(len(report.active_pins), 1)
+            self.assertEqual(report.active_pins[0].pattern, "active protected decision")
+            self.assertEqual(report.active_pins[0].source_events, 1)
             self.assertIsNone(report.latest_retention_cycle)
             top_group = report.groups[0]
             self.assertEqual(top_group.pattern, "Project memory: Untracked file")
             self.assertEqual(top_group.count, 2)
+            self.assertEqual(top_group.tier_counts, {"archive": 1, "evidence": 1})
+            self.assertEqual(top_group.source_roles, {"active-linked": 1, "cold-only": 1})
+            self.assertEqual(top_group.recommended_action, "mixed-review")
             self.assertEqual(top_group.protected_source_events, 1)
             self.assertEqual(top_group.prunable_source_events, 1)
             self.assertEqual(len(top_group.examples), 1)
+            rejected_group = next(group for group in report.groups if group.status == MemoryStatus.REJECTED.value)
+            self.assertEqual(rejected_group.tier_counts, {"reject": 1})
+            self.assertEqual(rejected_group.recommended_action, "audit-only")
             text = report.to_text()
             self.assertIn("Ara Cold Stewardship", text)
+            self.assertIn("Cold Lifecycle Tiers", text)
+            self.assertIn("Active Provenance Pins", text)
+            self.assertIn("evidence=1, archive=1, reject=1", text)
             self.assertIn("Project memory: Untracked file", text)
+            self.assertTrue(any("Treat 1 cold capsules as evidence" in item for item in report.recommendations))
+            self.assertTrue(any("Archive-tier cold capsules=1" in item for item in report.recommendations))
+            self.assertTrue(any("Reject-tier cold capsules=1" in item for item in report.recommendations))
+            self.assertTrue(any("Review active provenance pins" in item for item in report.recommendations))
 
             cycle_dir = memory.store.root / "archive" / "retention-cycles"
             cycle_dir.mkdir(parents=True, exist_ok=True)
@@ -3921,7 +3960,12 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["scope"], "alpha")
             self.assertEqual(payload["totals"]["cold_capsules"], 1)
+            self.assertEqual(payload["totals"]["archive_capsules"], 1)
+            self.assertEqual(payload["lifecycle_tiers"][1]["name"], "archive")
+            self.assertEqual(payload["lifecycle_tiers"][1]["count"], 1)
+            self.assertEqual(payload["active_pins"], [])
             self.assertEqual(payload["groups"][0]["pattern"], "Project memory: Untracked file")
+            self.assertEqual(payload["groups"][0]["recommended_action"], "export-before-prune")
             self.assertIn("cycle_evidence", payload)
 
     def test_lifecycle_maps_memory_into_purpose_aware_tiers(self) -> None:

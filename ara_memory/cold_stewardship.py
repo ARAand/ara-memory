@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ara_memory.compressors import estimate_tokens
 from ara_memory.models import MemoryStatus
 from ara_memory.retention import COLD_STATUSES
 from ara_memory.storage import MemoryStore
@@ -23,6 +24,9 @@ class ColdGroup:
     kind: str
     pattern: str
     count: int
+    tier_counts: dict[str, int]
+    source_roles: dict[str, int]
+    recommended_action: str
     source_events: int
     protected_source_events: int
     prunable_source_events: int
@@ -36,6 +40,9 @@ class ColdGroup:
             "kind": self.kind,
             "pattern": self.pattern,
             "count": self.count,
+            "tier_counts": self.tier_counts,
+            "source_roles": self.source_roles,
+            "recommended_action": self.recommended_action,
             "source_events": self.source_events,
             "protected_source_events": self.protected_source_events,
             "prunable_source_events": self.prunable_source_events,
@@ -46,11 +53,51 @@ class ColdGroup:
 
 
 @dataclass(slots=True)
+class ColdLifecycleTier:
+    name: str
+    policy: str
+    count: int
+    estimated_tokens: int
+    source_events: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "policy": self.policy,
+            "count": self.count,
+            "estimated_tokens": self.estimated_tokens,
+            "source_events": self.source_events,
+        }
+
+
+@dataclass(slots=True)
+class ActivePinGroup:
+    status: str
+    kind: str
+    pattern: str
+    count: int
+    source_events: int
+    examples: list[dict[str, Any]]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "kind": self.kind,
+            "pattern": self.pattern,
+            "count": self.count,
+            "source_events": self.source_events,
+            "examples": self.examples,
+        }
+
+
+@dataclass(slots=True)
 class ColdStewardshipReport:
     scope: str | None
     status: str
     totals: dict[str, Any]
     groups: list[ColdGroup]
+    lifecycle_tiers: list[ColdLifecycleTier]
+    active_pins: list[ActivePinGroup]
     latest_retention_cycle: dict[str, Any] | None
     cycle_evidence: dict[str, Any]
     recommendations: list[str]
@@ -65,6 +112,8 @@ class ColdStewardshipReport:
             "status": self.status,
             "totals": self.totals,
             "groups": [group.as_dict() for group in self.groups],
+            "lifecycle_tiers": [tier.as_dict() for tier in self.lifecycle_tiers],
+            "active_pins": [pin.as_dict() for pin in self.active_pins],
             "latest_retention_cycle": self.latest_retention_cycle,
             "cycle_evidence": self.cycle_evidence,
             "recommendations": self.recommendations,
@@ -78,7 +127,10 @@ class ColdStewardshipReport:
             f"capsules={self.totals['capsules']}, cold={self.totals['cold_capsules']} "
             f"({self.totals['cold_ratio']:.0%}), "
             f"protected_source_events={self.totals['protected_source_events']}, "
-            f"prunable_source_events={self.totals['prunable_source_events']}"
+            f"prunable_source_events={self.totals['prunable_source_events']}, "
+            f"evidence={self.totals['evidence_capsules']}, "
+            f"archive={self.totals['archive_capsules']}, "
+            f"reject={self.totals['reject_capsules']}"
         )
         if self.latest_retention_cycle:
             cycle = self.latest_retention_cycle
@@ -96,6 +148,23 @@ class ColdStewardshipReport:
                 f"matches_current={self.cycle_evidence.get('matches_current')}, "
                 f"shadow_events_preserved={self.cycle_evidence.get('shadow_events_preserved')}"
             )
+        lines.append("## Cold Lifecycle Tiers")
+        for tier in self.lifecycle_tiers:
+            lines.append(
+                f"- {tier.name}: count={tier.count}, estimated_tokens={tier.estimated_tokens}, "
+                f"source_events={tier.source_events}; {tier.policy}"
+            )
+        lines.append("## Active Provenance Pins")
+        if not self.active_pins:
+            lines.append("- None")
+        for pin in self.active_pins:
+            pattern = pin.pattern.rstrip(":")
+            lines.append(
+                f"- {pin.status}/{pin.kind}/{pattern}: "
+                f"count={pin.count}, source_events={pin.source_events}"
+            )
+            for example in pin.examples:
+                lines.append(f"  example: {example['id']} {example['title']}")
         lines.append("## Top Cold Groups")
         if not self.groups:
             lines.append("- None")
@@ -103,11 +172,15 @@ class ColdStewardshipReport:
             pattern = group.pattern.rstrip(":")
             lines.append(
                 f"- {group.status}/{group.kind}/{pattern}: "
-                f"count={group.count}, protected_events={group.protected_source_events}, "
+                f"count={group.count}, action={group.recommended_action}, "
+                f"tiers={_format_counts(group.tier_counts)}, "
+                f"protected_events={group.protected_source_events}, "
                 f"prunable_events={group.prunable_source_events}"
             )
             for example in group.examples:
-                lines.append(f"  example: {example['id']} {example['title']}")
+                lines.append(
+                    f"  example: {example['id']} [{example['tier']}/{example['source_role']}] {example['title']}"
+                )
         lines.append("## Recommendations")
         for item in self.recommendations:
             lines.append(f"- {item}")
@@ -129,9 +202,17 @@ class ColdStewardshipAnalyzer:
         self.store.init()
         rows = _cold_rows(self.store, scope=scope)
         active_event_ids = _active_event_ids(self.store, scope=scope)
+        rows = [_annotate_cold_row(row, active_event_ids=active_event_ids) for row in rows]
         cold_source_events = sorted({event_id for row in rows for event_id in row["source_event_ids"]})
         protected_source_events = sorted(set(cold_source_events).intersection(active_event_ids))
         prunable_source_events = sorted(set(cold_source_events) - set(protected_source_events))
+        lifecycle_tiers = _lifecycle_tiers(rows)
+        active_pins = _active_pin_groups(
+            _active_rows(self.store, scope=scope),
+            cold_source_events=set(cold_source_events),
+            group_limit=group_limit,
+            examples_per_group=examples_per_group,
+        )
         totals = _totals(
             self.store,
             scope=scope,
@@ -139,6 +220,7 @@ class ColdStewardshipAnalyzer:
             cold_source_events=cold_source_events,
             protected_source_events=protected_source_events,
             prunable_source_events=prunable_source_events,
+            lifecycle_tiers=lifecycle_tiers,
         )
         groups = _groups(
             rows,
@@ -158,9 +240,11 @@ class ColdStewardshipAnalyzer:
             status=status,
             totals=totals,
             groups=groups,
+            lifecycle_tiers=lifecycle_tiers,
+            active_pins=active_pins,
             latest_retention_cycle=latest_cycle,
             cycle_evidence=cycle_evidence,
-            recommendations=_recommend(totals, groups, latest_cycle, cycle_evidence),
+            recommendations=_recommend(totals, groups, lifecycle_tiers, active_pins, latest_cycle, cycle_evidence),
         )
 
 
@@ -174,7 +258,7 @@ def _cold_rows(store: MemoryStore, *, scope: str | None) -> list[dict[str, Any]]
     with store.session() as conn:
         rows = conn.execute(
             f"""
-            SELECT id, kind, status, title, updated_at, source_event_ids_json
+            SELECT id, kind, status, title, body, updated_at, source_event_ids_json
             FROM capsules
             WHERE {' AND '.join(clauses)}
             ORDER BY updated_at ASC, id ASC
@@ -190,13 +274,62 @@ def _row_to_cold(row: Any) -> dict[str, Any]:
         "kind": row["kind"],
         "status": row["status"],
         "title": row["title"],
+        "body": row["body"],
         "updated_at": row["updated_at"],
         "source_event_ids": json.loads(row["source_event_ids_json"]),
     }
 
 
+def _annotate_cold_row(row: dict[str, Any], *, active_event_ids: set[str]) -> dict[str, Any]:
+    source_ids = set(row["source_event_ids"])
+    has_active_provenance = bool(source_ids.intersection(active_event_ids))
+    annotated = dict(row)
+    annotated["tier"] = _cold_tier(str(row["status"]), has_active_provenance=has_active_provenance)
+    annotated["source_role"] = "active-linked" if has_active_provenance else "cold-only"
+    annotated["estimated_tokens"] = estimate_tokens(f"{row['title']}\n{row.get('body') or ''}")
+    return annotated
+
+
+def _cold_tier(status: str, *, has_active_provenance: bool) -> str:
+    if status in {MemoryStatus.REJECTED.value, MemoryStatus.QUARANTINED.value}:
+        return "reject"
+    if status == MemoryStatus.SUPERSEDED.value and has_active_provenance:
+        return "evidence"
+    return "archive"
+
+
 def _active_event_ids(store: MemoryStore, *, scope: str | None) -> set[str]:
     return store.source_event_ids_for_statuses(ACTIVE_STATUSES, scope=scope)
+
+
+def _active_rows(store: MemoryStore, *, scope: str | None) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in ACTIVE_STATUSES)
+    clauses = [f"status IN ({placeholders})"]
+    args: list[Any] = [*sorted(ACTIVE_STATUSES)]
+    if scope:
+        clauses.append("scope = ?")
+        args.append(scope)
+    with store.session() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, kind, status, title, updated_at, source_event_ids_json
+            FROM capsules
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, id ASC
+            """,
+            args,
+        )
+        return [
+            {
+                "id": row["id"],
+                "kind": row["kind"],
+                "status": row["status"],
+                "title": row["title"],
+                "updated_at": row["updated_at"],
+                "source_event_ids": json.loads(row["source_event_ids_json"]),
+            }
+            for row in rows
+        ]
 
 
 def _totals(
@@ -207,6 +340,7 @@ def _totals(
     cold_source_events: list[str],
     protected_source_events: list[str],
     prunable_source_events: list[str],
+    lifecycle_tiers: list[ColdLifecycleTier],
 ) -> dict[str, Any]:
     with store.session() as conn:
         if scope:
@@ -225,6 +359,12 @@ def _totals(
         "protected_source_events": len(protected_source_events),
         "prunable_source_events": len(prunable_source_events),
     }
+    for tier in lifecycle_tiers:
+        totals[f"{tier.name}_capsules"] = tier.count
+        totals[f"{tier.name}_tokens"] = tier.estimated_tokens
+    for tier_name in COLD_TIER_POLICIES:
+        totals.setdefault(f"{tier_name}_capsules", 0)
+        totals.setdefault(f"{tier_name}_tokens", 0)
     totals.update(store.storage_breakdown())
     return totals
 
@@ -256,8 +396,16 @@ def _groups(
         protected = sorted(source_event_ids.intersection(active_event_ids))
         prunable = sorted(source_event_ids - set(protected))
         updated = [row["updated_at"] for row in group_rows]
+        tier_counts = _count_values(group_rows, "tier")
+        source_roles = _count_values(group_rows, "source_role")
         examples = [
-            {"id": row["id"], "title": row["title"], "updated_at": row["updated_at"]}
+            {
+                "id": row["id"],
+                "title": row["title"],
+                "updated_at": row["updated_at"],
+                "tier": row["tier"],
+                "source_role": row["source_role"],
+            }
             for row in group_rows[: max(0, examples_per_group)]
         ]
         groups.append(
@@ -266,6 +414,9 @@ def _groups(
                 kind=kind,
                 pattern=pattern,
                 count=len(group_rows),
+                tier_counts=tier_counts,
+                source_roles=source_roles,
+                recommended_action=_group_action(tier_counts),
                 source_events=len(source_event_ids),
                 protected_source_events=len(protected),
                 prunable_source_events=len(prunable),
@@ -287,6 +438,93 @@ def _groups(
     )[: max(0, group_limit)]
 
 
+COLD_TIER_POLICIES = {
+    "evidence": "cold provenance linked to active memory; preserve source events and inspect before pruning",
+    "archive": "cold-only provenance; export and verify before any destructive cleanup",
+    "reject": "rejected or quarantined memory; keep as audit/safety evidence until explicitly reviewed",
+}
+
+
+def _lifecycle_tiers(rows: list[dict[str, Any]]) -> list[ColdLifecycleTier]:
+    tiers: list[ColdLifecycleTier] = []
+    for name, policy in COLD_TIER_POLICIES.items():
+        tier_rows = [row for row in rows if row["tier"] == name]
+        source_events = {event_id for row in tier_rows for event_id in row["source_event_ids"]}
+        tiers.append(
+            ColdLifecycleTier(
+                name=name,
+                policy=policy,
+                count=len(tier_rows),
+                estimated_tokens=sum(int(row["estimated_tokens"]) for row in tier_rows),
+                source_events=len(source_events),
+            )
+        )
+    return tiers
+
+
+def _active_pin_groups(
+    rows: list[dict[str, Any]],
+    *,
+    cold_source_events: set[str],
+    group_limit: int,
+    examples_per_group: int,
+) -> list[ActivePinGroup]:
+    buckets: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        pinned = sorted(set(row["source_event_ids"]).intersection(cold_source_events))
+        if not pinned:
+            continue
+        key = (row["status"], row["kind"], _title_pattern(row["title"]))
+        bucket = buckets.setdefault(key, {"rows": [], "source_event_ids": set()})
+        bucket["rows"].append(row)
+        bucket["source_event_ids"].update(pinned)
+
+    groups: list[ActivePinGroup] = []
+    for (status, kind, pattern), bucket in buckets.items():
+        group_rows = bucket["rows"]
+        examples = [
+            {"id": row["id"], "title": row["title"], "updated_at": row["updated_at"]}
+            for row in group_rows[: max(0, examples_per_group)]
+        ]
+        groups.append(
+            ActivePinGroup(
+                status=status,
+                kind=kind,
+                pattern=pattern,
+                count=len(group_rows),
+                source_events=len(bucket["source_event_ids"]),
+                examples=examples,
+            )
+        )
+    return sorted(
+        groups,
+        key=lambda group: (-group.source_events, -group.count, group.status, group.kind, group.pattern),
+    )[: max(0, group_limit)]
+
+
+def _count_values(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = str(row[field])
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _group_action(tier_counts: dict[str, int]) -> str:
+    non_zero = {tier for tier, count in tier_counts.items() if count}
+    if len(non_zero) > 1:
+        return "mixed-review"
+    if "evidence" in non_zero:
+        return "preserve-provenance"
+    if "reject" in non_zero:
+        return "audit-only"
+    return "export-before-prune"
+
+
+def _format_counts(counts: dict[str, int]) -> str:
+    return ",".join(f"{key}={value}" for key, value in counts.items()) or "none"
+
+
 def _title_pattern(title: str) -> str:
     compact = " ".join(str(title).split())
     known_prefixes = (
@@ -299,6 +537,8 @@ def _title_pattern(title: str) -> str:
         "Goal memory:",
         "Self memory:",
         "Consolidated session episode narrative",
+        "Consolidated file artifact episode evidence",
+        "Consolidated command episode outcomes",
         "Latest artifact memory:",
         "Command:",
         "Git status for",
@@ -418,6 +658,8 @@ def _status(
 def _recommend(
     totals: dict[str, Any],
     groups: list[ColdGroup],
+    lifecycle_tiers: list[ColdLifecycleTier],
+    active_pins: list[ActivePinGroup],
     latest_cycle: dict[str, Any] | None,
     cycle_evidence: dict[str, Any],
 ) -> list[str]:
@@ -429,7 +671,27 @@ def _recommend(
         pattern = top.pattern.rstrip(":")
         recommendations.append(
             "Review top cold group before pruning: "
-            f"{top.status}/{top.kind}/{pattern} has {top.count} capsules."
+            f"{top.status}/{top.kind}/{pattern} has {top.count} capsules "
+            f"and action={top.recommended_action}."
+        )
+    tier_counts = {tier.name: tier.count for tier in lifecycle_tiers}
+    if tier_counts.get("evidence", 0):
+        recommendations.append(
+            f"Treat {tier_counts['evidence']} cold capsules as evidence because active memories still share provenance."
+        )
+    if tier_counts.get("archive", 0):
+        recommendations.append(
+            f"Archive-tier cold capsules={tier_counts['archive']}; export and verify them before any destructive cleanup."
+        )
+    if tier_counts.get("reject", 0):
+        recommendations.append(
+            f"Reject-tier cold capsules={tier_counts['reject']}; keep as audit evidence until reviewed."
+        )
+    if active_pins:
+        top_pin = active_pins[0]
+        recommendations.append(
+            "Review active provenance pins before expecting cold pressure to fall: "
+            f"{top_pin.status}/{top_pin.kind}/{top_pin.pattern.rstrip(':')} pins {top_pin.source_events} source events."
         )
     if totals["protected_source_events"]:
         recommendations.append(

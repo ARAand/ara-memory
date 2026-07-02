@@ -381,8 +381,13 @@ deterministic, so it can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event
-preservation in shadow-prune. High cold pressure can pass stewardship only when
-that evidence is current; otherwise it remains a watch item.
+preservation in shadow-prune. It also classifies cold capsules into
+`evidence`, `archive`, and `reject` tiers so operators can see whether a cold
+group should preserve active-linked provenance, be exported before pruning, or
+stay as audit-only safety evidence. Its active provenance pin report shows which
+candidate or stable memories are keeping cold source events protected. High cold
+pressure can pass stewardship only when that evidence is current; otherwise it
+remains a watch item.
 `lifecycle` classifies every selected capsule into `core`, `working`,
 `guarded`, `evidence`, `archive`, or `reject` tiers. This is the deterministic
 policy layer between purpose and storage: hot memory should come from reviewed

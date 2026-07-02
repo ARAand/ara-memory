@@ -166,8 +166,18 @@ def _cold_evidence(health: Any, cold_stewardship: Any) -> str:
     parts.append(
         "cold stewardship "
         f"protected_source_events={cold_stewardship.totals['protected_source_events']}, "
-        f"prunable_source_events={cold_stewardship.totals['prunable_source_events']}"
+        f"prunable_source_events={cold_stewardship.totals['prunable_source_events']}, "
+        f"evidence={cold_stewardship.totals.get('evidence_capsules', 0)}, "
+        f"archive={cold_stewardship.totals.get('archive_capsules', 0)}, "
+        f"reject={cold_stewardship.totals.get('reject_capsules', 0)}"
     )
+    if getattr(cold_stewardship, "active_pins", None):
+        top_pin = cold_stewardship.active_pins[0]
+        parts.append(
+            "top active pin "
+            f"{top_pin.status}/{top_pin.kind}/{top_pin.pattern.rstrip(':')} "
+            f"source_events={top_pin.source_events}"
+        )
     if retention:
         parts.append(retention.detail)
     return "; ".join(parts) if parts else "no cold pressure signal"
