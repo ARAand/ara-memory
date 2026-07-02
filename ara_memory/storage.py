@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -426,6 +426,30 @@ CREATE TABLE IF NOT EXISTS reconsolidation_action_witnesses (
 CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_witnesses_scope
 ON reconsolidation_action_witnesses(scope, action, created_at);
 
+CREATE TABLE IF NOT EXISTS reconsolidation_action_rollback_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  backup_path TEXT NOT NULL,
+  action_witness_id TEXT NOT NULL,
+  action_approval_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  shadow_json TEXT NOT NULL,
+  backup_identity_json TEXT NOT NULL,
+  capsule_snapshot_json TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  FOREIGN KEY(action_witness_id) REFERENCES reconsolidation_action_witnesses(id),
+  FOREIGN KEY(action_approval_id) REFERENCES reconsolidation_action_approvals(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_rollback_approvals_status
+ON reconsolidation_action_rollback_approvals(scope, action, status, expires_at);
+
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action TEXT NOT NULL,
@@ -591,6 +615,8 @@ class MemoryStore:
                 _ensure_reconsolidation_action_v20_tables(conn)
             if old_version < 21:
                 _ensure_reconsolidation_action_witness_v21_tables(conn)
+            if old_version < 22:
+                _ensure_reconsolidation_action_rollback_v22_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -2056,6 +2082,36 @@ def _ensure_reconsolidation_action_witness_v21_tables(conn: sqlite3.Connection) 
 
         CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_witnesses_scope
         ON reconsolidation_action_witnesses(scope, action, created_at);
+        """
+    )
+
+
+def _ensure_reconsolidation_action_rollback_v22_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reconsolidation_action_rollback_approvals (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          backup_path TEXT NOT NULL,
+          action_witness_id TEXT NOT NULL,
+          action_approval_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          shadow_json TEXT NOT NULL,
+          backup_identity_json TEXT NOT NULL,
+          capsule_snapshot_json TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          used_at TEXT,
+          FOREIGN KEY(action_witness_id) REFERENCES reconsolidation_action_witnesses(id),
+          FOREIGN KEY(action_approval_id) REFERENCES reconsolidation_action_approvals(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reconsolidation_action_rollback_approvals_status
+        ON reconsolidation_action_rollback_approvals(scope, action, status, expires_at);
         """
     )
 

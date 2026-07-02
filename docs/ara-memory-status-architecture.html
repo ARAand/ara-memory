@@ -130,13 +130,14 @@
       <p class="lead">
         현재 시스템은 26시간 이상 제작 중인 장기 기억 저장소다. 목표는 원문 전체를 매번 다시 읽는 구조가 아니라,
         목적, 정체성, 결정, 실패, 작업 맥락, 망각 경계를 분리하고 필요한 맥락만 작게 불러오는 자연스러운 기억 구조다.
-        이번 단계에서는 live rollback gate 위에 exception witness를 붙여, 의도된 증거 변화와 위험한 drift를 구분할 수 있게 했다.
+        이번 단계에서는 action witness shadow rollback 위에 approval-only prepare gate를 붙여,
+        실제 live action rollback을 열기 전에 되돌림 가능성과 현재 witness 무결성을 함께 증명하게 했다.
       </p>
     </section>
     <aside class="panel meta">
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v19</span></div>
-      <div class="metric"><span class="label">최근 완료</span><span class="value">action witness shadow rollback</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v22</span></div>
+      <div class="metric"><span class="label">최근 완료</span><span class="value">action rollback prepare gate</span></div>
       <div class="metric"><span class="label">상태</span><span class="value">tests pass, roadmap pass</span></div>
     </aside>
   </header>
@@ -157,11 +158,11 @@
     <article class="panel span-4">
       <h2>이번 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>을 19로 올리고 <code>reconsolidation_exception_witnesses</code>를 추가했다.</li>
-        <li><code>reconsolidation-exception-witness</code>가 witness id, capsule id, field, reason, before/after digest를 저장한다.</li>
-        <li>review와 rollback은 기록된 field와 정확히 같은 digest transition만 허용한다.</li>
-        <li>다른 edit이나 두 번째 drift는 계속 차단된다.</li>
-        <li><code>goal-roadmap</code>은 exception witness gate를 별도 항목으로 표시한다.</li>
+        <li><code>SCHEMA_VERSION</code>을 22로 올리고 <code>reconsolidation_action_rollback_approvals</code>를 추가했다.</li>
+        <li><code>prepare-live-reconsolidation-action-rollback</code>은 action witness 하나에 대한 짧은 one-use approval record만 저장한다.</li>
+        <li>준비 단계는 shadow rollback, live witness review, backup identity, capsule snapshot을 모두 다시 확인한다.</li>
+        <li>현재 지원되는 action rollback policy는 <code>cool</code>의 <code>superseded -> candidate|stable</code> 복구 증거뿐이다.</li>
+        <li>live action rollback executor는 아직 닫혀 있다.</li>
       </ul>
     </article>
 
@@ -172,6 +173,7 @@
         <li>strong preflight는 promote/rewrite/delete/cool을 action gate로 분리하고, design_ready와 live_authorized를 별도로 보고한다.</li>
         <li>prepare-live-reconsolidation-action은 action 하나에 대한 짧은 one-use approval record만 저장한다.</li>
         <li>live-reconsolidation-cool은 첫 live executor로 열렸지만, core anchor를 차단하고 active capsule 하나를 superseded로 낮추는 것만 허용한다.</li>
+        <li>prepare-live-reconsolidation-action-rollback은 action rollback token을 저장하지만, 그 토큰을 소비하는 live executor는 아직 없다.</li>
         <li>rollback은 live gate까지 열렸지만, 범위는 witness 하나의 candidate frame rejection으로 제한된다.</li>
         <li>exception witness는 설명 장치일 뿐 권한 상승 장치가 아니다.</li>
         <li>semantic hygiene false failure는 재분류했고 milestone readiness는 pass다.</li>
@@ -236,8 +238,8 @@
         </div>
         <div class="row">
           <strong>strong action gate</strong>
-          <p>진행: promote/rewrite/delete/cool capability matrix, action approval record, live cool executor, live action witness review, action witness shadow rollback을 추가했다. 남음: rewrite/promote/delete executor와 live action rollback은 아직 닫혀 있다.</p>
-          <span class="badge watch">3-6h</span>
+          <p>진행: promote/rewrite/delete/cool capability matrix, action approval record, live cool executor, live action witness review, action witness shadow rollback, action rollback prepare gate를 추가했다. 남음: rewrite/promote/delete executor와 live action rollback execution은 아직 닫혀 있다.</p>
+          <span class="badge watch">3-5h</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
@@ -260,7 +262,7 @@
   </section>
 
   <footer>
-    Updated for schema v21 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, strong action gate matrix, action approval records, live cool action witnesses, live action witness review, and action witness shadow rollback.
+    Updated for schema v22 reconsolidation rollback review queue, worker recording, shadow rollback, live rollback gate, exception witness gate, semantic hygiene, rollback witness backfill, roadmap pass, strong action gate matrix, action approval records, live cool action witnesses, live action witness review, action witness shadow rollback, and action rollback prepare gate.
     Open this file locally: <code>docs/ara-memory-status-architecture.html</code>
   </footer>
 </main>

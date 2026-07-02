@@ -187,6 +187,13 @@ reconsolidation_action_shadow_rollback(backup, scope, action, witness_id)
   -> run doctor after rollback and leave the live memory store unchanged
   -> provide rollback evidence, not live rollback authorization
 
+prepare_live_reconsolidation_action_rollback(backup, action_witness_id)
+  -> rerun action shadow rollback for exactly one witness and require it to pass
+  -> recheck the live action witness review and backup identity after the shadow proof
+  -> store a short-lived one-use approval token plus the frozen capsule snapshot
+  -> never mutate live capsules and never consume the token itself
+  -> leave live action rollback execution closed until a future compare-and-set witness writer exists
+
 working_memory(prompt, scope, files, errors)
   -> cue frame from prompt, active files, command errors, constraints, temporal hints
   -> associative recall_candidates over hot memory plus a bounded cold pack

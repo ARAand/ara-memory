@@ -3501,6 +3501,28 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(shadow_rollback.items[0].before_status, MemoryStatus.SUPERSEDED.value)
             self.assertEqual(shadow_rollback.items[0].after_status, MemoryStatus.STABLE.value)
             self.assertEqual(memory.store.get_capsule(target.id)["status"], MemoryStatus.SUPERSEDED.value)
+            live_rollback_approval = memory.prepare_live_reconsolidation_action_rollback(
+                backup_path=rollback_backup.path,
+                scope="alpha",
+                action="cool",
+                witness_id=result.action_witness_id or "",
+                include_global=False,
+            )
+            self.assertTrue(live_rollback_approval.token)
+            self.assertEqual(live_rollback_approval.shadow.reviewed, 1)
+            self.assertEqual(live_rollback_approval.shadow.rolled_back, 1)
+            self.assertEqual(memory.store.get_capsule(target.id)["status"], MemoryStatus.SUPERSEDED.value)
+            with memory.store.session() as conn:
+                action_rb_approval = conn.execute(
+                    "SELECT * FROM reconsolidation_action_rollback_approvals WHERE id = ?",
+                    (live_rollback_approval.approval_id,),
+                ).fetchone()
+            self.assertIsNotNone(action_rb_approval)
+            self.assertEqual(action_rb_approval["status"], "prepared")
+            self.assertEqual(action_rb_approval["action"], "cool")
+            self.assertEqual(action_rb_approval["action_witness_id"], result.action_witness_id)
+            self.assertEqual(action_rb_approval["capsule_id"], target.id)
+            self.assertNotEqual(action_rb_approval["token_hash"], live_rollback_approval.token)
 
             with memory.store.session() as conn:
                 conn.execute("UPDATE capsules SET body = body || ? WHERE id = ?", ("\nunreviewed drift", target.id))

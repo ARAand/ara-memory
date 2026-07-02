@@ -378,6 +378,26 @@ def main(argv: list[str] | None = None) -> int:
     recon_action_shadow_rollback.add_argument("--hot-budget", type=int, default=900)
     recon_action_shadow_rollback.add_argument("--no-global", action="store_true")
     recon_action_shadow_rollback.add_argument("--json", action="store_true")
+    prepare_live_recon_action_rollback = sub.add_parser(
+        "prepare-live-reconsolidation-action-rollback",
+        help=(
+            "Prepare a short-lived one-use approval record for future live rollback "
+            "of one reviewed reconsolidation action witness without mutating live memory."
+        ),
+    )
+    prepare_live_recon_action_rollback.add_argument("--backup", type=Path, required=True)
+    prepare_live_recon_action_rollback.add_argument("--witness-id", required=True)
+    prepare_live_recon_action_rollback.add_argument("--scope", default=None)
+    prepare_live_recon_action_rollback.add_argument("--action", choices=STRONG_RECONSOLIDATION_ACTIONS, default="cool")
+    prepare_live_recon_action_rollback.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_live_recon_action_rollback.add_argument(
+        "--doctor-query",
+        default="current memory state after reconsolidation action rollback",
+    )
+    prepare_live_recon_action_rollback.add_argument("--recall-budget", type=int, default=1200)
+    prepare_live_recon_action_rollback.add_argument("--hot-budget", type=int, default=900)
+    prepare_live_recon_action_rollback.add_argument("--no-global", action="store_true")
+    prepare_live_recon_action_rollback.add_argument("--json", action="store_true")
     reconsolidation_shadow_rollback = sub.add_parser(
         "reconsolidation-shadow-rollback",
         help="Restore a backup into a temporary shadow store and prove reconsolidation candidate rollback without touching live memory.",
@@ -1593,6 +1613,28 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0 if result.passed else 1
+
+    if args.cmd == "prepare-live-reconsolidation-action-rollback":
+        try:
+            result = memory.prepare_live_reconsolidation_action_rollback(
+                backup_path=args.backup,
+                witness_id=args.witness_id,
+                scope=args.scope,
+                action=args.action,
+                ttl_minutes=args.ttl_minutes,
+                doctor_query=args.doctor_query,
+                recall_budget=args.recall_budget,
+                hot_budget=args.hot_budget,
+                include_global=not args.no_global,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0
 
     if args.cmd == "reconsolidation-shadow-rollback":
         result = memory.shadow_reconsolidation_rollback(

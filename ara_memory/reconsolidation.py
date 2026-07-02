@@ -767,6 +767,10 @@ class ReconsolidationActionWitnessItem:
     field_transitions: dict[str, dict[str, Any]]
     warnings: list[str]
 
+    @property
+    def passed(self) -> bool:
+        return self.status == "pass"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "action_witness_id": self.action_witness_id,
@@ -922,6 +926,52 @@ class ReconsolidationActionShadowRollbackReport:
             lines.append("## Recommendations")
             lines.extend(f"- {item}" for item in self.recommendations)
         return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class ReconsolidationActionLiveRollbackApproval:
+    approval_id: str
+    token: str
+    expires_at: str
+    shadow: ReconsolidationActionShadowRollbackReport
+
+    def as_dict(self) -> dict[str, Any]:
+        item = self.shadow.items[0] if self.shadow.items else None
+        return {
+            "approval_id": self.approval_id,
+            "token": self.token,
+            "expires_at": self.expires_at,
+            "scope": self.shadow.scope,
+            "action": self.shadow.action,
+            "action_witness_id": item.action_witness_id if item else None,
+            "action_approval_id": item.action_approval_id if item else None,
+            "capsule_id": item.capsule_id if item else None,
+            "shadow": self.shadow.as_dict(),
+            "safety": [
+                "Approval is short-lived and one-use, but no live action rollback executor consumes it yet.",
+                "Prepare mutates only the approval table; it does not change live memory capsules.",
+                "The approval is limited to one reviewed action witness and one verified backup identity.",
+                "Future live execution must reverify the backup, recheck witness invariants, compare-and-set the target state, and record a rollback witness.",
+            ],
+        }
+
+    def to_text(self) -> str:
+        item = self.shadow.items[0] if self.shadow.items else None
+        return "\n".join(
+            [
+                "# Ara Reconsolidation Action Live Rollback Prepare",
+                f"approval_id: {self.approval_id}",
+                f"expires_at: {self.expires_at}",
+                f"approval_token: {self.token}",
+                f"action: {item.action if item else self.shadow.action or 'none'}",
+                f"action_witness_id: {item.action_witness_id if item else 'none'}",
+                f"capsule_id: {item.capsule_id if item else 'none'}",
+                "## Safety",
+                "- Action witness shadow rollback already passed on a verified restored backup.",
+                "- This command only prepares a rollback approval record.",
+                "- Live action rollback execution remains closed.",
+            ]
+        )
 
 
 def build_reconsolidation_frame(
@@ -2198,6 +2248,109 @@ def shadow_reconsolidation_action_rollback(
             doctor=doctor_payload,
             recommendations=recommendations,
         )
+
+
+def prepare_live_reconsolidation_action_rollback(
+    memory: Any,
+    *,
+    backup_path: Path,
+    witness_id: str,
+    scope: str | None = None,
+    action: str | None = "cool",
+    ttl_minutes: int = 30,
+    doctor_query: str = "current memory state after reconsolidation action rollback",
+    recall_budget: int = 1200,
+    hot_budget: int = 900,
+    include_global: bool = True,
+) -> ReconsolidationActionLiveRollbackApproval:
+    clean_witness_id = witness_id.strip()
+    if not clean_witness_id:
+        raise ValueError("witness_id is required for live action rollback approval.")
+    if action is not None and action not in STRONG_RECONSOLIDATION_ACTIONS:
+        raise ValueError(f"Unsupported reconsolidation action: {action}")
+    memory.store.init()
+    backup_path = backup_path.resolve()
+    backup_identity_before = _file_identity(backup_path)
+    shadow = shadow_reconsolidation_action_rollback(
+        memory,
+        backup_path=backup_path,
+        scope=scope,
+        action=action,
+        witness_id=clean_witness_id,
+        limit=1,
+        doctor_query=doctor_query,
+        recall_budget=recall_budget,
+        hot_budget=hot_budget,
+        include_global=include_global,
+    )
+    if not shadow.passed or len(shadow.items) != 1:
+        raise ValueError(
+            "Cannot prepare live action rollback because shadow action rollback did not pass for exactly one witness."
+        )
+    item = shadow.items[0]
+    if item.action != "cool":
+        raise ValueError("Cannot prepare live action rollback because only cool action rollback is implemented.")
+    backup_identity_after = _file_identity(backup_path)
+    if backup_identity_before != backup_identity_after:
+        raise ValueError("Cannot prepare live action rollback because backup changed during shadow rollback.")
+    rows = _select_reconsolidation_action_witness_rows(
+        memory,
+        scope=scope,
+        action=item.action,
+        witness_id=clean_witness_id,
+        limit=1,
+    )
+    if len(rows) != 1:
+        raise ValueError("Cannot prepare live action rollback because live action witness is missing.")
+    live_item = _review_action_witness(memory, rows[0])
+    if not live_item.passed:
+        raise ValueError(
+            "Cannot prepare live action rollback because live action witness no longer passes review: "
+            + "; ".join(live_item.warnings)
+        )
+    if live_item.action_witness_id != item.action_witness_id or live_item.capsule_id != item.capsule_id:
+        raise ValueError("Cannot prepare live action rollback because live and shadow witnesses differ.")
+    capsule_snapshot = _capsule_snapshot_for_id(memory, live_item.capsule_id)
+    if capsule_snapshot.get("missing"):
+        raise ValueError("Cannot prepare live action rollback because target capsule is missing.")
+    shadow_payload = shadow.as_dict()
+    shadow_payload["backup_identity"] = backup_identity_after
+    token = secrets.token_urlsafe(24)
+    approval_id = new_id("recon_act_rb_approval")
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+    with memory.store.session() as conn:
+        conn.execute(
+            """
+            INSERT INTO reconsolidation_action_rollback_approvals(
+              id, token_hash, scope, action, backup_path, action_witness_id,
+              action_approval_id, capsule_id, shadow_json, backup_identity_json,
+              capsule_snapshot_json, expires_at, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval_id,
+                _token_hash(token),
+                live_item.scope,
+                live_item.action,
+                str(backup_path),
+                live_item.action_witness_id,
+                live_item.action_approval_id,
+                live_item.capsule_id,
+                json.dumps(shadow_payload, ensure_ascii=False, sort_keys=True),
+                json.dumps(backup_identity_after, ensure_ascii=False, sort_keys=True),
+                json.dumps(capsule_snapshot, ensure_ascii=False, sort_keys=True),
+                expires_at,
+                "prepared",
+                utc_now(),
+            ),
+        )
+    return ReconsolidationActionLiveRollbackApproval(
+        approval_id=approval_id,
+        token=token,
+        expires_at=expires_at,
+        shadow=shadow,
+    )
 
 
 def shadow_reconsolidation_rollback(
