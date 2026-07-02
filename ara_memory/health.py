@@ -384,6 +384,18 @@ def _retention_cycle_signal(
                         severity="warning",
                         value=latest,
                     )
+                if evidence.get("protected_only_drift"):
+                    current = evidence.get("current") or {}
+                    cycle = evidence.get("cycle") or {}
+                    return HealthSignal(
+                        "retention_cycle",
+                        True,
+                        "latest retention-cycle passed; prunable source-event set is unchanged while protected cold evidence grew: "
+                        f"current cold={current.get('cold_capsules')}, protected={current.get('protected_events')}, "
+                        f"prunable={current.get('prunable_events')} vs cycle cold={cycle.get('cold_capsules')}, "
+                        f"protected={cycle.get('protected_events')}, prunable={cycle.get('prunable_events')}",
+                        value=latest,
+                    )
                 return HealthSignal(
                     "retention_cycle",
                     False,

@@ -646,6 +646,19 @@ def _cycle_evidence(
     identity_comparison = compare_cold_identities(current_identity, cycle_identity)
     identity_available = bool(identity_comparison.get("available"))
     identity_match = bool(identity_comparison.get("matches"))
+    prunable_identity_match = _identity_section_matches(
+        current_identity,
+        cycle_identity,
+        "prunable_source_events",
+    )
+    protected_only_drift = (
+        not count_match
+        and identity_available
+        and prunable_identity_match
+        and current["prunable_events"] == cycle.get("prunable_events")
+        and int(current["protected_events"] or 0) >= int(cycle.get("protected_events") or 0)
+        and int(current["cold_capsules"] or 0) >= int(cycle.get("cold_capsules") or 0)
+    )
     matches_current = count_match and identity_match
     shadow_events_preserved = bool(shadow_deletion) and shadow_deletion.get("events_removed", 0) == 0
     return {
@@ -657,6 +670,8 @@ def _cycle_evidence(
         "identity_match": identity_match,
         "identity_reason": identity_comparison.get("reason"),
         "identity_mismatched_sets": identity_comparison.get("mismatched_sets", []),
+        "prunable_identity_match": prunable_identity_match,
+        "protected_only_drift": protected_only_drift,
         "matches_current": matches_current,
         "shadow_events_preserved": shadow_events_preserved,
         "current": current,
@@ -679,7 +694,7 @@ def _status(
         latest_cycle
         and latest_cycle.get("passed")
         and cycle_evidence.get("fresh")
-        and cycle_evidence.get("matches_current")
+        and (cycle_evidence.get("matches_current") or cycle_evidence.get("protected_only_drift"))
         and cycle_evidence.get("shadow_events_preserved")
     ):
         return "pass"
@@ -735,9 +750,22 @@ def _recommend(
     if not latest_cycle or not latest_cycle.get("passed"):
         recommendations.append("Run retention-cycle with representative recall queries before preparing live pruning.")
     else:
-        if cycle_evidence.get("fresh") and cycle_evidence.get("matches_current") and cycle_evidence.get("shadow_events_preserved"):
+        if (
+            cycle_evidence.get("fresh")
+            and cycle_evidence.get("matches_current")
+            and cycle_evidence.get("shadow_events_preserved")
+        ):
             recommendations.append(
                 "Latest retention-cycle is fresh, matches the current cold set, and preserved source events in shadow-prune."
+            )
+        elif (
+            cycle_evidence.get("fresh")
+            and cycle_evidence.get("protected_only_drift")
+            and cycle_evidence.get("shadow_events_preserved")
+        ):
+            recommendations.append(
+                "Latest retention-cycle is fresh and the prunable source-event set is unchanged; "
+                "new cold drift is protected evidence, not a new pruning candidate."
             )
         else:
             if not cycle_evidence.get("fresh"):
@@ -757,3 +785,13 @@ def _recommend(
                 recommendations.append("Latest shadow-prune did not prove source-event preservation; rerun retention-cycle.")
         recommendations.append("Latest retention-cycle passed; use it as evidence, not approval, before any live prune.")
     return recommendations
+
+
+def _identity_section_matches(current_identity: Any, cycle_identity: Any, section: str) -> bool:
+    if not isinstance(current_identity, dict) or not isinstance(cycle_identity, dict):
+        return False
+    current = current_identity.get(section)
+    cycle = cycle_identity.get(section)
+    if not isinstance(current, dict) or not isinstance(cycle, dict):
+        return False
+    return current.get("count") == cycle.get("count") and current.get("sha256") == cycle.get("sha256")

@@ -492,7 +492,11 @@ group should preserve active-linked provenance, be exported before pruning, or
 stay as audit-only safety evidence. Its active provenance pin report shows which
 candidate or stable memories are keeping cold source events protected. High cold
 pressure can pass stewardship only when that evidence is current; otherwise it
-remains a watch item.
+remains a watch item. Protected-only drift is treated separately: if new cold
+capsules only add active-linked evidence while the prunable source-event
+fingerprint is unchanged, health keeps the retention-cycle signal green and
+reports the drift as protected evidence rather than forcing an immediate cycle
+rerun.
 `cold-map` is the query-led navigation layer for distant memory. It scans cold
 capsule titles, tags, and bodies locally, but renders only compact group labels,
 redacted examples, tier/source counts, and source-event digests. It does not
