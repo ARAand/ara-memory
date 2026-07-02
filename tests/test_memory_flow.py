@@ -2126,6 +2126,103 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("hot core anchors first", report.strategy)
             self.assertNotIn("Cold raw body should not be rendered", text)
 
+    def test_reconsolidation_frame_groups_purpose_decision_failure_and_forgetting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="prompt",
+                text="Goal: Ara needs natural memory with purpose, identity, decisions, failure awareness, and forgetting boundaries.",
+                source="test",
+                scope="alpha",
+            )
+            capsules = [
+                Capsule.create(
+                    kind=CapsuleKind.GOAL,
+                    title="Goal memory: natural memory purpose",
+                    body="Ara needs natural memory with purpose and forgetting boundaries.",
+                    scope="alpha",
+                    confidence=0.86,
+                    salience=0.9,
+                    source_event_ids=[event.id],
+                    tags=["goal", "purpose", "natural-memory"],
+                    status=MemoryStatus.STABLE,
+                ),
+                Capsule.create(
+                    kind=CapsuleKind.SELF,
+                    title="Self memory candidate: independent judgment",
+                    body="Ara should keep identity and independent judgment visible while coding.",
+                    scope="global",
+                    confidence=0.86,
+                    salience=0.88,
+                    source_event_ids=[event.id],
+                    tags=["self", "identity"],
+                    status=MemoryStatus.STABLE,
+                ),
+                Capsule.create(
+                    kind=CapsuleKind.DECISION,
+                    title="Decision: reconsolidation stays read-only first",
+                    body="Reconsolidation should build a read-only frame before applying memory rewrites.",
+                    scope="alpha",
+                    confidence=0.82,
+                    salience=0.84,
+                    source_event_ids=[event.id],
+                    tags=["decision", "reconsolidation"],
+                    status=MemoryStatus.STABLE,
+                ),
+                Capsule.create(
+                    kind=CapsuleKind.FAILURE,
+                    title="Failure memory: raw history reread causes token waste",
+                    body="Avoid rereading raw history when a bounded working frame has enough evidence.",
+                    scope="alpha",
+                    confidence=0.78,
+                    salience=0.8,
+                    source_event_ids=[event.id],
+                    tags=["failure", "token"],
+                    status=MemoryStatus.STABLE,
+                ),
+                Capsule.create(
+                    kind=CapsuleKind.PROJECT,
+                    title="Project memory: old raw archive",
+                    body="Cold old body should remain outside active model context.",
+                    scope="alpha",
+                    confidence=0.3,
+                    salience=0.2,
+                    source_event_ids=[event.id],
+                    tags=["archive"],
+                    status=MemoryStatus.SUPERSEDED,
+                ),
+            ]
+            for capsule in capsules:
+                memory.store.upsert_capsule(capsule)
+            memory.build_hot(scope="alpha", budget=900)
+
+            report = memory.reconsolidation_frame(
+                "next natural memory reconsolidation should preserve purpose identity decision failure forgetting",
+                scope="alpha",
+                budgets=[800, 1200],
+                working_budget=900,
+                recall_budget=1200,
+            )
+            frame_names = {frame.name for frame in report.frames}
+            text = report.to_text()
+
+            self.assertIn(report.status, {"pass", "watch"})
+            self.assertEqual(
+                frame_names,
+                {
+                    "purpose and identity",
+                    "settled decisions",
+                    "failure and conflict",
+                    "working context",
+                    "forgetting boundary",
+                },
+            )
+            self.assertEqual(report.diagnostics["false_failure_candidates"], 0)
+            self.assertTrue(report.diagnostics["read_only"])
+            self.assertIn("Reconsolidation Frame", text)
+            self.assertIn("forgetting boundary", text)
+            self.assertIn("read-only", " ".join(report.recommendations).lower())
+
     def test_recall_policy_routes_distant_query_to_cold_map_without_body_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3320,6 +3417,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "graph activation readiness",
                     "global spreading sandbox",
                     "privacy pre-push gate",
+                    "reconsolidation frame",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -3340,6 +3438,10 @@ class MemoryFlowTests(unittest.TestCase):
             privacy_push = next(item for item in roadmap.items if item.name == "privacy pre-push gate")
             self.assertIn("scanned=", privacy_push.evidence)
             self.assertIn("warnings=", privacy_push.evidence)
+            reconsolidation = next(item for item in roadmap.items if item.name == "reconsolidation frame")
+            self.assertIn("frames=", reconsolidation.evidence)
+            self.assertIn("working_items=", reconsolidation.evidence)
+            self.assertIn("false_failures=0", reconsolidation.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)

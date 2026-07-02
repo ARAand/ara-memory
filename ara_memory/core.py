@@ -342,6 +342,11 @@ class AraMemory:
 
         return build_recall_policy(self, query, **kwargs)
 
+    def reconsolidation_frame(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.reconsolidation import build_reconsolidation_frame
+
+        return build_reconsolidation_frame(self, query, **kwargs)
+
     def record_recall_policy_impact(self, **kwargs: Any) -> Event:
         from ara_memory.recall_policy import record_recall_policy_impact
 

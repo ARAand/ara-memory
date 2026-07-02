@@ -216,6 +216,19 @@ def main(argv: list[str] | None = None) -> int:
     recall_policy.add_argument("--output-usd-per-million", type=float, default=0.0)
     recall_policy.add_argument("--json", action="store_true")
 
+    reconsolidation_frame = sub.add_parser(
+        "reconsolidation-frame",
+        help="Build a read-only purpose/identity/decision/failure frame for the current query.",
+    )
+    reconsolidation_frame.add_argument("query", nargs="?", default=None)
+    reconsolidation_frame.add_argument("--scope", default="global")
+    reconsolidation_frame.add_argument("--budgets", default="800,1600,2500")
+    reconsolidation_frame.add_argument("--working-budget", type=int, default=900)
+    reconsolidation_frame.add_argument("--recall-budget", type=int, default=1600)
+    reconsolidation_frame.add_argument("--no-global", action="store_true")
+    reconsolidation_frame.add_argument("--no-hot", action="store_true")
+    reconsolidation_frame.add_argument("--json", action="store_true")
+
     recall_policy_impact = sub.add_parser(
         "recall-policy-impact",
         help="Record whether a recall-policy route helped a real outcome.",
@@ -1163,6 +1176,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "reconsolidation-frame":
+        query = args.query if args.query is not None else sys.stdin.read().strip()
+        result = memory.reconsolidation_frame(
+            query,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.status in {"pass", "watch"} else 1
 
     if args.cmd == "recall-policy-impact":
         helped = None if args.helped == "unknown" else args.helped == "true"

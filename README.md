@@ -35,7 +35,7 @@ references were rewired, duplicate evidence was coalesced, and evidence counts
 did not shrink. When given a recall-regression manifest and baseline, the same
 review command also runs a recall-regression sandbox and fails the whole gate if
 either witness review or recall stability fails. The next layers are
-reconsolidation frames and broader global graph policies. `--record-queue`
+reviewed reconsolidation apply paths and broader global graph policies. `--record-queue`
 persists watch/fail relation-review signals into a relation-specific review
 queue without pretending relation witnesses are capsules. A read-only
 `global-spreading-sandbox` gate now probes global recall fanout,
@@ -539,9 +539,9 @@ verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
 semantic hygiene, operational health, milestone readiness, graph activation
-readiness, global spreading sandbox, privacy pre-push safety, cold-memory
-stewardship, distant-memory navigation, purpose-aware lifecycle policy,
-purpose-aware recall control, recall policy feedback, and
+readiness, global spreading sandbox, privacy pre-push safety, reconsolidation
+framing, cold-memory stewardship, distant-memory navigation, purpose-aware
+lifecycle policy, purpose-aware recall control, recall policy feedback, and
 self-directed deliberation. It is deliberately local and deterministic, so it
 can be run before spending model context.
 
@@ -551,6 +551,14 @@ databases, ledgers, archives, logs, raw hidden-reasoning markers, and
 secret-like text outside test/docs fixtures. Fixture secrets remain visible as
 warnings so regression tests can keep adversarial examples without blocking a
 reviewed public push.
+
+`reconsolidation-frame` is the read-only recontextualization layer before any
+future memory rewrite. For a query, it combines recall-policy, working-memory,
+lifecycle tiers, and failure/self audits into five frames: purpose and identity,
+settled decisions, failure and conflict, working context, and forgetting
+boundary. It does not mutate memory; it shows what should be anchored,
+preserved, inspected, retrieved, or kept out of model context before a reviewed
+apply path exists.
 
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest

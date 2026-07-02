@@ -27,8 +27,10 @@ items can now be persisted to a relation-specific review queue so later workers
 do not need to infer relation risk from capsule review rows. A read-only global
 spreading sandbox now probes cross-scope graph activation for bounded fanout,
 supplementation, depth, visible evidence, quality, and risk-filter pressure
-before broader global spreading is trusted. There is still no reconsolidation
-frame yet.
+before broader global spreading is trusted. A read-only reconsolidation frame
+now recontextualizes a query into purpose/identity anchors, settled decisions,
+failure/conflict checks, working context, and forgetting boundaries before any
+future apply path is allowed to rewrite memory.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -457,11 +459,17 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
     activation is a watch signal, but fanout, supplementation, or depth beyond
     configured limits is a failure because cross-scope recall can otherwise turn
     old memories into accidental always-on context.
+32. Treat reconsolidation as read-only until apply safety exists. A
+    `reconsolidation-frame` may gather purpose, identity, decisions, failures,
+    working context, and forgetting boundaries, but it must not promote,
+    supersede, rewrite, or delete capsules. Any future apply path must prove
+    recall-regression stability and preserve source-event provenance.
 
 ## Future Extension Points
 
-- Global spreading policy beyond the read-only sandbox, reconsolidation frames,
-  and ESPA-aware path weighting.
+- Global spreading policy beyond the read-only sandbox and ESPA-aware path
+  weighting.
+- Reviewed reconsolidation apply path after read-only frames prove useful.
 - Optional local embeddings for intent matching.
 - Cross-encoder reranking for high-value recall.
 - Impact feedback analytics for drift, overfitting, and stale helpfulness.

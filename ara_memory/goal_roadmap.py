@@ -78,6 +78,13 @@ def build_goal_roadmap(
     graph_readiness = memory.graph_activation_readiness(scope=scope)
     global_spreading = memory.global_spreading_sandbox(scope=scope)
     privacy_pre_push = memory.privacy_pre_push(repo=Path.cwd())
+    reconsolidation = memory.reconsolidation_frame(
+        "next natural memory architecture work: purpose identity decision failure forgetting boundary",
+        scope=scope,
+        budgets=[800, 1600],
+        working_budget=900,
+        recall_budget=1600,
+    )
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -177,6 +184,12 @@ def build_goal_roadmap(
             "pass" if privacy_pre_push.passed else "fail",
             _privacy_pre_push_evidence(privacy_pre_push),
             "Remove tracked private memory files or secret-like content before pushing the public repository.",
+        ),
+        RoadmapItem(
+            "reconsolidation frame",
+            "fail" if reconsolidation.status == "fail" else "watch" if reconsolidation.status == "watch" else "pass",
+            _reconsolidation_evidence(reconsolidation),
+            "Build a read-only frame that keeps purpose, identity, decisions, failures, and forgetting boundaries visible before applying memory rewrites.",
         ),
         RoadmapItem(
             "cold-memory stewardship",
@@ -286,6 +299,17 @@ def _privacy_pre_push_evidence(report: Any) -> str:
     return (
         f"{report.status}, scanned={report.scanned_files}, "
         f"failures={failures}, warnings={warnings}"
+    )
+
+
+def _reconsolidation_evidence(report: Any) -> str:
+    diagnostics = report.diagnostics
+    return (
+        f"{report.status}, intent={diagnostics['intent']}, "
+        f"frames={len(report.frames)}, working_items={diagnostics['working_items']}, "
+        f"core={diagnostics['core_capsules']}, guarded={diagnostics['guarded_capsules']}, "
+        f"false_failures={diagnostics['false_failure_candidates']}, "
+        f"false_self={diagnostics['false_self_candidates']}"
     )
 
 
