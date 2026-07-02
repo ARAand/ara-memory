@@ -403,6 +403,7 @@ python -m ara_memory health --scope ara-memory --query "current memory health" -
 python -m ara_memory purpose-check --scope ara-memory --repair-hot
 python -m ara_memory identity-check --scope ara-memory --repair-hot
 python -m ara_memory milestone-check --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
+python -m ara_memory graph-readiness --scope ara-memory
 python -m ara_memory goal-roadmap --scope ara-memory --regression-manifest examples/recall_regression_manifest.json --regression-baseline .ara-memory/archive/recall-regression-baseline.json
 python -m ara_memory failure-kind-audit --scope ara-memory
 python -m ara_memory self-kind-audit --scope ara-memory
@@ -464,18 +465,21 @@ milestones so stale hot memory is rebuilt when the goal capsule already exists.
 memory exists, hot memory exposes identity and judgment principles, and an
 identity query can retrieve that self memory.
 `milestone-check` combines health, purpose-check, identity-check, candidate
-pressure, failure-kind audit, self-kind audit, and recall-context budget
-selection into one readiness report. The recall-context gate requires a
-budgeted pack with visible direct evidence and sufficient quality, not just a
-plausible salience fallback. Use it before declaring a memory milestone clean,
-then create a verified backup.
+pressure, failure-kind audit, self-kind audit, recall-context budget selection,
+and graph-activation readiness into one readiness report. The recall-context
+gate requires a budgeted pack with visible direct evidence and sufficient
+quality, not just a plausible salience fallback. The graph readiness gate is a
+warning gate: it proves bounded temporal-edge spreading activation has live
+evidence when graph recall is expected, but it does not turn an otherwise
+healthy small scope into a hard failure. Use milestone-check before declaring a
+memory milestone clean, then create a verified backup.
 `goal-roadmap` turns the long-running objective into an evidence-backed status
 map: local durability, bounded recall, purpose continuity, identity continuity,
-semantic hygiene, operational health, milestone readiness, and cold-memory
-stewardship, distant-memory navigation, purpose-aware lifecycle policy, and
-purpose-aware recall control plus its feedback loop and self-directed
-deliberation. It is deliberately local and deterministic, so it can be run
-before spending model context.
+semantic hygiene, operational health, milestone readiness, graph activation
+readiness, cold-memory stewardship, distant-memory navigation, purpose-aware
+lifecycle policy, and purpose-aware recall control plus its feedback loop and
+self-directed deliberation. It is deliberately local and deterministic, so it
+can be run before spending model context.
 `cold-stewardship` groups cold capsules, separates source events still cited by
 active memories from cold-only provenance, and checks whether the latest
 retention-cycle is fresh, matches the current cold set, and proved source-event

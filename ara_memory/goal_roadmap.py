@@ -74,6 +74,7 @@ def build_goal_roadmap(
         regression_baseline=regression_baseline,
         repair_hot=repair_hot,
     )
+    graph_readiness = memory.graph_activation_readiness(scope=scope)
     cold_stewardship = memory.cold_stewardship(scope=scope, group_limit=3, examples_per_group=0)
     cold_map = memory.cold_map(
         scope=scope,
@@ -157,6 +158,12 @@ def build_goal_roadmap(
             "Run milestone-check and resolve failing gates.",
         ),
         RoadmapItem(
+            "graph activation readiness",
+            "pass" if graph_readiness.passed else "watch",
+            _graph_readiness_evidence(graph_readiness),
+            "Consolidate temporal edges that connect lexical seeds to source capsules, then rerun graph activation readiness.",
+        ),
+        RoadmapItem(
             "cold-memory stewardship",
             "watch" if cold_stewardship.status == "watch" else "pass",
             _cold_evidence(health, cold_stewardship),
@@ -230,6 +237,18 @@ def _cold_evidence(health: Any, cold_stewardship: Any) -> str:
     if retention:
         parts.append(retention.detail)
     return "; ".join(parts) if parts else "no cold pressure signal"
+
+
+def _graph_readiness_evidence(graph_readiness: Any) -> str:
+    diagnostics = graph_readiness.diagnostics
+    return (
+        f"{graph_readiness.status}, used={diagnostics['spreading_activation_used']}, "
+        f"edges={diagnostics['graph_activation_edges']}, "
+        f"boosted={diagnostics['spreading_activation_boosted_count']}, "
+        f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
+        f"visible={diagnostics['visible_capsules']}, "
+        f"tokens={diagnostics['estimated_tokens']}, budget={diagnostics['best_budget']}"
+    )
 
 
 def _cold_map_status(cold_stewardship: Any, cold_map: Any) -> str:

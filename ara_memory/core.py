@@ -402,6 +402,11 @@ class AraMemory:
 
         return build_goal_roadmap(self, **kwargs)
 
+    def graph_activation_readiness(self, **kwargs: Any) -> Any:
+        from ara_memory.graph_readiness import run_graph_activation_readiness
+
+        return run_graph_activation_readiness(self, **kwargs)
+
     def doctor(
         self,
         *,

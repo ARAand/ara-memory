@@ -359,6 +359,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     goal_roadmap.add_argument("--json", action="store_true")
 
+    graph_readiness = sub.add_parser("graph-readiness")
+    graph_readiness.add_argument("--scope", default="global")
+    graph_readiness.add_argument("--query", default="next natural memory architecture graph activation temporal edge recall")
+    graph_readiness.add_argument("--budgets", default="800,1600")
+    graph_readiness.add_argument("--no-global", action="store_true")
+    graph_readiness.add_argument("--json", action="store_true")
+
     promote = sub.add_parser("promote")
     promote.add_argument("capsule_id")
     promote.add_argument("--reason", default="")
@@ -1298,6 +1305,19 @@ def main(argv: list[str] | None = None) -> int:
             regression_cases=cases,
             regression_baseline=baseline,
             repair_hot=args.repair_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.status in {"pass", "watch"} else 1
+
+    if args.cmd == "graph-readiness":
+        result = memory.graph_activation_readiness(
+            scope=args.scope,
+            query=args.query,
+            budgets=_parse_budget_list(args.budgets),
+            include_global=not args.no_global,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))

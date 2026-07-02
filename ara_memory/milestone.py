@@ -88,6 +88,7 @@ def run_milestone_check(
         budgets=recall_budgets or [800, 1600, 2500],
         include_hot=True,
     )
+    graph_readiness = memory.graph_activation_readiness(scope=scope)
     recall_context_passed, recall_context_detail = _recall_context_gate(context)
     candidate_ratio = float(pressure.totals["candidate_stable_ratio"])
     checks = [
@@ -142,6 +143,13 @@ def run_milestone_check(
                 "plan": context.plan.as_dict(),
                 "diagnostics": context.diagnostics,
             },
+        ),
+        _check(
+            "graph_activation_readiness",
+            bool(graph_readiness.passed),
+            _graph_readiness_detail(graph_readiness),
+            "warning",
+            graph_readiness.as_dict(),
         ),
     ]
     hard_fail = any(not check["passed"] and check["severity"] == "error" for check in checks)
@@ -213,4 +221,17 @@ def _recommend(checks: list[dict[str, Any]]) -> list[str]:
             out.append("Run self-kind-audit, review false self-memory reclassifications, and apply them before declaring the milestone clean.")
         elif check["name"] == "recall_context":
             out.append("Inspect recall-context evidence quality; selected pack must have direct visible evidence, not only salience fallback.")
+        elif check["name"] == "graph_activation_readiness":
+            out.append("Consolidate temporal edges and rerun graph activation readiness until bounded graph recall has live evidence.")
     return out
+
+
+def _graph_readiness_detail(graph_readiness: Any) -> str:
+    diagnostics = graph_readiness.diagnostics
+    return (
+        f"{graph_readiness.status}, used={diagnostics['spreading_activation_used']}, "
+        f"edges={diagnostics['graph_activation_edges']}, "
+        f"boosted={diagnostics['spreading_activation_boosted_count']}, "
+        f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
+        f"visible={diagnostics['visible_capsules']}, budget={diagnostics['best_budget']}"
+    )

@@ -1274,6 +1274,52 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Graph activation contributed locally", " ".join(payload["rationale"]))
             self.assertNotIn("sealed packet drill", plan.to_text())
 
+    def test_graph_activation_readiness_reports_live_graph_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: graph readiness source",
+                body="Use the source capsule to prove bounded spreading activation is live.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.2,
+                source_event_ids=[],
+                tags=["graph", "readiness"],
+                status=MemoryStatus.STABLE,
+            )
+            seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Graph activation recall overview",
+                body="Graph activation recall overview mentions temporal edge recall for natural memory.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.8,
+                source_event_ids=[],
+                tags=["graph", "activation", "recall"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(target)
+            memory.store.upsert_capsule(seed)
+            memory.store.add_edge(
+                subject="graph activation",
+                predicate="connects",
+                object_="temporal edge recall",
+                scope="alpha",
+                source_capsule_id=target.id,
+                confidence=0.95,
+            )
+
+            readiness = memory.graph_activation_readiness(scope="alpha")
+
+            self.assertTrue(readiness.passed, readiness.as_dict())
+            self.assertEqual(readiness.status, "pass")
+            self.assertTrue(readiness.diagnostics["spreading_activation_used"])
+            self.assertGreater(readiness.diagnostics["graph_activation_edges"], 0)
+            self.assertGreater(readiness.diagnostics["spreading_activation_boosted_count"], 0)
+            self.assertGreater(readiness.diagnostics["visible_capsules"], 0)
+
     def test_recall_plan_recommends_small_useful_budget_and_cost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -2210,6 +2256,38 @@ class MemoryFlowTests(unittest.TestCase):
                 status=MemoryStatus.STABLE,
             )
             memory.store.upsert_capsule(self_memory)
+            graph_target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: milestone graph source",
+                body="Graph readiness should have a live source capsule.",
+                scope="alpha",
+                confidence=0.86,
+                salience=0.2,
+                source_event_ids=[event.id],
+                tags=["graph", "readiness"],
+                status=MemoryStatus.STABLE,
+            )
+            graph_seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Graph activation recall seed",
+                body="Graph activation temporal edge recall keeps milestone evidence connected.",
+                scope="alpha",
+                confidence=0.86,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["graph", "activation", "recall"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(graph_target)
+            memory.store.upsert_capsule(graph_seed)
+            memory.store.add_edge(
+                subject="graph activation",
+                predicate="connects",
+                object_="temporal edge recall",
+                scope="alpha",
+                source_capsule_id=graph_target.id,
+                confidence=0.95,
+            )
             memory.build_hot(scope="alpha", budget=700)
             memory.backup(output=Path(tmp) / "backup.zip")
 
@@ -2225,7 +2303,21 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertTrue(report.passed, report.as_dict())
             names = {check["name"] for check in report.checks}
-            self.assertEqual(names, {"health", "purpose", "identity", "candidate_pressure", "failure_kind_audit", "self_kind_audit", "recall_context"})
+            self.assertEqual(
+                names,
+                {
+                    "health",
+                    "purpose",
+                    "identity",
+                    "candidate_pressure",
+                    "failure_kind_audit",
+                    "self_kind_audit",
+                    "recall_context",
+                    "graph_activation_readiness",
+                },
+            )
+            graph_check = next(check for check in report.checks if check["name"] == "graph_activation_readiness")
+            self.assertTrue(graph_check["passed"], graph_check)
             self.assertEqual(report.status, "pass")
 
     def test_milestone_check_fails_when_recall_context_is_only_salience_fallback(self) -> None:
@@ -2554,6 +2646,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "semantic hygiene",
                     "operational health",
                     "milestone readiness",
+                    "graph activation readiness",
                     "cold-memory stewardship",
                     "distant-memory navigation",
                     "purpose-aware lifecycle policy",
@@ -2564,6 +2657,10 @@ class MemoryFlowTests(unittest.TestCase):
                 },
             )
             self.assertIn("Ara Goal Roadmap", roadmap.to_text())
+            graph_readiness = next(item for item in roadmap.items if item.name == "graph activation readiness")
+            self.assertIn("used=", graph_readiness.evidence)
+            self.assertIn("edges=", graph_readiness.evidence)
+            self.assertIn("boosted=", graph_readiness.evidence)
             cold = next(item for item in roadmap.items if item.name == "cold-memory stewardship")
             self.assertIn("evidence=1", cold.evidence)
             self.assertIn("top active pin", cold.evidence)

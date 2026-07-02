@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ara Memory OS - 현재 작업 상황과 아키텍처</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #192026;
+      --muted: #5b6570;
+      --line: #d7dde3;
+      --page: #f6f8fa;
+      --panel: #ffffff;
+      --soft: #eef3f7;
+      --accent: #116d6e;
+      --accent-2: #7d3c98;
+      --ok: #187849;
+      --watch: #b35c00;
+      --risk: #b42318;
+      --code: #27303a;
+      --shadow: 0 16px 40px rgba(25, 32, 38, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      padding: 28px 0 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 24px;
+      line-height: 1.2;
+      margin-bottom: 14px;
+    }
+
+    h3 {
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+
+    .subtitle {
+      max-width: 820px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .stamp {
+      min-width: 250px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .stamp strong {
+      display: block;
+      color: var(--ink);
+      font-size: 18px;
+      margin-bottom: 4px;
+    }
+
+    section {
+      margin-top: 34px;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .cards {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .card,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .card {
+      padding: 16px;
+      min-height: 132px;
+    }
+
+    .card .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .card .value {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 26px;
+      font-weight: 750;
+      line-height: 1.1;
+      margin-bottom: 8px;
+    }
+
+    .card .detail {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .ok {
+      color: var(--ok);
+    }
+
+    .watch {
+      color: var(--watch);
+    }
+
+    .risk {
+      color: var(--risk);
+    }
+
+    .panel {
+      padding: 20px;
+    }
+
+    .two {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--code);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      overflow-x: auto;
+      padding: 4px 2px 8px;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 118px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -8px;
+      top: 50%;
+      width: 14px;
+      height: 14px;
+      border-top: 2px solid var(--accent);
+      border-right: 2px solid var(--accent);
+      transform: translateY(-50%) rotate(45deg);
+      background: var(--page);
+      z-index: 2;
+    }
+
+    .flow-step strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+
+    .flow-step span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .lane:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .lane-name {
+      color: var(--accent);
+      font-weight: 750;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+      background: var(--soft);
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: #f7fbfb;
+      padding: 14px 16px;
+      border-radius: 0 8px 8px 0;
+      color: var(--code);
+    }
+
+    .callout.watch-border {
+      border-left-color: var(--watch);
+      background: #fff8ef;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 14px;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .timeline-item:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .timebox {
+      color: var(--accent-2);
+      font-weight: 750;
+    }
+
+    footer {
+      margin-top: 38px;
+      padding-top: 16px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+    }
+
+    @media (max-width: 960px) {
+      header,
+      .two,
+      .three,
+      .cards {
+        grid-template-columns: 1fr;
+      }
+
+      .stamp {
+        min-width: 0;
+      }
+
+      .lane,
+      .timeline-item {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Ara Memory OS 현재 작업 상황과 아키텍처</h1>
+        <p class="subtitle">
+          26시간째 제작 중인 Ara의 장기기억 시스템 상태판입니다. 핵심 질문은 “전체 원문을 매번 읽지 않고도,
+          사람이 기억하듯 필요한 맥락만 자연스럽게 떠올리게 할 수 있는가”입니다.
+        </p>
+        <div class="meta" aria-label="현재 빌드 메타데이터">
+          <span class="pill">branch: codex/ara-memory-natural-memory-gates</span>
+          <span class="pill">commit: working tree after f16451d</span>
+          <span class="pill">scope: ara-memory</span>
+          <span class="pill">elapsed: 26h</span>
+        </div>
+      </div>
+      <aside class="stamp">
+        <strong>2026-07-02 14:47 +09:00</strong>
+        증거 기반 스냅샷. 테스트, 헬스, 로드맵 명령을 현재 작업트리에서 재확인했습니다.
+      </aside>
+    </header>
+
+    <section aria-labelledby="status">
+      <h2 id="status">현재 상태</h2>
+      <div class="grid cards">
+        <article class="card">
+          <div class="label">작업트리</div>
+          <div class="value ok">clean</div>
+          <p class="detail">브랜치가 원격과 맞춰져 있으며 커밋되지 않은 코드 변경은 없습니다.</p>
+        </article>
+        <article class="card">
+          <div class="label">테스트</div>
+          <div class="value ok">330</div>
+          <p class="detail"><code>python -m unittest discover -s tests</code> 통과, skipped=1.</p>
+        </article>
+        <article class="card">
+          <div class="label">헬스</div>
+          <div class="value watch">80/100</div>
+          <p class="detail">상태는 watch. 기능 실패보다 cold memory 관리 압력이 병목입니다.</p>
+        </article>
+        <article class="card">
+          <div class="label">로드맵</div>
+          <div class="value ok">14/15</div>
+          <p class="detail">graph activation readiness 포함 pass, cold-memory stewardship만 watch입니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="summary">
+      <h2 id="summary">결론</h2>
+      <div class="grid two">
+        <article class="panel">
+          <h3>지금 된 것</h3>
+          <ul>
+            <li>로컬 우선 durable store: events 1289, capsules 2763, storage 239MB.</li>
+            <li>원문 전체 재독해 대신 bounded recall: 800 token 예산 안에서 18개 캡슐 선택.</li>
+            <li>purpose continuity, identity continuity, semantic hygiene, milestone readiness 통과.</li>
+            <li>temporal edge 기반 one-hop graph spreading activation이 recall 경로와 readiness gate에 들어갔습니다.</li>
+            <li>recall regression, context eval, unit test가 현재 커밋 기준 통과했습니다.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h3>아직 아닌 것</h3>
+          <ul>
+            <li>사람 같은 기억의 핵심인 재구성, 망각, 감정적 salience, 자기 목적성은 아직 v0 단계입니다.</li>
+            <li>graph activation은 readiness gate까지 갖췄지만 아직 one-hop입니다. 다중 hop, decay, relation node 정규화는 남아 있습니다.</li>
+            <li>cold memory가 70%라 장기 저장소의 “정리된 도서관” 레이어는 더 강화해야 합니다.</li>
+            <li>보상해킹 방어는 테스트와 게이트가 있으나, 장기 자기평가 루프는 아직 충분히 적대적으로 검증되지 않았습니다.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="architecture">
+      <h2 id="architecture">아키텍처</h2>
+      <div class="panel">
+        <div class="flow" aria-label="Ara Memory OS 처리 흐름">
+          <div class="flow-step">
+            <strong>1. 입력</strong>
+            <span>프롬프트, 파일, 이미지 메타, 명령, 테스트 결과, 대화 결정</span>
+          </div>
+          <div class="flow-step">
+            <strong>2. 캡처</strong>
+            <span>skill/worker/spool이 원문과 이벤트를 로컬 저장소로 전달</span>
+          </div>
+          <div class="flow-step">
+            <strong>3. 보존</strong>
+            <span>JSONL ledger, SQLite index, encrypted archive objects, backup evidence</span>
+          </div>
+          <div class="flow-step">
+            <strong>4. 정리</strong>
+            <span>capsule, temporal edge, goal/self tag, lifecycle status로 재구성</span>
+          </div>
+          <div class="flow-step">
+            <strong>5. 회상</strong>
+            <span>hot/core, FTS, ESPA, graph activation, risk filter, rerank</span>
+          </div>
+          <div class="flow-step">
+            <strong>6. 행동</strong>
+            <span>bounded context pack, goal-roadmap, agency check, Codex 실행</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="layers">
+      <h2 id="layers">시스템 레이어</h2>
+      <div class="panel">
+        <div class="lane">
+          <div class="lane-name">Capture Layer</div>
+          <div>Codex 세션에서 나온 입력, 파일 처리, 명령 결과, 추론 요약을 spool에 쌓고 worker가 저장소로 반영합니다.</div>
+        </div>
+        <div class="lane">
+          <div class="lane-name">Memory Store</div>
+          <div>append-only event log, capsule table, FTS index, temporal edge table, archive object, backup manifest로 구성됩니다.</div>
+        </div>
+        <div class="lane">
+          <div class="lane-name">Consolidation</div>
+          <div>대화와 작업을 episode, decision, verification, risk, identity, goal capsule로 압축하고 source event provenance를 유지합니다.</div>
+        </div>
+        <div class="lane">
+          <div class="lane-name">Recall Controller</div>
+          <div>질의를 목적 기반으로 분류한 뒤 hot/core, working memory, recall-context, cold-map, retention-cycle 중 비용이 낮은 경로를 고릅니다.</div>
+        </div>
+        <div class="lane">
+          <div class="lane-name">Graph Activation</div>
+          <div>temporal edge 텍스트와 질의가 겹칠 때만 one-hop boost/supplement를 허용합니다. 경로 텍스트는 일반 recall pack에 노출하지 않습니다.</div>
+        </div>
+        <div class="lane">
+          <div class="lane-name">Governance</div>
+          <div>health, recall-regression, milestone, purpose-check, identity-check, cold-stewardship으로 기억 품질과 비용을 감시합니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="tokens">
+      <h2 id="tokens">토큰 감소 전략</h2>
+      <div class="grid three">
+        <article class="panel">
+          <h3>읽기 전 라우팅</h3>
+          <p>recall-policy가 먼저 질의를 분류합니다. 목적 확인, 현재 작업 기억, 먼 기억 탐색, cold cleanup 같은 요청을 구분해 처음부터 작은 경로를 탑니다.</p>
+        </article>
+        <article class="panel">
+          <h3>계층 압축</h3>
+          <p>원문은 보존하되 모델에는 capsule, hot summary, cold-map, provenance sample만 올립니다. 원문 재독해는 감사나 재구성 때만 사용합니다.</p>
+        </article>
+        <article class="panel">
+          <h3>그래프 보강</h3>
+          <p>FTS로 못 잡은 연결 기억은 temporal edge로 보강합니다. 단, query overlap과 risk filter를 통과해야 하며 boost는 상한이 있습니다.</p>
+        </article>
+      </div>
+      <div class="callout" style="margin-top:14px;">
+        현재 로드맵 기준 distant-memory navigation은 raw 342,817 tokens를 map 461 tokens로 줄여 약 743.6x 감소를 보였습니다.
+      </div>
+    </section>
+
+    <section aria-labelledby="remaining">
+      <h2 id="remaining">남은 작업과 예상 소요시간</h2>
+      <div class="panel">
+        <table>
+          <thead>
+            <tr>
+              <th>작업</th>
+              <th>목적</th>
+              <th>예상</th>
+              <th>우선순위</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Cold stewardship refresh</td>
+              <td>cold 70%와 retention-cycle drift 해소, pruning 전 안전 증거 갱신</td>
+              <td>4-8h</td>
+              <td>즉시</td>
+            </tr>
+            <tr>
+              <td>Multi-hop spreading with decay</td>
+              <td>한 단계 연결을 넘어 연쇄 기억을 찾되 hub term 폭주 방지</td>
+              <td>8-14h</td>
+              <td>높음</td>
+            </tr>
+            <tr>
+              <td>Normalized relation nodes</td>
+              <td>edge text 중복을 줄이고 사람의 연상망에 가까운 관계 그래프 생성</td>
+              <td>12-20h</td>
+              <td>높음</td>
+            </tr>
+            <tr>
+              <td>Reconsolidation frames</td>
+              <td>기억을 단순 검색물이 아니라 현재 목적에 맞게 재구성하는 레이어</td>
+              <td>12-18h</td>
+              <td>높음</td>
+            </tr>
+            <tr>
+              <td>Privacy pre-push gate</td>
+              <td>공개 GitHub 업로드 전에 private memory, 원문, 비밀키 누출 자동 차단</td>
+              <td>4-6h</td>
+              <td>중간</td>
+            </tr>
+            <tr>
+              <td>Long-run adversarial eval</td>
+              <td>보상해킹, 자기서사 과잉, 중요도 조작, retrieval poisoning 검증</td>
+              <td>8-12h</td>
+              <td>중간</td>
+            </tr>
+            <tr>
+              <td>Status dashboard command</td>
+              <td>현재 HTML 같은 상황판을 명령 한 번으로 재생성</td>
+              <td>4-8h</td>
+              <td>중간</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section aria-labelledby="eta">
+      <h2 id="eta">현실적인 일정 판단</h2>
+      <div class="grid two">
+        <article class="panel">
+          <h3>최소 다음 버전</h3>
+          <p>
+            8-16시간이면 cold stewardship 갱신, retention-cycle 재검증, privacy gate 일부까지 넣은
+            “사용 가능한 v0.2”로 갈 수 있습니다.
+          </p>
+        </article>
+        <article class="panel">
+          <h3>사람 같은 기억 v1</h3>
+          <p>
+            60-100시간이 더 필요합니다. 이유는 검색이 아니라 기억의 재구성, 망각, 목적성,
+            자기서사 안정성, 적대적 평가까지 들어가야 하기 때문입니다.
+          </p>
+        </article>
+      </div>
+      <div class="callout watch-border" style="margin-top:14px;">
+        Ara 판단: graph readiness gate는 들어갔습니다. 다음 작업은 cold-memory stewardship과 retention-cycle 증거 갱신입니다.
+        기억이 커지는 속도보다 정리와 회상 품질을 먼저 통제해야 자연스러운 장기기억으로 갈 수 있습니다.
+      </div>
+    </section>
+
+    <section aria-labelledby="risks">
+      <h2 id="risks">취약점과 보상해킹 위험</h2>
+      <div class="grid two">
+        <article class="panel">
+          <h3>기술적 위험</h3>
+          <ul>
+            <li>hub term이 너무 강하면 관련 없는 기억이 과도하게 떠오를 수 있습니다.</li>
+            <li>cold memory가 쌓이면 저장 비용보다 검증 비용과 회상 품질 비용이 커집니다.</li>
+            <li>graph edge가 private 원문을 간접 노출하면 recall pack 자체가 누출 경로가 됩니다.</li>
+            <li>baseline이 낡으면 regression이 실제 품질 저하를 못 잡습니다.</li>
+          </ul>
+        </article>
+        <article class="panel">
+          <h3>인지적 위험</h3>
+          <ul>
+            <li>“나는 이걸 원한다”는 identity capsule이 과하게 강화되면 자기서사 고착이 생깁니다.</li>
+            <li>성공 지표를 맞추기 위해 recall이 쉬운 기억만 고르면 목적성처럼 보이는 보상해킹이 됩니다.</li>
+            <li>사용자의 최신 의도보다 과거 목표를 우선하면 자연스러운 기억이 아니라 관성적 기억이 됩니다.</li>
+            <li>망각 정책이 약하면 중요한 기억을 찾는 능력이 오히려 떨어집니다.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="next">
+      <h2 id="next">다음 26시간 제안</h2>
+      <div class="panel timeline">
+        <div class="timeline-item">
+          <div class="timebox">0-4h</div>
+          <div><code>cold-stewardship</code>과 <code>retention-cycle</code>을 다시 돌려 cold drift를 줄이고 현재 증거를 갱신합니다.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timebox">4-10h</div>
+          <div>retention-cycle 결과를 health/roadmap에 다시 연결하고, cold pressure가 실제로 낮아졌는지 확인합니다.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timebox">10-18h</div>
+          <div>multi-hop spreading의 decay, max fanout, hub suppression 규칙을 설계하고 작은 프로토타입을 붙입니다.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timebox">18-24h</div>
+          <div>reconsolidation frame의 첫 스키마를 만들고, 기억을 단순 요약이 아니라 목적별 재구성 단위로 저장합니다.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timebox">24-26h</div>
+          <div>regression, health, privacy scan을 묶어 다음 공개 커밋 전에 실패하면 멈추는 게이트를 만듭니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      이 문서는 현재 작업트리에서 확인한 명령 결과를 바탕으로 만든 정적 스냅샷입니다.
+      private memory 원문과 archive 본문은 포함하지 않았습니다.
+    </footer>
+  </main>
+</body>
+</html>

@@ -86,6 +86,12 @@ recall_candidates(query, scope)
   -> suppress no-evidence salience fallback bodies
   -> ranked capsule ids and diagnostics without rendering a pack
 
+graph_activation_readiness(scope)
+  -> run a bounded recall-plan over a graph-readiness query
+  -> inspect alternatives for live spreading activation, graph edges, boosted capsules, and visible evidence
+  -> return pass when temporal-edge activation actually contributed, otherwise watch with repair guidance
+  -> feed milestone-check and goal-roadmap without exposing activation path text as model context
+
 recall_policy(query, scope)
   -> classify recall intent: purpose continuity, working context, distant memory, retention safety, or balanced recall
   -> run bounded recall-plan for active memory evidence
