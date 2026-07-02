@@ -1194,6 +1194,29 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(failures, [])
             self.assertEqual(len(decisions), 1)
 
+    def test_successful_turn_progress_is_not_failure_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            memory.retain(
+                kind="assistant",
+                text=(
+                    "Turn episode: Assistant outcome: Implemented reconsolidation provenance "
+                    "compare-and-set. Decisions: Decision: stronger reconsolidation remains "
+                    "blocked until candidate witness review, recall-regression sandbox, and "
+                    "future rollback gates all pass. Command outcomes: python -m unittest "
+                    "discover -s tests -> passed; git push origin branch -> succeeded."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            memory.consolidate()
+
+            failures = memory.list_capsules(scope="alpha", status="candidate", kind="failure")
+            episodes = memory.list_capsules(scope="alpha", status="candidate", kind="episode")
+            self.assertEqual(failures, [])
+            self.assertEqual(len(episodes), 1)
+
     def test_always_on_progress_update_is_not_procedure_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -3929,6 +3952,52 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(len(decisions), 1)
             self.assertNotIn("failure", decisions[0]["tags"])
             self.assertTrue(decisions[0]["title"].startswith("Decision memory:"))
+
+    def test_failure_kind_audit_reclassifies_successful_turn_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="assistant",
+                text=(
+                    "Turn episode: Assistant outcome: Implemented and pushed "
+                    "reconsolidation provenance compare-and-set. Decisions: Decision: "
+                    "stronger reconsolidation remains blocked until recall-regression "
+                    "sandbox and rollback gates pass. Command outcomes: python -m unittest "
+                    "discover -s tests -> passed; git push origin branch -> succeeded."
+                ),
+                source="test",
+                scope="alpha",
+            )
+            cap = Capsule.create(
+                kind=CapsuleKind.FAILURE,
+                title="Failure memory: Turn episode: Assistant outcome: Implemented and pushed reconsolidation",
+                body=(
+                    "Turn episode: Assistant outcome: Implemented and pushed "
+                    "reconsolidation provenance compare-and-set. Decisions: Decision: "
+                    "stronger reconsolidation remains blocked until recall-regression "
+                    "sandbox and rollback gates pass. Command outcomes: python -m unittest "
+                    "discover -s tests -> passed; git push origin branch -> succeeded."
+                ),
+                scope="alpha",
+                status=MemoryStatus.CANDIDATE,
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["reconsolidation", "failure"],
+            )
+            memory.store.upsert_capsule(cap)
+
+            dry = memory.failure_kind_audit(scope="alpha")
+            self.assertEqual(dry.changed, 1)
+            self.assertEqual(dry.items[0]["to_kind"], "project")
+
+            applied = memory.failure_kind_audit(scope="alpha", dry_run=False)
+            self.assertEqual(applied.changed, 1)
+            failures = memory.list_capsules(scope="alpha", kind="failure")
+            projects = memory.list_capsules(scope="alpha", kind="project")
+            self.assertEqual(failures, [])
+            self.assertEqual(len(projects), 1)
+            self.assertNotIn("failure", projects[0]["tags"])
 
     def test_self_kind_audit_reclassifies_false_self_memories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

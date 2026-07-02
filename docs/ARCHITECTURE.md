@@ -83,6 +83,7 @@ consolidate()
   -> episode capsule
   -> optional decision/preference/procedure/failure/project/self capsule
   -> explicit Decision: evidence stays decision context, not failure memory just because it names blocked gates or recall regression
+  -> successful Turn episode assistant outcomes stay progress evidence unless concrete failure output is present
   -> temporal edges with provenance
 
 recall(query, scope, budget)

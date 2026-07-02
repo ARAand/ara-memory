@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,6 +115,8 @@ def _target_kind(body: str) -> tuple[CapsuleKind | None, str]:
         return CapsuleKind.DECISION, "decision text misfiled as failure"
     if text.startswith("Command:") and any(marker in lower for marker in ["-> pass", "-> passed", "status: pass"]):
         return CapsuleKind.EPISODE, "successful command evidence misfiled as failure"
+    if _looks_like_successful_turn_progress(text, lower):
+        return CapsuleKind.PROJECT, "successful turn progress update misfiled as failure"
     project_prefixes = (
         "Added ",
         "After capture, ",
@@ -131,6 +134,35 @@ def _target_kind(body: str) -> tuple[CapsuleKind | None, str]:
     if lower.startswith("git diff for ") or lower.startswith("git status for ") or lower.startswith("git diff stat for "):
         return CapsuleKind.PROJECT, "worktree evidence misfiled as failure"
     return None, ""
+
+
+def _looks_like_successful_turn_progress(text: str, lower: str) -> bool:
+    progress_prefixes = (
+        "turn episode: assistant outcome: add ",
+        "turn episode: assistant outcome: added ",
+        "turn episode: assistant outcome: changed ",
+        "turn episode: assistant outcome: completed ",
+        "turn episode: assistant outcome: fixed ",
+        "turn episode: assistant outcome: implemented ",
+        "turn episode: assistant outcome: wired ",
+    )
+    if not lower.startswith(progress_prefixes):
+        return False
+    if _has_concrete_failure_evidence(lower):
+        return False
+    if "command outcomes:" in lower:
+        return True
+    return any(marker in lower for marker in (" passed", " pass,", " ok", " succeeded", " pushed "))
+
+
+def _has_concrete_failure_evidence(lower: str) -> bool:
+    if re.search(r"\b(exit code|exit_code)\s*[:=]\s*[1-9]\d*\b", lower):
+        return True
+    if re.search(r"\b(traceback|exception|assertionerror)\b", lower):
+        return True
+    if re.search(r"\b(still fail|still fails|failed|failing|unresolved failure|not refreshed|not fixed)\b", lower):
+        return True
+    return False
 
 
 def _update_kind(store: MemoryStore, row: Any, kind: CapsuleKind, *, reason: str) -> None:
