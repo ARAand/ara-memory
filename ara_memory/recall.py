@@ -81,7 +81,14 @@ class RecallCompiler:
             )
         seed_ids = {str(cap["id"]) for cap in candidates}
         graph_terms = graph_activation_terms(terms)
-        activation_edges = self.store.graph_activation_edges(
+        relation_activation_edges = self.store.relation_activation_edges(
+            graph_terms,
+            seed_capsule_ids=seed_ids,
+            scope=scope,
+            include_global=include_global,
+            limit=80,
+        )
+        activation_edges = relation_activation_edges or self.store.graph_activation_edges(
             graph_terms,
             seed_capsule_ids=seed_ids,
             scope=scope,
@@ -91,7 +98,13 @@ class RecallCompiler:
         activation_edge_depths = {_edge_identity(edge): 1 for edge in activation_edges}
         expansion_terms = graph_expansion_terms(activation_edges, graph_terms, limit=6)
         if expansion_terms:
-            second_hop_edges = self.store.graph_activation_edges(
+            second_hop_edges = self.store.relation_activation_edges(
+                expansion_terms,
+                seed_capsule_ids=_edge_source_ids(activation_edges),
+                scope=scope,
+                include_global=include_global,
+                limit=40,
+            ) or self.store.graph_activation_edges(
                 expansion_terms,
                 seed_capsule_ids=_edge_source_ids(activation_edges),
                 scope=scope,
@@ -156,6 +169,8 @@ class RecallCompiler:
             "graph_edges_considered": len(graph_rows),
             "graph_activation_edges_considered": int(spreading["edge_count"]),
             "graph_activation_expansion_terms": list(spreading.get("expansion_terms", [])),
+            "relation_activation_edges_considered": len(relation_activation_edges),
+            "relation_activation_used": bool(relation_activation_edges),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,
@@ -348,6 +363,10 @@ class RecallCompiler:
             "graph_activation_expansion_terms": list(
                 candidate_result.diagnostics.get("graph_activation_expansion_terms", [])
             ),
+            "relation_activation_edges_considered": int(
+                candidate_result.diagnostics.get("relation_activation_edges_considered", 0)
+            ),
+            "relation_activation_used": bool(candidate_result.diagnostics.get("relation_activation_used", False)),
             "include_global": include_global,
             "include_hot": hot_state is not None,
             "scope": scope,

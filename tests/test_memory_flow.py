@@ -447,6 +447,78 @@ class MemoryFlowTests(unittest.TestCase):
             second = next(cap for cap in result.capsules if cap["id"] == second_hop.id)
             self.assertGreater(first["spreading_activation_score"], second["spreading_activation_score"])
 
+    def test_relation_nodes_normalize_duplicate_temporal_edges_for_recall(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            target = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: sealed packet relation rehearsal",
+                body="Sealed packet relation rehearsal validates checksum recovery.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.2,
+                source_event_ids=[],
+                tags=["sealed", "packet", "relation"],
+                status=MemoryStatus.STABLE,
+            )
+            seed = Capsule.create(
+                kind=CapsuleKind.SUMMARY,
+                title="Restore drill relation seed",
+                body="Restore drill relation seed keeps the lexical query grounded.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.8,
+                source_event_ids=[],
+                tags=["restore", "drill"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(target)
+            memory.store.upsert_capsule(seed)
+            memory.store.add_edge(
+                subject="Sealed   Packet",
+                predicate="Requires",
+                object_="Checksum Envelope",
+                scope="alpha",
+                source_capsule_id=target.id,
+                confidence=0.75,
+            )
+            memory.store.add_edge(
+                subject="sealed packet",
+                predicate="requires",
+                object_="checksum envelope",
+                scope="alpha",
+                source_capsule_id=target.id,
+                confidence=0.95,
+            )
+
+            stats = memory.store.stats()
+            self.assertEqual(stats["relation_nodes"], 2)
+            self.assertEqual(stats["relation_edges"], 1)
+            relation_edges = memory.store.relation_activation_edges(
+                ["sealed", "checksum"],
+                seed_capsule_ids=[],
+                scope="alpha",
+                include_global=False,
+                limit=10,
+            )
+            self.assertEqual(len(relation_edges), 1)
+            self.assertEqual(relation_edges[0]["evidence_count"], 2)
+            self.assertEqual(relation_edges[0]["edge_source"], "relation")
+
+            result = memory.recall_candidates(
+                "sealed checksum",
+                scope="alpha",
+                budget=900,
+                include_hot=False,
+                include_global=False,
+                candidate_limit=8,
+            )
+
+            self.assertTrue(result.diagnostics["relation_activation_used"])
+            self.assertEqual(result.diagnostics["relation_activation_edges_considered"], 1)
+            self.assertIn(target.id, result.diagnostics["spreading_activation_boosted_capsules"])
+
     def test_spreading_activation_requires_query_edge_overlap(self) -> None:
         capsules = [
             {

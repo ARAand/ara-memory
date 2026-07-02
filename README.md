@@ -20,9 +20,11 @@ spreading activation pass over temporal edges: first-hop edge text must overlap
 the query, second-hop expansion terms are derived from the first hop, edge
 confidence and depth decay control capped boosts, graph-source capsules can
 supplement the candidate set after risk filtering, and normal outputs expose
-only compact activation diagnostics rather than graph path text. The next
-layers are normalized relation nodes, reconsolidation frames, and broader
-global graph policies.
+only compact activation diagnostics rather than graph path text. Temporal edge
+strings are also normalized into `relation_nodes` and `relation_edges`, and
+recall prefers that relation graph before falling back to raw temporal edges.
+The next layers are semantic relation merging, reconsolidation frames, and
+broader global graph policies.
 
 Natural memory means Ara recalls the desired purpose, identity, and task
 context without rereading raw history or turning every stored event into
@@ -328,17 +330,19 @@ diagnostic-only, and local: it does not call an AI API, does not mutate capsule
 status, and does not turn affective/risk signals into reward. `recall` and
 `recall-candidates` expose `espa_query_axes`, `espa_activation_used`, and
 `espa_axis_coverage` diagnostics.
-After ESPA, recall applies deterministic spreading activation over temporal
-edges. Low-value graph terms are filtered before SQLite lookup, seed-source
-edges get a reserved bucket, duplicate active edges are de-duplicated during
-activation, and every first-hop boost requires query overlap in the edge
-subject, predicate, or object. A bounded second hop can derive up to six
-expansion terms from the first-hop subject/object text, fetch one additional
-edge layer, and apply depth decay before scoring. Graph-supplemented capsules
-render only when they have a positive spreading score and an internal activation
-path; normal pack output does not print that path text. `recall` and
-`recall-candidates` expose `graph_activation_terms`,
+After ESPA, recall applies deterministic spreading activation over normalized
+relation edges, falling back to raw temporal edges only when the relation graph
+has no evidence. Low-value graph terms are filtered before SQLite lookup,
+seed-source edges get a reserved bucket, duplicate active edges are
+de-duplicated during activation, and every first-hop boost requires query
+overlap in the edge subject, predicate, or object. A bounded second hop can
+derive up to six expansion terms from the first-hop subject/object text, fetch
+one additional edge layer, and apply depth decay before scoring.
+Graph-supplemented capsules render only when they have a positive spreading
+score and an internal activation path; normal pack output does not print that
+path text. `recall` and `recall-candidates` expose `graph_activation_terms`,
 `graph_activation_expansion_terms`, `graph_activation_edges_considered`,
+`relation_activation_edges_considered`, `relation_activation_used`,
 `spreading_activation_used`, `spreading_activation_multi_hop_used`,
 `spreading_activation_depth_counts`, `spreading_activation_boosted_count`,
 `spreading_activation_supplemented_count`, and capped boosted/supplemented
@@ -899,8 +903,8 @@ timestamp, and final verification result.
   anchors from working, guarded, evidence, archive, and reject memory so token
   reduction is a policy choice rather than accidental truncation.
 - Retrieval is graph/symbol/BM25 plus deterministic ESPA and bounded two-hop
-  temporal-edge spreading activation first, with optional embeddings left as a
-  later extension point.
+  normalized relation spreading activation first, with optional embeddings left
+  as a later extension point.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
 [docs/SECURITY.md](docs/SECURITY.md) for the technical model and threat model.

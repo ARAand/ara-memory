@@ -14,7 +14,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -171,6 +171,34 @@ CREATE TABLE IF NOT EXISTS temporal_edges (
   FOREIGN KEY(source_capsule_id) REFERENCES capsules(id)
 );
 
+CREATE TABLE IF NOT EXISTS relation_nodes (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  normalized_label TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(scope, normalized_label)
+);
+
+CREATE TABLE IF NOT EXISTS relation_edges (
+  id TEXT PRIMARY KEY,
+  subject_node_id TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  predicate_norm TEXT NOT NULL,
+  object_node_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  source_capsule_id TEXT,
+  confidence REAL NOT NULL DEFAULT 0.5,
+  evidence_count INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(subject_node_id) REFERENCES relation_nodes(id),
+  FOREIGN KEY(object_node_id) REFERENCES relation_nodes(id),
+  FOREIGN KEY(source_capsule_id) REFERENCES capsules(id),
+  UNIQUE(subject_node_id, predicate_norm, object_node_id, scope, source_capsule_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_scope_time ON events(scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_kind ON capsules(scope, kind, status);
 CREATE INDEX IF NOT EXISTS idx_capsules_scope_status ON capsules(scope, status);
@@ -182,6 +210,10 @@ CREATE INDEX IF NOT EXISTS idx_capsule_redaction_witnesses_capsule ON capsule_re
 CREATE INDEX IF NOT EXISTS idx_edges_subject ON temporal_edges(scope, subject, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_object ON temporal_edges(scope, object, predicate);
 CREATE INDEX IF NOT EXISTS idx_edges_source_capsule_active ON temporal_edges(scope, source_capsule_id, valid_to, confidence, created_at);
+CREATE INDEX IF NOT EXISTS idx_relation_nodes_scope_label ON relation_nodes(scope, normalized_label);
+CREATE INDEX IF NOT EXISTS idx_relation_edges_scope_subject ON relation_edges(scope, subject_node_id, predicate_norm);
+CREATE INDEX IF NOT EXISTS idx_relation_edges_scope_object ON relation_edges(scope, object_node_id, predicate_norm);
+CREATE INDEX IF NOT EXISTS idx_relation_edges_source ON relation_edges(scope, source_capsule_id, confidence, updated_at);
 
 CREATE TABLE IF NOT EXISTS memory_actions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -334,6 +366,8 @@ class MemoryStore:
                 _sync_recall_policy_impacts(conn)
             if old_version < 10:
                 _sync_capsules_fts(conn)
+            if old_version < 11:
+                _sync_relation_graph_from_temporal_edges(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -623,6 +657,15 @@ class MemoryStore:
                     utc_now(),
                 ),
             )
+            _upsert_relation_edge(
+                conn,
+                subject=subject,
+                predicate=predicate,
+                object_=object_,
+                scope=scope,
+                source_capsule_id=source_capsule_id,
+                confidence=confidence,
+            )
 
     def graph_neighbors(
         self,
@@ -732,6 +775,108 @@ class MemoryStore:
                 )
         return rows
 
+    def relation_activation_edges(
+        self,
+        terms: Iterable[str],
+        *,
+        seed_capsule_ids: Iterable[str],
+        scope: str,
+        limit: int = 80,
+        include_global: bool = True,
+    ) -> list[sqlite3.Row]:
+        self.init()
+        terms = [t for t in terms if len(t) >= 3]
+        seed_ids = list(dict.fromkeys(str(capsule_id) for capsule_id in seed_capsule_ids if str(capsule_id)))
+        if not terms and not seed_ids:
+            return []
+        scope_filter = "(re.scope = ? OR re.scope = 'global')" if include_global else "re.scope = ?"
+        rows: list[sqlite3.Row] = []
+        seen_edge_ids: set[str] = set()
+
+        def append_rows(query_rows: list[sqlite3.Row]) -> None:
+            for row in query_rows:
+                row_id = str(row["id"])
+                if row_id in seen_edge_ids:
+                    continue
+                rows.append(row)
+                seen_edge_ids.add(row_id)
+                if len(rows) >= limit:
+                    break
+
+        with self.session() as conn:
+            if seed_ids:
+                placeholders = ", ".join("?" for _ in seed_ids)
+                seed_limit = min(limit, max(12, min(48, len(seed_ids) * 4)))
+                append_rows(
+                    list(
+                        conn.execute(
+                            f"""
+                            SELECT
+                              re.id,
+                              sn.label AS subject,
+                              re.predicate AS predicate,
+                              onode.label AS object,
+                              re.scope,
+                              re.source_capsule_id,
+                              re.confidence,
+                              re.updated_at AS created_at,
+                              re.evidence_count,
+                              'relation' AS edge_source
+                            FROM relation_edges re
+                            JOIN relation_nodes sn ON sn.id = re.subject_node_id
+                            JOIN relation_nodes onode ON onode.id = re.object_node_id
+                            WHERE re.source_capsule_id IN ({placeholders})
+                              AND {scope_filter}
+                              AND re.source_capsule_id IS NOT NULL
+                            ORDER BY re.confidence DESC, re.evidence_count DESC, re.updated_at DESC
+                            LIMIT ?
+                            """,
+                            tuple([*seed_ids, scope, seed_limit]),
+                        )
+                    )
+                )
+            if terms and len(rows) < limit:
+                term_clause = " OR ".join(
+                    [
+                        "sn.normalized_label LIKE ? OR re.predicate_norm LIKE ? OR onode.normalized_label LIKE ?"
+                        for _ in terms
+                    ]
+                )
+                args: list[Any] = []
+                for term in terms:
+                    normalized = _normalize_relation_text(term)
+                    args.extend([f"%{normalized}%", f"%{normalized}%", f"%{normalized}%"])
+                args.extend([scope, limit - len(rows)])
+                append_rows(
+                    list(
+                        conn.execute(
+                            f"""
+                            SELECT
+                              re.id,
+                              sn.label AS subject,
+                              re.predicate AS predicate,
+                              onode.label AS object,
+                              re.scope,
+                              re.source_capsule_id,
+                              re.confidence,
+                              re.updated_at AS created_at,
+                              re.evidence_count,
+                              'relation' AS edge_source
+                            FROM relation_edges re
+                            JOIN relation_nodes sn ON sn.id = re.subject_node_id
+                            JOIN relation_nodes onode ON onode.id = re.object_node_id
+                            WHERE ({term_clause})
+                              AND {scope_filter}
+                              AND re.source_capsule_id IS NOT NULL
+                            ORDER BY re.confidence DESC, re.evidence_count DESC, re.updated_at DESC
+                            LIMIT ?
+                            """,
+                            tuple(args),
+                        )
+                    )
+                )
+        return rows
+
     def stats(self) -> dict[str, int]:
         self.init()
         with self.session() as conn:
@@ -747,6 +892,8 @@ class MemoryStore:
                     "SELECT COUNT(*) FROM capsules WHERE status = ?", (MemoryStatus.STABLE.value,)
                 ).fetchone()[0],
                 "edges": conn.execute("SELECT COUNT(*) FROM temporal_edges").fetchone()[0],
+                "relation_nodes": conn.execute("SELECT COUNT(*) FROM relation_nodes").fetchone()[0],
+                "relation_edges": conn.execute("SELECT COUNT(*) FROM relation_edges").fetchone()[0],
                 "source_event_links": conn.execute("SELECT COUNT(*) FROM capsule_source_events").fetchone()[0],
             }
 
@@ -1447,6 +1594,108 @@ def row_to_capsule(row: sqlite3.Row) -> dict[str, Any]:
     return data
 
 
+def _normalize_relation_text(text: str) -> str:
+    normalized = re.sub(r"[_\s]+", " ", str(text or "").lower()).strip()
+    normalized = re.sub(r"[^a-z0-9가-힣 .:-]+", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _relation_node_id(scope: str, normalized_label: str) -> str:
+    digest = sha256(f"{scope}\0{normalized_label}".encode("utf-8")).hexdigest()[:16]
+    return f"rel_node_{digest}"
+
+
+def _relation_edge_id(
+    *,
+    subject_node_id: str,
+    predicate_norm: str,
+    object_node_id: str,
+    scope: str,
+    source_capsule_id: str | None,
+) -> str:
+    source = source_capsule_id or ""
+    digest = sha256(
+        f"{subject_node_id}\0{predicate_norm}\0{object_node_id}\0{scope}\0{source}".encode("utf-8")
+    ).hexdigest()[:18]
+    return f"rel_edge_{digest}"
+
+
+def _upsert_relation_node(conn: sqlite3.Connection, *, label: str, scope: str, now: str) -> str | None:
+    normalized = _normalize_relation_text(label)
+    if not normalized:
+        return None
+    node_id = _relation_node_id(scope, normalized)
+    conn.execute(
+        """
+        INSERT INTO relation_nodes(id, label, normalized_label, scope, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope, normalized_label) DO UPDATE SET
+          label=CASE
+            WHEN length(excluded.label) < length(relation_nodes.label) THEN excluded.label
+            ELSE relation_nodes.label
+          END,
+          updated_at=excluded.updated_at
+        """,
+        (node_id, str(label or "").strip(), normalized, scope, now, now),
+    )
+    row = conn.execute(
+        "SELECT id FROM relation_nodes WHERE scope = ? AND normalized_label = ?",
+        (scope, normalized),
+    ).fetchone()
+    return str(row["id"]) if row else node_id
+
+
+def _upsert_relation_edge(
+    conn: sqlite3.Connection,
+    *,
+    subject: str,
+    predicate: str,
+    object_: str,
+    scope: str,
+    source_capsule_id: str | None,
+    confidence: float,
+) -> None:
+    now = utc_now()
+    subject_node_id = _upsert_relation_node(conn, label=subject, scope=scope, now=now)
+    object_node_id = _upsert_relation_node(conn, label=object_, scope=scope, now=now)
+    predicate_norm = _normalize_relation_text(predicate)
+    if not subject_node_id or not object_node_id or not predicate_norm:
+        return
+    edge_id = _relation_edge_id(
+        subject_node_id=subject_node_id,
+        predicate_norm=predicate_norm,
+        object_node_id=object_node_id,
+        scope=scope,
+        source_capsule_id=source_capsule_id,
+    )
+    conn.execute(
+        """
+        INSERT INTO relation_edges(
+          id, subject_node_id, predicate, predicate_norm, object_node_id, scope,
+          source_capsule_id, confidence, evidence_count, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          confidence=max(relation_edges.confidence, excluded.confidence),
+          evidence_count=relation_edges.evidence_count + 1,
+          updated_at=excluded.updated_at
+        """,
+        (
+            edge_id,
+            subject_node_id,
+            str(predicate or "").strip(),
+            predicate_norm,
+            object_node_id,
+            scope,
+            source_capsule_id,
+            max(0.0, min(1.0, float(confidence))),
+            now,
+            now,
+        ),
+    )
+
+
 def _chunks(items: list[str], size: int) -> Iterator[list[str]]:
     for index in range(0, len(items), size):
         yield items[index : index + size]
@@ -1606,6 +1855,29 @@ def _current_schema_version(conn: sqlite3.Connection) -> int:
         return 0
     value = conn.execute("SELECT value FROM memory_meta WHERE key = 'schema_version'").fetchone()
     return int(value[0]) if value else 0
+
+
+def _sync_relation_graph_from_temporal_edges(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM relation_edges")
+    conn.execute("DELETE FROM relation_nodes")
+    rows = conn.execute(
+        """
+        SELECT subject, predicate, object, scope, source_capsule_id, confidence
+        FROM temporal_edges
+        WHERE valid_to IS NULL
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+    for row in rows:
+        _upsert_relation_edge(
+            conn,
+            subject=row["subject"],
+            predicate=row["predicate"],
+            object_=row["object"],
+            scope=row["scope"],
+            source_capsule_id=row["source_capsule_id"],
+            confidence=float(row["confidence"]),
+        )
 
 
 def _rebuild_capsule_source_events(conn: sqlite3.Connection) -> None:

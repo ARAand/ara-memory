@@ -118,6 +118,8 @@ def build_recall_plan(
                 "graph_activation_expansion_terms": list(
                     diagnostics.get("graph_activation_expansion_terms", [])
                 ),
+                "relation_activation_edges": int(diagnostics.get("relation_activation_edges_considered", 0)),
+                "relation_activation_used": bool(diagnostics.get("relation_activation_used", False)),
                 "spreading_activation_used": bool(diagnostics.get("spreading_activation_used", False)),
                 "spreading_activation_multi_hop_used": bool(
                     diagnostics.get("spreading_activation_multi_hop_used", False)
@@ -259,6 +261,7 @@ def _rationale(
         items.append(
             "Graph activation contributed locally: "
             f"edges={selected.get('graph_activation_edges', 0)}, "
+            f"relation_edges={selected.get('relation_activation_edges', 0)}, "
             f"boosted={selected.get('spreading_activation_boosted_count', 0)}, "
             f"supplemented={selected.get('spreading_activation_supplemented_count', 0)}, "
             f"depths={selected.get('spreading_activation_depth_counts', {})}."
@@ -308,6 +311,8 @@ def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
         "sections_truncated": int(selected.get("sections_truncated", 0)),
         "graph_activation_edges": int(selected.get("graph_activation_edges", 0)),
         "graph_activation_expansion_terms": list(selected.get("graph_activation_expansion_terms", [])),
+        "relation_activation_edges": int(selected.get("relation_activation_edges", 0)),
+        "relation_activation_used": bool(selected.get("relation_activation_used", False)),
         "spreading_activation_used": bool(selected.get("spreading_activation_used", False)),
         "spreading_activation_multi_hop_used": bool(selected.get("spreading_activation_multi_hop_used", False)),
         "spreading_activation_depth_counts": dict(selected.get("spreading_activation_depth_counts", {})),

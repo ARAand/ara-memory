@@ -41,6 +41,7 @@ class GraphActivationReadiness:
                 "- "
                 f"used={diagnostics['spreading_activation_used']}, "
                 f"edges={diagnostics['graph_activation_edges']}, "
+                f"relation_edges={diagnostics['relation_activation_edges']}, "
                 f"depths={diagnostics['spreading_activation_depth_counts']}, "
                 f"boosted={diagnostics['spreading_activation_boosted_count']}, "
                 f"supplemented={diagnostics['spreading_activation_supplemented_count']}, "
@@ -76,6 +77,8 @@ def run_graph_activation_readiness(
         "visible_capsules": int(best.get("visible_capsules", 0)),
         "quality_score": int(best.get("quality_score", 0)),
         "graph_activation_edges": int(best.get("graph_activation_edges", 0)),
+        "relation_activation_edges": int(best.get("relation_activation_edges", 0)),
+        "relation_activation_used": bool(best.get("relation_activation_used", False)),
         "spreading_activation_used": bool(best.get("spreading_activation_used", False)),
         "spreading_activation_multi_hop_used": bool(best.get("spreading_activation_multi_hop_used", False)),
         "spreading_activation_depth_counts": dict(best.get("spreading_activation_depth_counts", {})),
@@ -87,6 +90,8 @@ def run_graph_activation_readiness(
                 "query": item["query"],
                 "best_budget": int(item["best"].get("budget", 0)),
                 "graph_activation_edges": int(item["best"].get("graph_activation_edges", 0)),
+                "relation_activation_edges": int(item["best"].get("relation_activation_edges", 0)),
+                "relation_activation_used": bool(item["best"].get("relation_activation_used", False)),
                 "spreading_activation_used": bool(item["best"].get("spreading_activation_used", False)),
                 "spreading_activation_multi_hop_used": bool(
                     item["best"].get("spreading_activation_multi_hop_used", False)
@@ -149,12 +154,13 @@ def _evaluate_probe(
     }
 
 
-def _probe_rank(item: dict[str, Any]) -> tuple[bool, int, int, int, int, int]:
+def _probe_rank(item: dict[str, Any]) -> tuple[bool, int, int, int, int, int, int]:
     return (
         bool(item.get("spreading_activation_used", False)),
         int(item.get("spreading_activation_boosted_count", 0)),
         int(item.get("spreading_activation_supplemented_count", 0)),
         int(item.get("graph_activation_edges", 0)),
+        int(item.get("relation_activation_edges", 0)),
         int(item.get("visible_capsules", 0)),
         int(item.get("quality_score", 0)),
     )
