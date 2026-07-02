@@ -159,6 +159,7 @@
         <li>core, working, guarded, evidence, archive, reject로 기억 수명주기 분리.</li>
         <li>doctor, health, privacy-pre-push, milestone, goal-roadmap, backup verification 게이트.</li>
         <li>reconsolidation prepare/apply/review, shadow rollback, live rollback 승인 토큰, action witness 계열.</li>
+        <li><code>govern-turn</code> now reports a <code>projection_gate</code> for working-memory overlap, next-action coverage, and token budget.</li>
       </ul>
     </article>
 
@@ -184,7 +185,7 @@
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue: open 187</li>
         <li>distant-memory raw-to-map reduction: 907.6x</li>
-        <li>latest verified backup: <code>.ara-memory\backups\live-action-rollback-v23.zip</code></li>
+        <li>latest verified backup: <code>.ara-memory\backups\projection-gate-v23.zip</code></li>
       </ul>
     </article>
   </section>
@@ -215,6 +216,11 @@
         <div class="row">
           <strong>Live action rollback executor</strong>
           <p>완료: approval review를 다시 통과한 one-use token만 소비하고, recorded cool transition을 compare-and-set으로 되돌린 뒤 action rollback witness를 남긴다.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
+          <strong>Working-memory projection gate</strong>
+          <p>Completed: govern-turn now checks whether projected working memory overlaps visible recall evidence, contains next-action items, and stays inside the working-memory token budget.</p>
           <span class="badge pass">done</span>
         </div>
         <div class="row">

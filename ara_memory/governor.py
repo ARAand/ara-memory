@@ -37,6 +37,7 @@ class TurnGovernanceReport:
     agency_review: dict[str, Any]
     recall_probe: dict[str, Any]
     working_memory: dict[str, Any]
+    projection_gate: dict[str, Any]
     cost: dict[str, Any]
     risks: list[str] = field(default_factory=list)
     actions: list[GovernanceAction] = field(default_factory=list)
@@ -55,6 +56,7 @@ class TurnGovernanceReport:
             "agency_review": self.agency_review,
             "recall_probe": self.recall_probe,
             "working_memory": self.working_memory,
+            "projection_gate": self.projection_gate,
             "cost": self.cost,
             "risks": list(self.risks),
             "actions": [action.as_dict() for action in self.actions],
@@ -96,6 +98,12 @@ class TurnGovernanceReport:
             "- working_memory: "
             f"items={self.working_memory.get('items')} "
             f"tokens={self.working_memory.get('estimated_tokens')}"
+        )
+        lines.append(
+            "- projection_gate: "
+            f"status={self.projection_gate.get('status')} "
+            f"overlap={self.projection_gate.get('visible_projected_overlap')} "
+            f"action_items={self.projection_gate.get('action_items')}"
         )
         lines.append("## Cost")
         lines.append(
@@ -185,7 +193,8 @@ def govern_turn(
         else None
     )
     agency_payload = _agency_payload(agency)
-    risks = _risks(capture_plan, selected_probe, working_payload, command_errors, agency_payload)
+    projection_gate = _projection_gate(working_payload, selected_probe, working_budget=working_budget)
+    risks = _risks(capture_plan, selected_probe, working_payload, projection_gate, command_errors, agency_payload)
     cost = _cost_payload(
         capture_plan,
         working_payload,
@@ -197,6 +206,7 @@ def govern_turn(
         capture_plan,
         selected_probe,
         working_payload,
+        projection_gate,
         agency_payload,
         scope=scope,
         recall_query=recall_query,
@@ -211,6 +221,7 @@ def govern_turn(
         agency_review=agency_payload,
         recall_probe=selected_probe,
         working_memory=working_payload,
+        projection_gate=projection_gate,
         cost=cost,
         risks=risks,
         actions=actions,
@@ -291,8 +302,10 @@ def _working_payload(working: Any) -> dict[str, Any]:
     return {
         "items": len(working.items),
         "estimated_tokens": estimate_tokens(text),
+        "budget": int(working.budget),
         "influential_capsule_ids": working.influential_capsule_ids,
         "projected_capsule_ids": list(working.diagnostics.get("projected_capsule_ids", [])),
+        "recall_visible_capsule_ids": list(working.recall_diagnostics.get("visible_capsule_ids", [])),
         "low_evidence_fallback_suppressed": bool(
             working.diagnostics.get("low_evidence_fallback_suppressed", False)
         ),
@@ -328,6 +341,7 @@ def _actions(
     capture_plan: dict[str, Any],
     recall_probe: dict[str, Any],
     working: dict[str, Any],
+    projection_gate: dict[str, Any],
     agency: dict[str, Any],
     *,
     scope: str,
@@ -363,8 +377,12 @@ def _actions(
         actions.append(
             GovernanceAction(
                 name="working-memory",
-                status="use",
-                reason="project only visible associative memory into the next action",
+                status="use" if projection_gate.get("status") == "pass" else "watch",
+                reason=(
+                    "project only visible associative memory into the next action"
+                    if projection_gate.get("status") == "pass"
+                    else "working-memory projection exists but needs current-evidence verification"
+                ),
                 command=f"python -m ara_memory working-memory \"{_shell_hint(recall_query)}\" --scope {scope}{no_global}{no_hot}",
             )
         )
@@ -392,6 +410,7 @@ def _risks(
     capture_plan: dict[str, Any],
     recall_probe: dict[str, Any],
     working: dict[str, Any],
+    projection_gate: dict[str, Any],
     command_errors: list[str],
     agency: dict[str, Any],
 ) -> list[str]:
@@ -406,6 +425,10 @@ def _risks(
         risks.append("watch: prior working-memory impact changed ranking; treat it as bounded evidence")
     if int(working.get("items", 0)) == 0 and int(recall_probe.get("visible_capsules", 0)) == 0:
         risks.append("watch: no visible memory evidence for this cue")
+    if projection_gate.get("status") == "watch":
+        risks.extend(f"watch: {reason}" for reason in projection_gate.get("reasons", [])[:3])
+    elif projection_gate.get("status") == "fail":
+        risks.extend(f"block: {reason}" for reason in projection_gate.get("reasons", [])[:3])
     agency_stance = str(agency.get("stance", "skip"))
     if agency_stance == "refuse-or-reframe":
         risks.append("block: agency review rejected the instruction frame")
@@ -416,6 +439,49 @@ def _risks(
     elif agency_stance in {"repair-memory-first", "ask-or-roadmap"}:
         risks.append(f"watch: agency review recommends {agency_stance}")
     return risks
+
+
+def _projection_gate(
+    working: dict[str, Any],
+    recall_probe: dict[str, Any],
+    *,
+    working_budget: int,
+) -> dict[str, Any]:
+    projected_ids = set(str(item) for item in working.get("projected_capsule_ids", []))
+    visible_ids = set(str(item) for item in recall_probe.get("visible_capsule_ids", []))
+    working_visible_ids = set(str(item) for item in working.get("recall_visible_capsule_ids", []))
+    visible_evidence_ids = visible_ids or working_visible_ids
+    overlap = sorted(projected_ids.intersection(visible_evidence_ids))
+    sections = dict(working.get("sections", {}))
+    items = int(working.get("items", 0))
+    estimated_tokens = int(working.get("estimated_tokens", 0))
+    reasons: list[str] = []
+    status = "pass"
+    if items == 0:
+        status = "watch"
+        reasons.append("working-memory projected no items; use current files, logs, or user context")
+    if items > 0 and visible_evidence_ids and not overlap:
+        status = "watch"
+        reasons.append("working-memory did not overlap visible recall evidence")
+    if items > 0 and int(sections.get("action", 0)) == 0:
+        status = "watch"
+        reasons.append("working-memory has no action section for the next step")
+    if estimated_tokens > max(0, int(working_budget)):
+        status = "fail"
+        reasons.append("working-memory projection exceeds its token budget")
+    return {
+        "status": status,
+        "items": items,
+        "estimated_tokens": estimated_tokens,
+        "budget": int(working_budget),
+        "action_items": int(sections.get("action", 0)),
+        "risk_items": int(sections.get("risk", 0)),
+        "keep_items": int(sections.get("keep", 0)),
+        "projected_capsule_ids": sorted(projected_ids),
+        "visible_evidence_capsule_ids": sorted(visible_evidence_ids),
+        "visible_projected_overlap": overlap,
+        "reasons": reasons,
+    }
 
 
 def _agency_reason(agency: dict[str, Any]) -> str:

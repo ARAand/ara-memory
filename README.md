@@ -111,7 +111,7 @@ them explicitly.
 Codex/Ara
   -> govern-turn(turn envelope)
       -> agency-review(action_allowed?)
-      -> capture plan + recall probe + working-memory projection
+      -> capture plan + recall probe + working-memory projection + projection gate
   -> ingress-turn / remember-turn / spool-turn
       -> append-only ledger + SQLite event index + private artifacts
       -> consolidate/sleep into typed capsules and temporal edges
@@ -178,9 +178,11 @@ plus a budgeted recall pack.
 Use `govern-turn` when the acting session needs a deterministic front door. It
 does not store the turn. It inspects the same envelope, chooses the capture
 mode, probes recall candidates, projects a working-memory pack only when
-visible evidence exists, runs `agency-review`, reports avoided raw-token cost,
-and recommends whether to use working memory, broader recall context, current
-evidence only, ask first, repair memory evidence, or reframe the request.
+visible evidence exists, runs a projection gate over visible/projected overlap,
+action-section coverage, and token budget, runs `agency-review`, reports
+avoided raw-token cost, and recommends whether to use working memory, broader
+recall context, current evidence only, ask first, repair memory evidence, or
+reframe the request.
 
 ```powershell
 @'
@@ -417,6 +419,10 @@ recall ranking learn which memories were useful instead of only which ones were
 stored. Matching positive impact gives a small capped boost; matching negative
 impact gives a small capped penalty, and unknown impact is diagnostic-only, so
 feedback guides recall without turning it into an unchecked reward signal.
+`govern-turn` now adds a `projection_gate` over that pack: it watches when the
+projection has no items, no action section, no overlap with visible recall
+evidence, or exceeds the working-memory budget. This makes the next-action
+context auditable without forcing Codex to read a full recall pack.
 `agency-review` is the first self-directed judgment layer above recall policy
 and working memory. It checks a current prompt or proposed action against visible
 purpose memory, Ara identity memory, recall-policy routing, and associative

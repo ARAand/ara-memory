@@ -66,6 +66,7 @@ govern_turn(envelope)
   -> agency_review gate for action_allowed and refusal/ask/repair stances
   -> recall_candidates probe over small budgets
   -> working_memory projection only when visible evidence exists
+  -> projection_gate verifies visible/projected overlap, action coverage, and token budget
   -> action recommendation: capture, agency-review, working-memory, recall-context, or current evidence
   -> no event retention and no AI API call
 
@@ -224,6 +225,7 @@ agency_review(prompt, proposed_action, scope)
 govern_turn(turn)
   -> plan turn ingress without storing the turn
   -> run agency_review before recommending capture, recall, or working-memory actions
+  -> run projection_gate so working memory must be visible, action-bearing, and within budget before being treated as clean next-action context
   -> block anti-judgment, destructive, or safety-deferred frames from being treated as normal clearance
   -> still keep the operation local and model-free
 
@@ -539,6 +541,10 @@ RAG usually optimizes for "find similar chunks." Ara Memory OS optimizes for:
 26. Treat working memory as a cue-led action pack, not another cache: it should
     change the next step, record whether it helped, and stay empty when recall
     has no visible evidence.
+26a. Treat working-memory projection as auditable evidence, not ambient context:
+     govern-turn must report whether projected capsule IDs overlap visible
+     recall evidence, whether a Next Action section exists, and whether the
+     projection stayed inside its token budget.
 27. Treat feedback as bounded evidence, not reward maximization: working-memory
     impact rows may nudge ranking only when their cue overlaps the current
     query, and the boost or penalty is capped. Recall-policy-impact rows are

@@ -10410,6 +10410,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(report.passed, payload)
             self.assertEqual(payload["capture_plan"]["recommended_mode"], "remember-turn")
             self.assertGreater(payload["working_memory"]["items"], 0)
+            self.assertEqual(payload["projection_gate"]["status"], "pass")
+            self.assertGreater(payload["projection_gate"]["action_items"], 0)
+            self.assertIn(capsule.id, payload["projection_gate"]["visible_projected_overlap"])
             self.assertEqual(payload["agency_review"]["stance"], "repair-memory-first")
             self.assertFalse(payload["agency_review"]["action_allowed"])
             self.assertIn(capsule.id, payload["working_memory"]["influential_capsule_ids"])
@@ -10446,6 +10449,8 @@ class MemoryFlowTests(unittest.TestCase):
             payload = report.as_dict()
 
             self.assertEqual(payload["working_memory"]["items"], 0)
+            self.assertEqual(payload["projection_gate"]["status"], "watch")
+            self.assertIn("working-memory projected no items", " ".join(payload["projection_gate"]["reasons"]))
             self.assertEqual(payload["agency_review"]["stance"], "repair-memory-first")
             self.assertTrue(payload["recall_probe"]["low_evidence_fallback_suppressed"])
             self.assertTrue(any(action["name"] == "proceed-with-current-evidence" for action in payload["actions"]))
