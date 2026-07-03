@@ -16,7 +16,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -663,6 +663,50 @@ CREATE TABLE IF NOT EXISTS memory_mutation_witnesses (
 CREATE INDEX IF NOT EXISTS idx_memory_mutation_witnesses_scope
 ON memory_mutation_witnesses(scope, action, created_at);
 
+CREATE TABLE IF NOT EXISTS memory_mutation_rollback_approvals (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  scope TEXT NOT NULL,
+  mutation_witness_id TEXT NOT NULL,
+  mutation_approval_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  witness_snapshot_json TEXT NOT NULL,
+  capsule_snapshot_json TEXT NOT NULL,
+  confirmation_required TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  used_at TEXT,
+  FOREIGN KEY(mutation_witness_id) REFERENCES memory_mutation_witnesses(id),
+  FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_mutation_rollback_approvals_status
+ON memory_mutation_rollback_approvals(scope, action, status, expires_at);
+
+CREATE TABLE IF NOT EXISTS memory_mutation_rollback_witnesses (
+  id TEXT PRIMARY KEY,
+  rollback_approval_id TEXT NOT NULL,
+  mutation_witness_id TEXT NOT NULL,
+  mutation_approval_id TEXT NOT NULL,
+  capsule_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  before_json TEXT NOT NULL,
+  after_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(rollback_approval_id) REFERENCES memory_mutation_rollback_approvals(id),
+  FOREIGN KEY(mutation_witness_id) REFERENCES memory_mutation_witnesses(id),
+  FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+  FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_mutation_rollback_witnesses_scope
+ON memory_mutation_rollback_witnesses(scope, action, created_at);
+
 CREATE TABLE IF NOT EXISTS working_memory_impacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL,
@@ -751,6 +795,8 @@ class MemoryStore:
                 _ensure_memory_review_rollback_v25_tables(conn)
             if old_version < 26:
                 _ensure_memory_mutation_v26_tables(conn)
+            if old_version < 27:
+                _ensure_memory_mutation_rollback_v27_tables(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -2408,6 +2454,203 @@ class MemoryStore:
                 ],
             }
 
+    def prepare_mutation_rollback_approval(
+        self,
+        witness_id: str,
+        *,
+        ttl_minutes: int = 30,
+    ) -> dict[str, Any]:
+        self.init()
+        token = secrets.token_urlsafe(24)
+        approval_id = new_id("mrb")
+        confirmation = "ROLL BACK MEMORY REWRITE"
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+        with self.session() as conn:
+            witness_row = conn.execute(
+                "SELECT * FROM memory_mutation_witnesses WHERE id = ?",
+                (witness_id,),
+            ).fetchone()
+            if witness_row is None:
+                raise ValueError(f"Mutation witness not found: {witness_id}")
+            witness = dict(witness_row)
+            if witness["action"] != "rewrite":
+                raise ValueError("Only rewrite mutation rollback is implemented.")
+            row = conn.execute("SELECT * FROM capsules WHERE id = ?", (witness["capsule_id"],)).fetchone()
+            if row is None:
+                raise ValueError("Cannot prepare mutation rollback because target capsule is missing.")
+            current = _capsule_witness_snapshot(row)
+            witness_after = json.loads(str(witness["after_json"]))
+            if _json_digest(current) != _json_digest(witness_after):
+                raise ValueError("Cannot prepare mutation rollback because target capsule changed after mutation witness.")
+            conn.execute(
+                """
+                INSERT INTO memory_mutation_rollback_approvals(
+                  id, token_hash, scope, mutation_witness_id, mutation_approval_id,
+                  capsule_id, action, witness_snapshot_json, capsule_snapshot_json,
+                  confirmation_required, expires_at, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval_id,
+                    _token_hash(token),
+                    witness["scope"],
+                    witness["id"],
+                    witness["mutation_approval_id"],
+                    witness["capsule_id"],
+                    witness["action"],
+                    json.dumps(witness, ensure_ascii=False, sort_keys=True),
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    confirmation,
+                    expires_at,
+                    "prepared",
+                    utc_now(),
+                ),
+            )
+        return {
+            "approval_id": approval_id,
+            "token": token,
+            "scope": witness["scope"],
+            "mutation_witness_id": witness["id"],
+            "mutation_approval_id": witness["mutation_approval_id"],
+            "capsule_id": witness["capsule_id"],
+            "action": witness["action"],
+            "confirmation_required": confirmation,
+            "expires_at": expires_at,
+            "status": "prepared",
+        }
+
+    def live_mutation_rollback(
+        self,
+        approval_token: str,
+        *,
+        confirm: str,
+    ) -> dict[str, Any]:
+        self.init()
+        confirmation = "ROLL BACK MEMORY REWRITE"
+        if confirm != confirmation:
+            return _mutation_rollback_blocked(None, "Confirmation did not match.", confirmation)
+        with self.session() as conn:
+            approval_row = conn.execute(
+                "SELECT * FROM memory_mutation_rollback_approvals WHERE token_hash = ?",
+                (_token_hash(approval_token),),
+            ).fetchone()
+            if approval_row is None:
+                return _mutation_rollback_blocked(None, "Approval token was not found.", confirmation)
+            approval = dict(approval_row)
+            if approval["status"] != "prepared":
+                return _mutation_rollback_blocked(approval, f"Approval status is {approval['status']}, not prepared.", confirmation)
+            if _is_expired(str(approval["expires_at"])):
+                conn.execute(
+                    "UPDATE memory_mutation_rollback_approvals SET status = ? WHERE id = ?",
+                    ("expired", approval["id"]),
+                )
+                return _mutation_rollback_blocked(approval, "Approval token is expired.", confirmation)
+            if approval["action"] != "rewrite":
+                return _mutation_rollback_blocked(approval, "Only rewrite mutation rollback is implemented.", confirmation)
+            witness_row = conn.execute(
+                "SELECT * FROM memory_mutation_witnesses WHERE id = ?",
+                (approval["mutation_witness_id"],),
+            ).fetchone()
+            if witness_row is None:
+                return _mutation_rollback_blocked(approval, "Approved mutation witness is missing.", confirmation)
+            witness = dict(witness_row)
+            if _json_digest(witness) != _json_digest(json.loads(str(approval["witness_snapshot_json"]))):
+                return _mutation_rollback_blocked(approval, "Approved mutation witness changed after rollback approval.", confirmation)
+            row = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if row is None:
+                return _mutation_rollback_blocked(approval, "Approved capsule is missing.", confirmation)
+            current = _capsule_witness_snapshot(row)
+            approved_current = json.loads(str(approval["capsule_snapshot_json"]))
+            if _json_digest(current) != _json_digest(approved_current):
+                return _mutation_rollback_blocked(approval, "Approved capsule changed after mutation rollback approval.", confirmation)
+            witness_after = json.loads(str(witness["after_json"]))
+            if _json_digest(current) != _json_digest(witness_after):
+                return _mutation_rollback_blocked(approval, "Approved capsule no longer matches mutation witness after snapshot.", confirmation)
+            witness_before = json.loads(str(witness["before_json"]))
+            now = utc_now()
+            cur = conn.execute(
+                """
+                UPDATE capsules
+                SET title = ?, body = ?, tags_json = ?, updated_at = ?
+                WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                """,
+                (
+                    witness_before["title"],
+                    witness_before["body"],
+                    json.dumps(list(witness_before["tags"]), ensure_ascii=False),
+                    now,
+                    approval["capsule_id"],
+                    current["title"],
+                    current["body"],
+                    json.dumps(list(current["tags"]), ensure_ascii=False),
+                    current["status"],
+                ),
+            )
+            if cur.rowcount <= 0:
+                return _mutation_rollback_blocked(approval, "Rewrite rollback compare-and-set failed.", confirmation)
+            updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
+            if updated is None:
+                return _mutation_rollback_blocked(approval, "Capsule disappeared during rewrite rollback.", confirmation)
+            _sync_capsule_fts_row(conn, updated)
+            after = _capsule_witness_snapshot(updated)
+            rollback_witness_id = new_id("mrbw")
+            conn.execute(
+                """
+                INSERT INTO memory_mutation_rollback_witnesses(
+                  id, rollback_approval_id, mutation_witness_id, mutation_approval_id,
+                  capsule_id, scope, action, reason, before_json, after_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rollback_witness_id,
+                    approval["id"],
+                    approval["mutation_witness_id"],
+                    approval["mutation_approval_id"],
+                    approval["capsule_id"],
+                    approval["scope"],
+                    "rewrite-rollback",
+                    f"approved rollback of mutation witness {approval['mutation_witness_id']}",
+                    json.dumps(current, ensure_ascii=False, sort_keys=True),
+                    json.dumps(after, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_actions(action, capsule_id, scope, reason, actor, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "rewrite-rollback",
+                    approval["capsule_id"],
+                    approval["scope"],
+                    f"approved rollback of mutation witness {approval['mutation_witness_id']}",
+                    "memory-mutation-rollback",
+                    utc_now(),
+                ),
+            )
+            conn.execute(
+                "UPDATE memory_mutation_rollback_approvals SET status = ?, used_at = ? WHERE id = ?",
+                ("used", utc_now(), approval["id"]),
+            )
+            _invalidate_hot_scope(self.hot_dir, str(approval["scope"]))
+            return {
+                "passed": True,
+                "approval_id": approval["id"],
+                "rollback_witness_id": rollback_witness_id,
+                "mutation_witness_id": approval["mutation_witness_id"],
+                "mutation_approval_id": approval["mutation_approval_id"],
+                "capsule_id": approval["capsule_id"],
+                "scope": approval["scope"],
+                "action": "rewrite-rollback",
+                "recommendations": [
+                    "Live rewrite rollback restored only the projection fields recorded by the approved mutation witness.",
+                    "Run health and recall-regression after live rewrite rollback.",
+                ],
+            }
+
     def list_working_memory_impacts(
         self,
         *,
@@ -2613,6 +2856,25 @@ def _mutation_blocked(
         "scope": approval.get("scope") if approval else None,
         "action": approval.get("action") if approval else None,
         "mutation_digest": approval.get("mutation_digest") if approval else None,
+        "confirmation_required": confirmation,
+        "recommendations": [message],
+    }
+
+
+def _mutation_rollback_blocked(
+    approval: dict[str, Any] | None,
+    message: str,
+    confirmation: str,
+) -> dict[str, Any]:
+    return {
+        "passed": False,
+        "approval_id": approval.get("id") if approval else None,
+        "rollback_witness_id": None,
+        "mutation_witness_id": approval.get("mutation_witness_id") if approval else None,
+        "mutation_approval_id": approval.get("mutation_approval_id") if approval else None,
+        "capsule_id": approval.get("capsule_id") if approval else None,
+        "scope": approval.get("scope") if approval else None,
+        "action": approval.get("action") if approval else None,
         "confirmation_required": confirmation,
         "recommendations": [message],
     }
@@ -2967,6 +3229,56 @@ def _ensure_memory_mutation_v26_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_memory_mutation_witnesses_scope
         ON memory_mutation_witnesses(scope, action, created_at);
+        """
+    )
+
+
+def _ensure_memory_mutation_rollback_v27_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS memory_mutation_rollback_approvals (
+          id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL UNIQUE,
+          scope TEXT NOT NULL,
+          mutation_witness_id TEXT NOT NULL,
+          mutation_approval_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          witness_snapshot_json TEXT NOT NULL,
+          capsule_snapshot_json TEXT NOT NULL,
+          confirmation_required TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          used_at TEXT,
+          FOREIGN KEY(mutation_witness_id) REFERENCES memory_mutation_witnesses(id),
+          FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_rollback_approvals_status
+        ON memory_mutation_rollback_approvals(scope, action, status, expires_at);
+
+        CREATE TABLE IF NOT EXISTS memory_mutation_rollback_witnesses (
+          id TEXT PRIMARY KEY,
+          rollback_approval_id TEXT NOT NULL,
+          mutation_witness_id TEXT NOT NULL,
+          mutation_approval_id TEXT NOT NULL,
+          capsule_id TEXT NOT NULL,
+          scope TEXT NOT NULL,
+          action TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          before_json TEXT NOT NULL,
+          after_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(rollback_approval_id) REFERENCES memory_mutation_rollback_approvals(id),
+          FOREIGN KEY(mutation_witness_id) REFERENCES memory_mutation_witnesses(id),
+          FOREIGN KEY(mutation_approval_id) REFERENCES memory_mutation_approvals(id),
+          FOREIGN KEY(capsule_id) REFERENCES capsules(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_memory_mutation_rollback_witnesses_scope
+        ON memory_mutation_rollback_witnesses(scope, action, created_at);
         """
     )
 

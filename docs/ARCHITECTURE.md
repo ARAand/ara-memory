@@ -531,6 +531,16 @@ live_mutation_apply(token)
   -> require approval capsule snapshot and preflight digest have not drifted
   -> compare-and-set title/body/tags only
   -> write memory_mutation_witnesses and consume approval
+
+prepare_mutation_rollback(witness)
+  -> require applied rewrite witness and live capsule still equals witness after_json
+  -> write one-use rollback approval with token hash and capsule snapshot
+
+live_mutation_rollback(token)
+  -> require exact confirmation and prepared, unexpired rollback token
+  -> require witness and target capsule snapshots have not drifted
+  -> compare-and-set title/body/tags back to witness before_json
+  -> write memory_mutation_rollback_witnesses and consume approval
 ```
 
 Manual promotion uses the shared deterministic risk gate but remains an

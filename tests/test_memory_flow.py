@@ -14214,6 +14214,164 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("changed after mutation approval", blocked["recommendations"][0])
             self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "drifted theta title")
 
+    def test_live_mutation_rollback_requires_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project iota live rewrite rollback should restore projection fields.",
+                source="test",
+                scope="iota",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="old iota title",
+                body="Project iota live rewrite rollback should restore projection fields.",
+                scope="iota",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["rewrite", "rollback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(
+                capsule_id=capsule.id,
+                action="rewrite",
+                title="new iota title",
+                body="Project iota live rewrite was applied before rollback.",
+                tags=["rewrite", "rollback", "applied"],
+                ttl_minutes=10,
+            )
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+            self.assertTrue(applied["passed"], applied)
+            witness_id = applied["mutation_witness_id"]
+
+            rollback_approval = memory.prepare_mutation_rollback(str(witness_id), ttl_minutes=10)
+
+            self.assertTrue(rollback_approval["token"])
+            self.assertEqual(rollback_approval["confirmation_required"], "ROLL BACK MEMORY REWRITE")
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT * FROM memory_mutation_rollback_approvals WHERE id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(approval_row)
+                self.assertNotEqual(approval_row["token_hash"], rollback_approval["token"])
+
+            wrong_confirm = memory.live_mutation_rollback(rollback_approval["token"], confirm="ROLLBACK")
+            self.assertFalse(wrong_confirm["passed"])
+            self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "new iota title")
+
+            rolled_back = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY REWRITE",
+            )
+
+            self.assertTrue(rolled_back["passed"], rolled_back)
+            restored = memory.store.get_capsule(capsule.id)
+            self.assertEqual(restored["title"], "old iota title")
+            self.assertEqual(restored["body"], "Project iota live rewrite rollback should restore projection fields.")
+            self.assertEqual(json.loads(restored["tags_json"]), ["rewrite", "rollback"])
+            reused = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY REWRITE",
+            )
+            self.assertFalse(reused["passed"])
+            self.assertIn("not prepared", reused["recommendations"][0])
+            with memory.store.session() as conn:
+                approval_status = conn.execute(
+                    "SELECT status, used_at FROM memory_mutation_rollback_approvals WHERE id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertEqual(approval_status["status"], "used")
+                self.assertIsNotNone(approval_status["used_at"])
+                witness_row = conn.execute(
+                    "SELECT * FROM memory_mutation_rollback_witnesses WHERE rollback_approval_id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(witness_row)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "live-mutation-rollback",
+                    "--approval-token",
+                    rollback_approval["token"],
+                    "--confirm",
+                    "ROLL BACK MEMORY REWRITE",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"])
+
+    def test_live_mutation_rollback_blocks_when_capsule_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project kappa live rewrite rollback should block drift.",
+                source="test",
+                scope="kappa",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="old kappa title",
+                body="Project kappa live rewrite rollback should block drift.",
+                scope="kappa",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["rewrite", "rollback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(
+                capsule_id=capsule.id,
+                action="rewrite",
+                title="new kappa title",
+                body="Project kappa rewrite was applied before rollback drift.",
+                tags=["rewrite", "rollback", "applied"],
+                ttl_minutes=10,
+            )
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+            rollback_approval = memory.prepare_mutation_rollback(applied["mutation_witness_id"], ttl_minutes=10)
+            current = memory.store.get_capsule(capsule.id)
+            memory.store.update_capsule_projection_if_current(
+                capsule.id,
+                title="drifted kappa title",
+                body=current["body"],
+                tags=json.loads(current["tags_json"]),
+                expected_status=current["status"],
+                expected_title=current["title"],
+                expected_body=current["body"],
+                expected_tags=json.loads(current["tags_json"]),
+                actor="test",
+                reason="simulate rewrite rollback drift",
+                action="test-drift",
+            )
+
+            blocked = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY REWRITE",
+            )
+
+            self.assertFalse(blocked["passed"])
+            self.assertIn("changed after mutation rollback approval", blocked["recommendations"][0])
+            self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "drifted kappa title")
+
     def test_positive_impact_feedback_does_not_drive_quality_or_sleep_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

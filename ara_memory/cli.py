@@ -854,6 +854,14 @@ def main(argv: list[str] | None = None) -> int:
     live_mutation_apply.add_argument("--approval-token", required=True)
     live_mutation_apply.add_argument("--confirm", required=True)
     live_mutation_apply.add_argument("--json", action="store_true")
+    prepare_mutation_rollback = sub.add_parser("prepare-mutation-rollback")
+    prepare_mutation_rollback.add_argument("--witness-id", required=True)
+    prepare_mutation_rollback.add_argument("--ttl-minutes", type=int, default=30)
+    prepare_mutation_rollback.add_argument("--json", action="store_true")
+    live_mutation_rollback = sub.add_parser("live-mutation-rollback")
+    live_mutation_rollback.add_argument("--approval-token", required=True)
+    live_mutation_rollback.add_argument("--confirm", required=True)
+    live_mutation_rollback.add_argument("--json", action="store_true")
     review_worker = sub.add_parser("review-worker")
     review_worker.add_argument("--scope", default=None)
     review_worker.add_argument("--limit", type=int, default=25)
@@ -2421,6 +2429,29 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "live-mutation-apply":
         result = memory.live_mutation_apply(args.approval_token, confirm=args.confirm)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            status = "passed" if result.get("passed") else "blocked"
+            print(f"{status}: {result.get('approval_id')}")
+            for item in result.get("recommendations", []):
+                print(f"- {item}")
+        return 0 if result.get("passed") else 1
+
+    if args.cmd == "prepare-mutation-rollback":
+        result = memory.prepare_mutation_rollback(args.witness_id, ttl_minutes=args.ttl_minutes)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"approval_id: {result['approval_id']}")
+            print(f"mutation_witness_id: {result['mutation_witness_id']}")
+            print(f"confirmation_required: {result['confirmation_required']}")
+            print(f"expires_at: {result['expires_at']}")
+            print(f"token: {result['token']}")
+        return 0
+
+    if args.cmd == "live-mutation-rollback":
+        result = memory.live_mutation_rollback(args.approval_token, confirm=args.confirm)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         else:

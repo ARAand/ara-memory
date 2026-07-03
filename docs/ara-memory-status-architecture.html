@@ -168,7 +168,7 @@
     <article class="span-4">
       <h2>최신 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>은 26이고 rewrite mutation approval/witness 테이블이 있다.</li>
+        <li><code>SCHEMA_VERSION</code>은 27이고 rewrite mutation rollback approval/witness 테이블이 있다.</li>
         <li><code>live-reconsolidation-cool</code>은 첫 제한적 live action executor로 열렸다.</li>
         <li><code>reconsolidation-action-witnesses</code>와 shadow rollback으로 live action의 되돌림 가능성을 검증한다.</li>
         <li><code>prepare-live-reconsolidation-action-rollback</code>은 one-use rollback approval token을 만든다.</li>
@@ -182,6 +182,7 @@
         <li><code>prepare-review-rollback</code>과 <code>live-review-rollback</code>은 review-worker status transition을 one-use token으로 되돌린다.</li>
         <li><code>mutation-preflight</code>는 rewrite/delete 실행 전 before/after/rollback projection과 risk gate를 만든다.</li>
         <li><code>prepare-mutation</code>과 <code>live-mutation-apply</code>는 rewrite projection만 token-gated live executor로 적용한다.</li>
+        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 applied rewrite witness를 되돌린다.</li>
       </ul>
     </article>
 
@@ -193,9 +194,9 @@
         <li>relation nodes: 6,966</li>
         <li>relation edges: 27,105</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue: open 21</li>
+        <li>review queue: open 25</li>
         <li>distant-memory raw-to-map reduction: 938.9x</li>
-        <li>storage: 342,898,784 bytes, backups: 119,917,259 bytes</li>
+        <li>storage: 341,661,268 bytes, backups: 119,917,259 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -280,9 +281,14 @@
           <span class="badge pass">done</span>
         </div>
         <div class="row">
+          <strong>Live rewrite rollback</strong>
+          <p>Completed: prepare-mutation-rollback and live-mutation-rollback restore title/body/tags from the approved mutation witness when the target capsule has not drifted.</p>
+          <span class="badge pass">done</span>
+        </div>
+        <div class="row">
           <strong>rewrite / promote / delete executor</strong>
-          <p>현재 live rewrite는 제한적으로 열렸고 delete는 preflight까지만 있다. 다음 단계는 rewrite rollback과 soft-delete approval/shadow apply를 분리해서 여는 것이다.</p>
-          <span class="badge watch">4-6h</span>
+          <p>현재 live rewrite는 apply/rollback까지 열렸고 delete는 preflight까지만 있다. 다음 단계는 soft-delete approval과 shadow apply를 분리해서 여는 것이다.</p>
+          <span class="badge watch">3-5h</span>
         </div>
         <div class="row">
           <strong>Memory worker 분리</strong>
