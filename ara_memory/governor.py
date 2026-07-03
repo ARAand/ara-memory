@@ -33,6 +33,7 @@ class TurnGovernanceReport:
     scope: str
     cue: str
     recall_query: str
+    budget_profile: dict[str, Any]
     capture_plan: dict[str, Any]
     agency_review: dict[str, Any]
     recall_probe: dict[str, Any]
@@ -55,6 +56,7 @@ class TurnGovernanceReport:
             "scope": self.scope,
             "cue": self.cue,
             "recall_query": self.recall_query,
+            "budget_profile": self.budget_profile,
             "capture_plan": self.capture_plan,
             "agency_review": self.agency_review,
             "recall_probe": self.recall_probe,
@@ -74,6 +76,12 @@ class TurnGovernanceReport:
             f"status: {'pass' if self.passed else 'watch'}",
             f"cue: {compact_text(self.cue or '(empty)', limit=260)}",
             f"recall_query: {self.recall_query or '(none)'}",
+            (
+                "budget_profile: "
+                f"{self.budget_profile.get('name')} "
+                f"budgets={self.budget_profile.get('budgets')} "
+                f"working={self.budget_profile.get('working_budget')}"
+            ),
             "## Actions",
         ]
         if self.actions:
@@ -147,7 +155,8 @@ def govern_turn(
     scope: str = "global",
     capture_cwd: Path | None = None,
     budgets: list[int] | None = None,
-    working_budget: int = 900,
+    working_budget: int | None = None,
+    budget_profile: str = "auto",
     include_global: bool = True,
     include_hot: bool = True,
     direct_text_threshold: int = 16000,
@@ -165,9 +174,6 @@ def govern_turn(
     """Plan memory actions for a turn without storing or rendering raw history."""
 
     memory.init()
-    budgets = sorted({int(item) for item in (budgets or [800, 1600, 2500]) if int(item) > 0})
-    if not budgets:
-        budgets = [800]
     capture_plan = plan_turn_ingress(
         turn,
         capture_cwd=capture_cwd,
@@ -179,6 +185,20 @@ def govern_turn(
     recall_query = _recall_query(cue)
     active_files = _turn_artifact_paths(turn)
     command_errors = _turn_command_errors(turn)
+    resolved_profile = _resolve_budget_profile(
+        cue,
+        active_files=active_files,
+        command_errors=command_errors,
+        requested_profile=budget_profile,
+        explicit_budgets=budgets,
+        explicit_working_budget=working_budget,
+        explicit_max_input_tokens=max_input_tokens,
+        explicit_max_model_cost_usd=max_model_cost_usd,
+    )
+    budgets = list(resolved_profile["budgets"])
+    working_budget = int(resolved_profile["working_budget"])
+    max_input_tokens = int(resolved_profile["max_input_tokens"])
+    max_model_cost_usd = float(resolved_profile["max_model_cost_usd"])
     selected_probe = _select_recall_probe(
         memory,
         recall_query,
@@ -276,6 +296,7 @@ def govern_turn(
         scope=scope,
         cue=cue,
         recall_query=recall_query,
+        budget_profile=resolved_profile,
         capture_plan=capture_plan,
         agency_review=agency_payload,
         recall_probe=selected_probe,
@@ -748,6 +769,134 @@ def _cost_gate(
         "max_model_cost_usd": float(max_model_cost_usd),
         "reasons": reasons,
     }
+
+
+def _resolve_budget_profile(
+    cue: str,
+    *,
+    active_files: list[str],
+    command_errors: list[str],
+    requested_profile: str,
+    explicit_budgets: list[int] | None,
+    explicit_working_budget: int | None,
+    explicit_max_input_tokens: int,
+    explicit_max_model_cost_usd: float,
+) -> dict[str, Any]:
+    profiles: dict[str, dict[str, Any]] = {
+        "quick": {
+            "budgets": [500, 900],
+            "working_budget": 650,
+            "max_input_tokens": 1200,
+            "max_model_cost_usd": 0.0,
+            "reason": "quick status or orientation turn",
+        },
+        "standard": {
+            "budgets": [800, 1600, 2500],
+            "working_budget": 900,
+            "max_input_tokens": 2600,
+            "max_model_cost_usd": 0.0,
+            "reason": "standard implementation or planning turn",
+        },
+        "deep": {
+            "budgets": [1200, 2500, 4000],
+            "working_budget": 1400,
+            "max_input_tokens": 4400,
+            "max_model_cost_usd": 0.0,
+            "reason": "architecture, purpose, or long-running design turn",
+        },
+        "debug": {
+            "budgets": [900, 1800, 3000],
+            "working_budget": 1100,
+            "max_input_tokens": 3400,
+            "max_model_cost_usd": 0.0,
+            "reason": "failure or command-error turn",
+        },
+        "mutation": {
+            "budgets": [1200, 2200, 3200],
+            "working_budget": 1200,
+            "max_input_tokens": 3600,
+            "max_model_cost_usd": 0.0,
+            "reason": "memory mutation, deletion, rollback, or irreversible operation",
+        },
+    }
+    requested = (requested_profile or "auto").strip().lower()
+    if requested == "auto":
+        name = _infer_budget_profile(cue, active_files=active_files, command_errors=command_errors)
+    elif requested in profiles:
+        name = requested
+    else:
+        name = "standard"
+    profile = dict(profiles[name])
+    explicit_budget_values = sorted({int(item) for item in (explicit_budgets or []) if int(item) > 0})
+    if explicit_budget_values:
+        profile["budgets"] = explicit_budget_values
+        profile["budgets_source"] = "explicit"
+    else:
+        profile["budgets_source"] = "profile"
+    if explicit_working_budget is not None and int(explicit_working_budget) > 0:
+        profile["working_budget"] = int(explicit_working_budget)
+        profile["working_budget_source"] = "explicit"
+    else:
+        profile["working_budget_source"] = "profile"
+    if int(explicit_max_input_tokens) > 0:
+        profile["max_input_tokens"] = int(explicit_max_input_tokens)
+        profile["max_input_tokens_source"] = "explicit"
+    else:
+        profile["max_input_tokens_source"] = "profile"
+    if float(explicit_max_model_cost_usd) > 0:
+        profile["max_model_cost_usd"] = float(explicit_max_model_cost_usd)
+        profile["max_model_cost_usd_source"] = "explicit"
+    else:
+        profile["max_model_cost_usd_source"] = "profile"
+    profile["name"] = name
+    profile["requested"] = requested
+    return profile
+
+
+def _infer_budget_profile(cue: str, *, active_files: list[str], command_errors: list[str]) -> str:
+    text = cue.lower()
+    if command_errors or any(marker in text for marker in ("traceback", "exception", "failed", "error", "실패", "에러", "오류")):
+        return "debug"
+    mutation_terms = (
+        "delete",
+        "rollback",
+        "prune",
+        "mutation",
+        "rewrite",
+        "reconsolidation",
+        "apply",
+        "irreversible",
+        "삭제",
+        "롤백",
+        "되돌",
+        "변경",
+        "적용",
+        "승인",
+    )
+    if any(term in text for term in mutation_terms):
+        return "mutation"
+    deep_terms = (
+        "architecture",
+        "algorithm",
+        "memory os",
+        "long-term",
+        "free will",
+        "natural memory",
+        "governance",
+        "아키텍처",
+        "알고리즘",
+        "기억저장소",
+        "장기",
+        "자유의지",
+        "자연스러운",
+        "목표",
+    )
+    if any(term in text for term in deep_terms):
+        return "deep"
+    quick_terms = ("status", "summary", "health", "current work", "상황", "상태", "요약", "현재")
+    if not active_files and any(term in text for term in quick_terms):
+        return "quick"
+    return "standard"
 
 
 def _turn_cue(turn: Mapping[str, Any]) -> str:

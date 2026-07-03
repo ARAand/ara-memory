@@ -180,10 +180,13 @@ does not store the turn. It inspects the same envelope, chooses the capture
 mode, probes recall candidates, projects a working-memory pack only when
 visible evidence exists, runs a projection gate over visible/projected overlap,
 action-section coverage, and token budget, runs `recall-quality` over the same
-cue, runs `agency-review`, applies optional token/cost ceilings, reports avoided
-raw-token cost, and recommends whether to use working memory, broader recall
-context, current evidence only, ask first, repair memory evidence, or reframe
-the request.
+cue, runs `agency-review`, applies a task-kind budget profile plus optional
+token/cost ceilings, reports avoided raw-token cost, and recommends whether to
+use working memory, broader recall context, current evidence only, ask first,
+repair memory evidence, or reframe the request. The default `--budget-profile
+auto` classifies quick status, standard implementation, deep architecture,
+debugging, and mutation/rollback turns so recall budgets and input ceilings are
+sized to the risk instead of using one budget for every memory call.
 
 ```powershell
 @'
@@ -887,7 +890,9 @@ safely instead of draining the same queue twice. Use
 debugging raw capture pressure. Use `--no-governance-probe` only when isolating
 worker failures; `--governance-max-input-tokens` and
 `--governance-max-model-cost-usd` let scheduled runs fail fast when the selected
-memory context would exceed an operator-set budget.
+memory context would exceed an operator-set budget. Worker-loop reports include
+the governance budget profile name so scheduled logs show whether a probe used
+quick, standard, deep, debug, or mutation recall sizing.
 `worker-loop` repeats the same worker pass with a compact per-iteration report.
 Use `--iterations 1` under Task Scheduler/cron, or a higher iteration count for
 a foreground loop while developing.

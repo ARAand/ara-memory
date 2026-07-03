@@ -589,8 +589,13 @@ def main(argv: list[str] | None = None) -> int:
     govern_turn.add_argument("--file", type=Path, default=None, help="JSON turn envelope. Defaults to stdin.")
     govern_turn.add_argument("--scope", default="global")
     govern_turn.add_argument("--capture-cwd", type=Path, default=None)
-    govern_turn.add_argument("--budgets", default="800,1600,2500")
-    govern_turn.add_argument("--working-budget", type=int, default=900)
+    govern_turn.add_argument("--budgets", default="")
+    govern_turn.add_argument("--working-budget", type=int, default=0)
+    govern_turn.add_argument(
+        "--budget-profile",
+        choices=["auto", "quick", "standard", "deep", "debug", "mutation"],
+        default="auto",
+    )
     govern_turn.add_argument("--no-global", action="store_true")
     govern_turn.add_argument("--no-hot", action="store_true")
     govern_turn.add_argument("--direct-text-threshold", type=int, default=16000)
@@ -1997,8 +2002,9 @@ def main(argv: list[str] | None = None) -> int:
             payload,
             scope=args.scope,
             capture_cwd=args.capture_cwd,
-            budgets=_parse_budget_list(args.budgets),
-            working_budget=args.working_budget,
+            budgets=_parse_budget_list(args.budgets) if args.budgets else None,
+            working_budget=args.working_budget if args.working_budget > 0 else None,
+            budget_profile=args.budget_profile,
             include_global=not args.no_global,
             include_hot=not args.no_hot,
             direct_text_threshold=args.direct_text_threshold,

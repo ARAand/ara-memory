@@ -179,6 +179,7 @@
         <li>review queue는 compact/review-worker 경로로 관리되고, 자동 적용은 witness를 남긴다.</li>
         <li><code>recall-quality</code>가 recall-policy, working-memory, impact feedback을 묶어 기억 호출의 pass/watch/fail을 판정한다.</li>
         <li><code>govern-turn</code>이 <code>recall-quality</code>와 <code>cost_gate</code>를 함께 보고 자동 실행 전 품질/비용 초과를 막는다.</li>
+        <li><code>budget_profile</code>이 quick/standard/deep/debug/mutation 작업별 recall 예산과 입력 ceiling을 자동 선택한다.</li>
         <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
       </ul>
     </article>
@@ -195,7 +196,7 @@
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue open: 49</li>
         <li>spool done: 125</li>
-        <li>storage: 346,935,961 bytes</li>
+        <li>storage: 346,022,835 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -241,8 +242,8 @@
         </div>
         <div class="row">
           <strong>cost governor</strong>
-          <p>진행: <code>govern-turn</code>과 worker <code>governance_probe</code>가 입력 토큰/모델 비용 ceiling을 적용한다. 다음은 작업 종류별 동적 예산과 fallback 정책이다.</p>
-          <span class="badge info">2-4h</span>
+          <p>진행: <code>govern-turn</code>과 worker <code>governance_probe</code>가 작업 종류별 budget profile과 입력 토큰/모델 비용 ceiling을 적용한다. 다음은 실패 시 저비용 fallback 정책이다.</p>
+          <span class="badge pass">v1 done</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
@@ -258,7 +259,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> 작업 종류별 예산과 retriever/critic 분리를 더 작게 만들어, 필요한 맥락만 더 싸게 찾게 한다.</li>
+        <li><span class="badge info">다음</span> 저비용 fallback과 retriever/critic 분리를 더 작게 만들어, 필요한 맥락만 더 싸게 찾게 한다.</li>
       </ul>
     </article>
   </section>
@@ -269,7 +270,7 @@
       <ul>
         <li>운영 안전성 1차 완성: 완료</li>
         <li>자연스러운 기억 품질 루프 1차: 완료</li>
-        <li>비용/토큰 governor 포함 실사용 베타: 10-18시간</li>
+        <li>비용/토큰 governor 포함 실사용 베타: 8-14시간</li>
         <li>72시간 장기 안정성 검증까지: 추가 3일</li>
       </ul>
     </article>

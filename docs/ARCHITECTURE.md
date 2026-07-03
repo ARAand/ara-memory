@@ -63,6 +63,7 @@ remember_turn(envelope)
 
 govern_turn(envelope)
   -> model-free capture plan
+  -> budget_profile(auto | quick | standard | deep | debug | mutation)
   -> agency_review gate for action_allowed and refusal/ask/repair stances
   -> recall_candidates probe over small budgets
   -> working_memory projection only when visible evidence exists
@@ -242,6 +243,7 @@ agency_review(prompt, proposed_action, scope)
 
 govern_turn(turn)
   -> plan turn ingress without storing the turn
+  -> infer a budget profile from turn kind unless the operator supplies explicit budgets
   -> run agency_review before recommending capture, recall, or working-memory actions
   -> run projection_gate so working memory must be visible, action-bearing, and within budget before being treated as clean next-action context
   -> run recall_quality so harmful reviewed memory habits can block projected-memory trust

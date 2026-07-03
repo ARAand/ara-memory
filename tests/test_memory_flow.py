@@ -10619,6 +10619,56 @@ class MemoryFlowTests(unittest.TestCase):
             cost_actions = [action for action in payload["actions"] if action["name"] == "cost-gate"]
             self.assertEqual(cost_actions[0]["status"], "block")
 
+    def test_govern_turn_auto_budget_profile_sizes_memory_by_turn_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            quick = memory.govern_turn(
+                {"prompt": "현재 작업 상황 요약"},
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+            ).as_dict()
+            deep = memory.govern_turn(
+                {"prompt": "Ara natural memory architecture and long-term free will design"},
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+            ).as_dict()
+            mutation = memory.govern_turn(
+                {"prompt": "Prepare memory soft delete rollback approval"},
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+            ).as_dict()
+
+            self.assertEqual(quick["budget_profile"]["name"], "quick")
+            self.assertEqual(quick["budget_profile"]["budgets"], [500, 900])
+            self.assertEqual(quick["budget_profile"]["working_budget"], 650)
+            self.assertEqual(deep["budget_profile"]["name"], "deep")
+            self.assertEqual(deep["budget_profile"]["budgets"], [1200, 2500, 4000])
+            self.assertEqual(mutation["budget_profile"]["name"], "mutation")
+            self.assertEqual(mutation["budget_profile"]["max_input_tokens"], 3600)
+
+    def test_govern_turn_explicit_budgets_override_auto_profile_budget_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            payload = memory.govern_turn(
+                {"prompt": "Ara natural memory architecture"},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+            ).as_dict()
+
+            self.assertEqual(payload["budget_profile"]["name"], "deep")
+            self.assertEqual(payload["budget_profile"]["budgets"], [700])
+            self.assertEqual(payload["budget_profile"]["budgets_source"], "explicit")
+            self.assertEqual(payload["budget_profile"]["working_budget"], 1400)
+
     def test_govern_turn_skips_projection_impact_without_reviewed_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -11692,6 +11742,7 @@ class MemoryFlowTests(unittest.TestCase):
             governance = next(step for step in report.steps if step.name == "governance_probe")
             self.assertFalse(governance.passed)
             self.assertEqual(governance.detail["cost_gate_status"], "fail")
+            self.assertEqual(governance.detail["budget_profile"], "deep")
             self.assertTrue(any(risk.startswith("block: selected input tokens") for risk in governance.detail["risks"]))
 
     def test_memory_worker_records_failed_relation_merge_review_queue(self) -> None:
