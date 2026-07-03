@@ -194,17 +194,17 @@
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,833</li>
-        <li>capsules: 4,025</li>
-        <li>stable capsules: 904</li>
-        <li>relation nodes: 7,470</li>
-        <li>relation edges: 29,301</li>
-        <li>source event links: 6,040</li>
-        <li>long-run stress runs: 5</li>
+        <li>source events: 1,840</li>
+        <li>capsules: 4,056</li>
+        <li>stable capsules: 908</li>
+        <li>relation nodes: 7,517</li>
+        <li>relation edges: 29,546</li>
+        <li>source event links: 6,102</li>
+        <li>long-run stress runs: 6</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 120</li>
-        <li>spool done: 138</li>
-        <li>storage: 352,771,129 bytes</li>
+        <li>review queue open: 0</li>
+        <li>spool done: 139</li>
+        <li>storage: 353,350,171 bytes</li>
         <li>public handoff: <code>docs/public-memory-bundle.md</code>, <code>docs/public-memory-bundle.json</code></li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
@@ -266,8 +266,13 @@
         </div>
         <div class="row">
           <strong>long-run stress gate</strong>
-          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. 현재 trend는 pass, samples 5, latest score 95, leaks 0, critic failures 0이다.</p>
+          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. 현재 trend는 pass, samples 6, latest score 100, leaks 0, critic failures 0이다.</p>
           <span class="badge pass">trend pass</span>
+        </div>
+        <div class="row">
+          <strong>review queue hygiene</strong>
+          <p>완료: <code>review-compact</code> dry-run이 123개 항목을 모두 비파괴 low-quality marker acknowledgement로 판정했고, 적용 후 open review queue가 0이 됐다. 승격, 삭제, 감쇠 없이 큐 압력만 정리했다.</p>
+          <span class="badge pass">open=0</span>
         </div>
         <div class="row">
           <strong>memory purpose audit</strong>

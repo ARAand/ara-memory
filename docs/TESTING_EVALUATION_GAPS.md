@@ -8,8 +8,9 @@ spool files, hot packs, or archived private evidence.
 
 - Health gate: pass. Run `python -m ara_memory health --scope ara-memory --compact --json --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json`.
 - Recall regression: pass. Run `python -m ara_memory recall-regression --manifest examples\recall_regression_manifest.json --baseline .ara-memory\archive\recall-regression-baseline.json`.
-- Long-run stress trend: pass. Five recorded samples exist; latest run passed with score 95, no leaks, no critic failures, harmful impact ratio 0, and bounded token growth.
+- Long-run stress trend: pass. Six recorded samples exist; latest worker-loop run passed with score 100, no leaks, no critic failures, harmful impact ratio 0, and no token growth.
 - Recall quality: pass. Recall critic, policy route, reviewed impact feedback, and long-run stress trend are all passing for the current purpose-recall gate.
+- Review queue hygiene: pass. `review-compact` resolved 123 non-destructive low-quality review markers, leaving open review queue count at 0 without promoting, deleting, or decaying capsules.
 - Privacy pre-push: watch/pass. Existing warnings are fixture-like test strings; any private memory root, database, ledger, backup, spool, hot pack, archive, or non-fixture secret must fail publication.
 
 ## Missing Tests And Evaluation Methods
