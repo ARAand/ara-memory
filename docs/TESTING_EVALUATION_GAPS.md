@@ -16,11 +16,11 @@ spool files, hot packs, or archived private evidence.
 
 1. Reviewed recall-critic outcomes
 
-   Method: after real turns where recall was used, run `recall-critic-impact` with the actual query, critic status, decision labels, outcome, and helped flag. Gate with `recall-critic-impact-eval --min-evaluated 3`.
+   Method: after real turns where recall was used, run `recall-quality-impact --apply` with the actual query, reviewed outcome, and helped flag. This records recall-critic evidence from the same recall-quality run. Gate with `recall-critic-impact-eval --min-evaluated 3`.
 
 2. Reviewed working-memory outcomes
 
-   Method: after real turns where working memory projected capsule IDs, run `working-memory-impact` with the cue, projected capsule IDs, outcome, and helped flag. Gate with `working-memory-impact-eval --min-evaluated 3`.
+   Method: after real turns where working memory projected capsule IDs, run `recall-quality-impact --apply` with the cue, reviewed outcome, and helped flag. This records projected capsule evidence without manually copying capsule IDs. Gate with `working-memory-impact-eval --min-evaluated 3`.
 
 3. Long-run stress pass evidence
 
@@ -37,6 +37,10 @@ spool files, hot packs, or archived private evidence.
 6. Goal continuity after handoff
 
    Method: on the new machine, run `recall-quality "current Ara natural memory purpose recall" --scope ara-memory`. It may remain watch until local reviewed outcomes accumulate, but it must preserve purpose, identity, and evaluation gaps.
+
+7. Outcome capture ergonomics
+
+   Method: first run `recall-quality-impact QUERY --scope ara-memory --outcome "reviewed result" --helped unknown` as a dry-run. After the result is reviewed, rerun with `--apply` and `--helped true` or `--helped false`. This avoids rewarding the system before the real outcome is known.
 
 ## Publication Boundary
 

@@ -256,6 +256,24 @@ def main(argv: list[str] | None = None) -> int:
     recall_quality.add_argument("--no-global", action="store_true")
     recall_quality.add_argument("--no-hot", action="store_true")
     recall_quality.add_argument("--json", action="store_true")
+    recall_quality_impact = sub.add_parser(
+        "recall-quality-impact",
+        help="Plan or record reviewed outcome evidence from a recall-quality run.",
+    )
+    recall_quality_impact.add_argument("query")
+    recall_quality_impact.add_argument("--scope", default="global")
+    recall_quality_impact.add_argument("--outcome", required=True)
+    recall_quality_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
+    recall_quality_impact.add_argument("--apply", action="store_true")
+    recall_quality_impact.add_argument("--budgets", default="800,1600,2500")
+    recall_quality_impact.add_argument("--working-budget", type=int, default=900)
+    recall_quality_impact.add_argument("--recall-budget", type=int, default=1600)
+    recall_quality_impact.add_argument("--limit", type=int, default=500)
+    recall_quality_impact.add_argument("--min-evaluated", type=int, default=3)
+    recall_quality_impact.add_argument("--stress-min-samples", type=int, default=3)
+    recall_quality_impact.add_argument("--no-global", action="store_true")
+    recall_quality_impact.add_argument("--no-hot", action="store_true")
+    recall_quality_impact.add_argument("--json", action="store_true")
 
     reconsolidation_frame = sub.add_parser(
         "reconsolidation-frame",
@@ -1651,6 +1669,29 @@ def main(argv: list[str] | None = None) -> int:
         result = memory.recall_quality(
             args.query,
             scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            limit=args.limit,
+            min_evaluated=args.min_evaluated,
+            stress_min_samples=args.stress_min_samples,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
+
+    if args.cmd == "recall-quality-impact":
+        helped = None if args.helped == "unknown" else args.helped == "true"
+        result = memory.recall_quality_impact(
+            args.query,
+            scope=args.scope,
+            outcome=args.outcome,
+            helped=helped,
+            apply=args.apply,
             budgets=_parse_budget_list(args.budgets),
             include_global=not args.no_global,
             include_hot=not args.no_hot,

@@ -566,6 +566,11 @@ class AraMemory:
 
         return build_recall_quality_gate(self, query, **kwargs)
 
+    def recall_quality_impact(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_quality import plan_recall_quality_impact
+
+        return plan_recall_quality_impact(self, query, **kwargs)
+
     def public_memory_bundle(self, **kwargs: Any) -> Any:
         from ara_memory.public_bundle import build_public_memory_bundle
 

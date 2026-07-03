@@ -235,7 +235,7 @@ def _missing_tests_and_methods(stress: Any, quality: Any, privacy: Any) -> list[
             {
                 "name": "recall critic outcome evaluation",
                 "status": quality.critic_impact_summary["status"],
-                "method": "Record at least three reviewed recall-critic-impact outcomes for real turns, then run recall-critic-impact-eval.",
+                "method": "Use recall-quality-impact --apply after reviewed real turns, or record at least three recall-critic-impact outcomes directly, then run recall-critic-impact-eval.",
             }
         )
     if quality.memory_impact_summary["status"] != "pass":
@@ -243,7 +243,7 @@ def _missing_tests_and_methods(stress: Any, quality: Any, privacy: Any) -> list[
             {
                 "name": "working memory outcome evaluation",
                 "status": quality.memory_impact_summary["status"],
-                "method": "Record at least three reviewed working-memory-impact outcomes for projected capsules, then run working-memory-impact-eval.",
+                "method": "Use recall-quality-impact --apply after reviewed real turns, or record at least three working-memory-impact outcomes for projected capsules, then run working-memory-impact-eval.",
             }
         )
     if privacy.status != "pass":

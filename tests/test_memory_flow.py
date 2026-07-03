@@ -18577,6 +18577,96 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["diagnostics"]["long_run_stress_trend_status"], "fail")
             self.assertIn("long-run stress trend status fail", " ".join(report.recommendations))
 
+    def test_recall_quality_impact_dry_run_does_not_record_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Procedure: reviewed recall quality impact cue should inspect current files first.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: reviewed recall quality impact cue",
+                body="Reviewed recall quality impact cue should inspect current files first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "impact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            plan = memory.recall_quality_impact(
+                "reviewed recall quality impact cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                outcome="Dry run reviewed the plan only.",
+                helped=True,
+            )
+
+            payload = plan.as_dict()
+            self.assertEqual(plan.status, "planned", payload)
+            self.assertTrue(plan.dry_run)
+            self.assertEqual(plan.events, [])
+            self.assertEqual(payload["working_memory_impact"]["capsule_ids"], [capsule.id])
+            critic_eval = memory.evaluate_recall_critic_impact(scope="alpha", include_global=False)
+            working_eval = memory.evaluate_memory_impact(scope="alpha", include_global=False)
+            self.assertEqual(critic_eval.totals["impacts"], 0)
+            self.assertEqual(working_eval.totals["impacts"], 0)
+
+    def test_recall_quality_impact_apply_records_reviewed_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Procedure: applied recall quality impact cue should inspect current files first.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: applied recall quality impact cue",
+                body="Applied recall quality impact cue should inspect current files first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "impact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            plan = memory.recall_quality_impact(
+                "applied recall quality impact cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                outcome="The recalled procedure helped select the next file inspection.",
+                helped=True,
+                apply=True,
+                min_evaluated=1,
+            )
+
+            payload = plan.as_dict()
+            self.assertEqual(plan.status, "recorded", payload)
+            self.assertFalse(plan.dry_run)
+            self.assertEqual([event["source"] for event in payload["events"]], [
+                "recall-quality-critic-impact",
+                "recall-quality-working-memory-impact",
+            ])
+            critic_eval = memory.evaluate_recall_critic_impact(scope="alpha", include_global=False, min_evaluated=1)
+            working_eval = memory.evaluate_memory_impact(scope="alpha", include_global=False, min_evaluated=1)
+            self.assertEqual(critic_eval.status, "pass")
+            self.assertEqual(working_eval.status, "pass")
+            self.assertGreaterEqual(critic_eval.totals["helpful"], 1)
+            self.assertEqual(working_eval.totals["helpful"], 1)
+
     def test_recall_quality_cli_outputs_json_and_nonzero_on_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory_root = Path(tmp) / "memory"
@@ -18643,6 +18733,62 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertEqual(payload["status"], "fail")
             self.assertEqual(payload["projected_feedback"][0]["verdict"], "harmful-history")
+
+    def test_recall_quality_impact_cli_can_apply_reviewed_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Procedure: CLI recall quality impact cue should inspect current files first.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: CLI recall quality impact cue",
+                body="CLI recall quality impact cue should inspect current files first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "impact"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-quality-impact",
+                    "CLI recall quality impact cue",
+                    "--scope",
+                    "alpha",
+                    "--no-global",
+                    "--no-hot",
+                    "--outcome",
+                    "CLI reviewed outcome helped the turn.",
+                    "--helped",
+                    "true",
+                    "--apply",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "recorded")
+            self.assertEqual(len(payload["events"]), 2)
+            self.assertEqual(payload["working_memory_impact"]["capsule_ids"], [capsule.id])
 
     def test_public_memory_bundle_redacts_private_memory_and_lists_eval_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

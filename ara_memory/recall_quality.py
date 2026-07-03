@@ -121,6 +121,66 @@ class RecallQualityReport:
         return "\n".join(lines)
 
 
+@dataclass(slots=True)
+class RecallQualityImpactPlan:
+    query: str
+    scope: str
+    status: str
+    helped: bool | None
+    outcome: str
+    dry_run: bool
+    quality_summary: dict[str, Any]
+    critic_impact: dict[str, Any]
+    working_memory_impact: dict[str, Any]
+    events: list[dict[str, Any]]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query,
+            "scope": self.scope,
+            "status": self.status,
+            "passed": self.passed,
+            "helped": self.helped,
+            "outcome": self.outcome,
+            "dry_run": self.dry_run,
+            "quality": self.quality_summary,
+            "critic_impact": self.critic_impact,
+            "working_memory_impact": self.working_memory_impact,
+            "events": self.events,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Recall Quality Impact Plan: {self.scope}",
+            f"status: {self.status}",
+            f"dry_run: {self.dry_run}",
+            f"helped: {self.helped if self.helped is not None else 'unknown'}",
+            f"query: {compact_text(self.query, limit=260)}",
+            "## Planned Records",
+            (
+                "- recall-critic-impact: "
+                f"critic_status={self.critic_impact['critic_status']}, "
+                f"decisions={', '.join(self.critic_impact['decisions']) or 'none'}"
+            ),
+            (
+                "- working-memory-impact: "
+                f"capsules={len(self.working_memory_impact['capsule_ids'])}"
+            ),
+            "## Recommendations",
+        ]
+        lines.extend(f"- {item}" for item in self.recommendations)
+        if self.events:
+            lines.append("## Events")
+            lines.extend(f"- {event['source']}: {event['event_id']}" for event in self.events)
+        return "\n".join(lines)
+
+
 def build_recall_quality_gate(
     memory: Any,
     query: str,
@@ -229,6 +289,82 @@ def build_recall_quality_gate(
     )
 
 
+def plan_recall_quality_impact(
+    memory: Any,
+    query: str,
+    *,
+    scope: str = "global",
+    outcome: str,
+    helped: bool | None = None,
+    apply: bool = False,
+    budgets: list[int] | None = None,
+    include_global: bool = True,
+    include_hot: bool = True,
+    working_budget: int = 900,
+    recall_budget: int = 1600,
+    limit: int = 500,
+    min_evaluated: int = 3,
+    stress_min_samples: int = 3,
+) -> RecallQualityImpactPlan:
+    report = build_recall_quality_gate(
+        memory,
+        query,
+        scope=scope,
+        budgets=budgets,
+        include_global=include_global,
+        include_hot=include_hot,
+        working_budget=working_budget,
+        recall_budget=recall_budget,
+        limit=limit,
+        min_evaluated=min_evaluated,
+        stress_min_samples=stress_min_samples,
+    )
+    critic = _critic_impact_payload(report, outcome=outcome, helped=helped)
+    working = _working_memory_impact_payload(report, outcome=outcome, helped=helped)
+    events: list[dict[str, Any]] = []
+    if apply:
+        critic_event = memory.record_recall_critic_impact(
+            scope=scope,
+            query=query,
+            critic_status=critic["critic_status"],
+            decisions=critic["decisions"],
+            outcome=outcome,
+            helped=helped,
+            source="recall-quality-critic-impact",
+        )
+        events.append({"event_id": critic_event.id, "source": critic_event.source})
+        if working["capsule_ids"]:
+            working_event = memory.record_memory_impact(
+                scope=scope,
+                cue=query,
+                capsule_ids=working["capsule_ids"],
+                outcome=outcome,
+                helped=helped,
+                source="recall-quality-working-memory-impact",
+            )
+            events.append({"event_id": working_event.id, "source": working_event.source})
+    return RecallQualityImpactPlan(
+        query=query,
+        scope=scope,
+        status="recorded" if apply else "planned",
+        helped=helped,
+        outcome=outcome,
+        dry_run=not apply,
+        quality_summary={
+            "status": report.status,
+            "critic_status": report.critic_summary["status"],
+            "critic_score": report.critic_summary["score"],
+            "policy_status": report.policy_summary["status"],
+            "working_projected_capsules": len(report.working_summary["projected_capsule_ids"]),
+            "stress_trend_status": report.stress_trend_summary["status"],
+        },
+        critic_impact=critic,
+        working_memory_impact=working,
+        events=events,
+        recommendations=_impact_plan_recommendations(report, apply=apply, helped=helped),
+    )
+
+
 def _policy_summary(policy: Any) -> dict[str, Any]:
     return {
         "status": policy.status,
@@ -238,6 +374,45 @@ def _policy_summary(policy: Any) -> dict[str, Any]:
         "actions": [action.as_dict() for action in policy.actions],
         "risks": list(policy.diagnostics.get("risks", [])),
     }
+
+
+def _critic_impact_payload(report: RecallQualityReport, *, outcome: str, helped: bool | None) -> dict[str, Any]:
+    decisions = [
+        f"quality={report.status}",
+        f"critic_score={report.critic_summary['score']}",
+        f"visible_capsules={report.critic_summary['diagnostics'].get('visible_capsules', 0)}",
+        f"query_terms={report.critic_summary['diagnostics'].get('query_terms_visible_count', 0)}/"
+        f"{report.critic_summary['diagnostics'].get('query_term_count', 0)}",
+    ]
+    return {
+        "critic_status": report.critic_summary["status"],
+        "decisions": decisions,
+        "outcome": outcome,
+        "helped": helped,
+    }
+
+
+def _working_memory_impact_payload(report: RecallQualityReport, *, outcome: str, helped: bool | None) -> dict[str, Any]:
+    return {
+        "cue": report.query,
+        "capsule_ids": list(report.working_summary["projected_capsule_ids"]),
+        "outcome": outcome,
+        "helped": helped,
+    }
+
+
+def _impact_plan_recommendations(report: RecallQualityReport, *, apply: bool, helped: bool | None) -> list[str]:
+    recommendations = [
+        "Use this as reviewed outcome evidence only after the current turn outcome is known.",
+        "This records evidence; it does not tune thresholds or promote memories automatically.",
+    ]
+    if helped is None:
+        recommendations.append("Helped is unknown, so this will increase coverage but not evaluated helpful/harmful counts.")
+    if not report.working_summary["projected_capsule_ids"]:
+        recommendations.append("No projected working-memory capsules were present; only critic impact can be recorded.")
+    if not apply:
+        recommendations.append("Dry-run only; rerun with --apply after reviewing outcome and helped flag.")
+    return recommendations
 
 
 def _critic_summary(policy: Any) -> dict[str, Any]:
