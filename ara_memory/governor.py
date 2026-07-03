@@ -451,6 +451,7 @@ def _recall_quality_payload(
             "projected_feedback": [],
             "recommendations": [],
             "policy": {},
+            "critic": {},
             "working_memory": {},
             "cost_control": "not-run-without-cue",
         }
@@ -469,6 +470,7 @@ def _recall_quality_payload(
         "projected_feedback": payload["projected_feedback"],
         "recommendations": payload["recommendations"],
         "policy": payload["policy"],
+        "critic": payload["critic"],
         "working_memory": payload["working_memory"],
         "memory_impact": payload["memory_impact"],
         "policy_eval": payload["policy_eval"],
@@ -581,7 +583,11 @@ def _actions(
         actions.append(
             GovernanceAction(
                 name="recall-quality",
-                status="block" if quality_status == "fail" else "watch",
+                status=(
+                    "block"
+                    if quality_status == "fail" and _recall_quality_failure_blocks(recall_quality)
+                    else "watch"
+                ),
                 reason=_quality_reason(recall_quality),
                 command=f"python -m ara_memory recall-quality \"{_shell_hint(recall_query)}\" --scope {scope}{no_global}{no_hot}",
             )
@@ -754,7 +760,8 @@ def _risks(
     if recall_quality.get("status") == "watch":
         risks.extend(f"watch: recall-quality {reason}" for reason in recall_quality.get("recommendations", [])[:3])
     elif recall_quality.get("status") == "fail":
-        risks.extend(f"block: recall-quality {reason}" for reason in recall_quality.get("recommendations", [])[:3])
+        prefix = "block" if _recall_quality_failure_blocks(recall_quality) else "watch"
+        risks.extend(f"{prefix}: recall-quality {reason}" for reason in recall_quality.get("recommendations", [])[:3])
     if cost_gate.get("status") == "watch":
         risks.extend(f"watch: {reason}" for reason in cost_gate.get("reasons", [])[:3])
     elif cost_gate.get("status") == "fail":
@@ -831,6 +838,16 @@ def _quality_reason(recall_quality: dict[str, Any]) -> str:
     if recommendations:
         return "; ".join(recommendations)
     return f"recall quality status is {recall_quality.get('status')}"
+
+
+def _recall_quality_failure_blocks(recall_quality: dict[str, Any]) -> bool:
+    critic = dict(recall_quality.get("critic", {}))
+    projected = list(recall_quality.get("projected_feedback", []))
+    if any(str(item.get("verdict")) == "harmful-history" for item in projected if isinstance(item, dict)):
+        return True
+    if critic.get("status") == "fail":
+        return False
+    return True
 
 
 def _cost_payload(

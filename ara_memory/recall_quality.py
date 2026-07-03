@@ -34,6 +34,7 @@ class RecallQualityReport:
     scope: str
     status: str
     policy_summary: dict[str, Any]
+    critic_summary: dict[str, Any]
     working_summary: dict[str, Any]
     policy_eval_summary: dict[str, Any]
     memory_impact_summary: dict[str, Any]
@@ -51,6 +52,7 @@ class RecallQualityReport:
             "scope": self.scope,
             "status": self.status,
             "policy": self.policy_summary,
+            "critic": self.critic_summary,
             "working_memory": self.working_summary,
             "policy_eval": self.policy_eval_summary,
             "memory_impact": self.memory_impact_summary,
@@ -70,6 +72,15 @@ class RecallQualityReport:
                 f"intent={self.policy_summary['intent']}, "
                 f"status={self.policy_summary['status']}, "
                 f"strategy={self.policy_summary['strategy']}"
+            ),
+            "## Recall Critic",
+            (
+                "- "
+                f"status={self.critic_summary['status']}, "
+                f"score={self.critic_summary['score']}, "
+                f"visible={self.critic_summary['diagnostics'].get('visible_capsules', 0)}, "
+                f"terms={self.critic_summary['diagnostics'].get('query_terms_visible_count', 0)}/"
+                f"{self.critic_summary['diagnostics'].get('query_term_count', 0)}"
             ),
             "## Working Memory",
             (
@@ -135,12 +146,14 @@ def build_recall_quality_gate(
     )
     projected_ids = working.influential_capsule_ids
     projected_feedback = _projected_feedback(projected_ids, impact_eval.capsules)
-    status = _quality_status(policy, policy_eval, impact_eval, projected_feedback)
+    critic = _critic_summary(policy)
+    status = _quality_status(policy, critic, policy_eval, impact_eval, projected_feedback)
     return RecallQualityReport(
         query=query,
         scope=scope,
         status=status,
         policy_summary=_policy_summary(policy),
+        critic_summary=critic,
         working_summary=_working_summary(working),
         policy_eval_summary=_eval_summary(policy_eval),
         memory_impact_summary=_eval_summary(impact_eval),
@@ -151,11 +164,14 @@ def build_recall_quality_gate(
             "include_hot": include_hot,
             "min_evaluated": min_evaluated,
             "limit": limit,
-            "quality_basis": "recall-policy + working-memory + reviewed impact feedback",
+            "quality_basis": "recall-policy + recall-critic + working-memory + reviewed impact feedback",
             "automatic_policy_mutation": False,
+            "critic_status": critic["status"],
+            "critic_score": critic["score"],
         },
         recommendations=_quality_recommendations(
             policy,
+            critic,
             policy_eval,
             impact_eval,
             projected_feedback,
@@ -173,6 +189,25 @@ def _policy_summary(policy: Any) -> dict[str, Any]:
         "actions": [action.as_dict() for action in policy.actions],
         "risks": list(policy.diagnostics.get("risks", [])),
     }
+
+
+def _critic_summary(policy: Any) -> dict[str, Any]:
+    critic = dict(policy.recall_plan.diagnostics.get("critic", {}))
+    diagnostics = dict(critic.get("diagnostics", {}))
+    if not critic:
+        critic = {
+            "status": str(policy.recall_plan.diagnostics.get("critic_status", "unknown")),
+            "score": int(policy.recall_plan.diagnostics.get("critic_score", 0)),
+            "reasons": list(policy.recall_plan.diagnostics.get("critic_reasons", [])),
+            "recommendations": list(policy.recall_plan.diagnostics.get("critic_recommendations", [])),
+            "diagnostics": diagnostics,
+        }
+    critic["status"] = str(critic.get("status", "unknown"))
+    critic["score"] = int(critic.get("score", 0))
+    critic["reasons"] = list(critic.get("reasons", []))
+    critic["recommendations"] = list(critic.get("recommendations", []))
+    critic["diagnostics"] = diagnostics
+    return critic
 
 
 def _working_summary(working: Any) -> dict[str, Any]:
@@ -223,7 +258,15 @@ def _projected_feedback(projected_ids: list[str], groups: list[Any]) -> list[Pro
     return feedback
 
 
-def _quality_status(policy: Any, policy_eval: Any, impact_eval: Any, projected: list[ProjectedCapsuleFeedback]) -> str:
+def _quality_status(
+    policy: Any,
+    critic: dict[str, Any],
+    policy_eval: Any,
+    impact_eval: Any,
+    projected: list[ProjectedCapsuleFeedback],
+) -> str:
+    if critic.get("status") == "fail":
+        return "fail"
     if policy.status == "fail":
         return "fail"
     if any(item.verdict == "harmful-history" for item in projected):
@@ -232,6 +275,7 @@ def _quality_status(policy: Any, policy_eval: Any, impact_eval: Any, projected: 
         return "fail"
     if (
         policy.status == "watch"
+        or critic.get("status") == "watch"
         or policy_eval.status == "watch"
         or impact_eval.status == "watch"
         or not projected
@@ -243,6 +287,7 @@ def _quality_status(policy: Any, policy_eval: Any, impact_eval: Any, projected: 
 
 def _quality_recommendations(
     policy: Any,
+    critic: dict[str, Any],
     policy_eval: Any,
     impact_eval: Any,
     projected: list[ProjectedCapsuleFeedback],
@@ -255,6 +300,12 @@ def _quality_recommendations(
         recommendations.append(
             f"Do not trust projected capsule {item.capsule_id} without review; harmful={item.harmful}, helpful={item.helpful}."
         )
+    if critic.get("status") == "fail":
+        recommendations.append("Do not trust recalled memory context; recall critic failed the visible-evidence gate.")
+        recommendations.extend(str(item) for item in critic.get("recommendations", [])[:2])
+    elif critic.get("status") == "watch":
+        recommendations.append("Treat recalled memory as cues only; recall critic marked the pack watch.")
+        recommendations.extend(str(item) for item in critic.get("recommendations", [])[:2])
     if policy.status != "pass":
         recommendations.append(f"Resolve recall-policy status {policy.status} before treating the route as natural memory.")
     if policy_eval.status != "pass":

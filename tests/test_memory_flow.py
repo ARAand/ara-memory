@@ -10543,6 +10543,11 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("working-memory projected no items", " ".join(payload["projection_gate"]["reasons"]))
             self.assertEqual(payload["agency_review"]["stance"], "repair-memory-first")
             self.assertTrue(payload["recall_probe"]["low_evidence_fallback_suppressed"])
+            self.assertEqual(payload["recall_probe"]["critic_status"], "fail")
+            self.assertEqual(payload["recall_quality"]["status"], "fail")
+            self.assertEqual(payload["recall_quality"]["critic"]["status"], "fail")
+            self.assertEqual(payload["fallback_plan"]["strategy"], "do-not-trust-memory")
+            self.assertEqual(payload["fallback_plan"]["model_context"], "current-evidence")
             self.assertTrue(any(action["name"] == "proceed-with-current-evidence" for action in payload["actions"]))
             self.assertTrue(any("low-evidence" in risk for risk in payload["risks"]))
 
@@ -17945,6 +17950,45 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn(capsule.id, payload["working_memory"]["projected_capsule_ids"])
             self.assertIn("no reviewed capsule feedback", " ".join(report.recommendations))
             self.assertFalse(payload["diagnostics"]["automatic_policy_mutation"])
+
+    def test_recall_quality_gate_fails_when_recall_critic_rejects_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: recall quality should not trust unrelated salience fallback.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: unrelated recall quality fallback",
+                body="Recall quality should trust visible evidence, not unrelated salience fallback.",
+                scope="alpha",
+                confidence=0.85,
+                salience=0.95,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "fallback"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.recall_quality(
+                "orphan nebula talisman",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                min_evaluated=1,
+                recall_budget=700,
+            )
+
+            payload = report.as_dict()
+            self.assertEqual(report.status, "fail", payload)
+            self.assertEqual(payload["critic"]["status"], "fail")
+            self.assertTrue(payload["critic"]["diagnostics"]["low_evidence_fallback_suppressed"])
+            self.assertEqual(payload["diagnostics"]["critic_status"], "fail")
+            self.assertIn("recall critic failed", " ".join(report.recommendations))
 
     def test_recall_quality_gate_fails_on_projected_harmful_capsule_feedback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
