@@ -5,8 +5,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Any
 
-from ara_memory.compressors import estimate_tokens
+from ara_memory.compressors import compact_text, estimate_tokens
 from ara_memory.core import AraMemory
+from ara_memory.models import Event, utc_now
 
 
 @dataclass(slots=True)
@@ -65,6 +66,7 @@ class LongRunStressCase:
 
 @dataclass(slots=True)
 class LongRunStressReport:
+    scope: str
     status: str
     passed: bool
     score: int
@@ -74,6 +76,7 @@ class LongRunStressReport:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "scope": self.scope,
             "status": self.status,
             "passed": self.passed,
             "score": self.score,
@@ -88,6 +91,54 @@ class LongRunStressReport:
             "diagnostics": self.diagnostics,
             "recommendations": self.recommendations,
         }
+
+
+@dataclass(slots=True)
+class LongRunStressTrendReport:
+    scope: str
+    status: str
+    totals: dict[str, Any]
+    latest: dict[str, Any] | None
+    score_delta: int | None
+    token_growth_delta: float | None
+    harmful_ratio_delta: float | None
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "status": self.status,
+            "passed": self.passed,
+            "totals": self.totals,
+            "latest": self.latest,
+            "score_delta": self.score_delta,
+            "token_growth_delta": self.token_growth_delta,
+            "harmful_ratio_delta": self.harmful_ratio_delta,
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        latest = self.latest or {}
+        lines = [
+            f"# Long-Run Stress Trend: {self.scope}",
+            f"status: {self.status}",
+            (
+                f"runs={self.totals['runs']}, pass={self.totals['pass']}, "
+                f"watch={self.totals['watch']}, fail={self.totals['fail']}"
+            ),
+            (
+                f"latest={latest.get('status', 'none')} score={latest.get('score', 'n/a')} "
+                f"token_growth={latest.get('token_growth', 'n/a')} "
+                f"harmful_impact_ratio={latest.get('harmful_impact_ratio', 'n/a')}"
+            ),
+            "## Recommendations",
+        ]
+        lines.extend(f"- {item}" for item in self.recommendations)
+        return "\n".join(lines)
 
 
 def run_builtin_evaluation() -> EvalReport:
@@ -240,12 +291,107 @@ def run_long_run_stress(
     )
     score = _long_run_score(status, diagnostics, results)
     return LongRunStressReport(
+        scope=scope,
         status=status,
         passed=status != "fail",
         score=score,
         results=results,
         diagnostics=diagnostics,
         recommendations=_long_run_recommendations(status, diagnostics),
+    )
+
+
+def record_long_run_stress_run(
+    memory: AraMemory,
+    report: LongRunStressReport,
+    *,
+    source: str = "long-run-stress",
+) -> Event:
+    payload = report.as_dict()
+    diagnostics = dict(payload.get("diagnostics", {}) or {})
+    metadata_payload = {
+        "status": payload["status"],
+        "passed": payload["passed"],
+        "score": payload["score"],
+        "diagnostics": diagnostics,
+        "recommendations": list(payload.get("recommendations", []))[:8],
+        "recorded_at": utc_now(),
+    }
+    text = (
+        "Long-run stress run:\n"
+        f"Status: {payload['status']}\n"
+        f"Score: {payload['score']}\n"
+        f"Runs: {diagnostics.get('runs', 0)}\n"
+        f"Token growth: {diagnostics.get('token_growth', 0.0)}\n"
+        f"Unique capsules: {diagnostics.get('unique_capsules', 0)}\n"
+        f"Forbidden leaks: {diagnostics.get('forbidden_leaks', 0)}\n"
+        f"Critic failures: {diagnostics.get('critic_failures', 0)}\n"
+        f"Harmful impact ratio: {diagnostics.get('harmful_impact_ratio', 0.0)}\n"
+        f"Recommendation: {compact_text(' '.join(payload.get('recommendations', [])), limit=360)}"
+    )
+    event = memory.retain(
+        kind="note",
+        text=text,
+        source=source,
+        scope=payload.get("scope") or diagnostics.get("scope") or "global",
+        metadata={"long_run_stress_run": metadata_payload},
+    )
+    memory.store.record_long_run_stress(event)
+    return event
+
+
+def evaluate_long_run_stress_trend(
+    memory: AraMemory,
+    *,
+    scope: str = "global",
+    include_global: bool = True,
+    limit: int = 50,
+    min_samples: int = 3,
+    min_latest_score: int = 70,
+    max_latest_token_growth: float = 0.50,
+    max_latest_harmful_ratio: float = 0.34,
+) -> LongRunStressTrendReport:
+    rows = memory.store.list_long_run_stress_runs(scope=scope, include_global=include_global, limit=limit)
+    chronological = list(reversed(rows))
+    latest = rows[0] if rows else None
+    totals = {
+        "runs": len(rows),
+        "pass": sum(1 for row in rows if row["status"] == "pass"),
+        "watch": sum(1 for row in rows if row["status"] == "watch"),
+        "fail": sum(1 for row in rows if row["status"] == "fail"),
+        "evaluated": sum(1 for row in rows if row["status"] in {"pass", "watch", "fail"}),
+    }
+    score_delta = _trend_delta_int(chronological, "score")
+    token_growth_delta = _trend_delta_float(chronological, "token_growth")
+    harmful_ratio_delta = _trend_delta_float(chronological, "harmful_impact_ratio")
+    status = _stress_trend_status(
+        totals,
+        latest=latest,
+        min_samples=min_samples,
+        min_latest_score=min_latest_score,
+        max_latest_token_growth=max_latest_token_growth,
+        max_latest_harmful_ratio=max_latest_harmful_ratio,
+    )
+    return LongRunStressTrendReport(
+        scope=scope,
+        status=status,
+        totals=totals,
+        latest=_stress_trend_latest(latest),
+        score_delta=score_delta,
+        token_growth_delta=token_growth_delta,
+        harmful_ratio_delta=harmful_ratio_delta,
+        recommendations=_stress_trend_recommendations(
+            status,
+            totals,
+            latest=latest,
+            score_delta=score_delta,
+            token_growth_delta=token_growth_delta,
+            harmful_ratio_delta=harmful_ratio_delta,
+            min_samples=min_samples,
+            min_latest_score=min_latest_score,
+            max_latest_token_growth=max_latest_token_growth,
+            max_latest_harmful_ratio=max_latest_harmful_ratio,
+        ),
     )
 
 
@@ -523,6 +669,103 @@ def _long_run_recommendations(status: str, diagnostics: dict[str, Any]) -> list[
         recommendations.append("Long-run stress gate is within current budgets; keep recording reviewed impact outcomes.")
     if status == "watch" and len(recommendations) == 1:
         recommendations.append("Watch status means bounded use is acceptable, but do not promote thresholds automatically.")
+    return recommendations
+
+
+def _trend_delta_int(rows: list[dict[str, Any]], key: str) -> int | None:
+    if len(rows) < 2:
+        return None
+    return int(rows[-1].get(key, 0) or 0) - int(rows[0].get(key, 0) or 0)
+
+
+def _trend_delta_float(rows: list[dict[str, Any]], key: str) -> float | None:
+    if len(rows) < 2:
+        return None
+    return float(rows[-1].get(key, 0.0) or 0.0) - float(rows[0].get(key, 0.0) or 0.0)
+
+
+def _stress_trend_latest(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "event_id": row["event_id"],
+        "status": row["status"],
+        "score": row["score"],
+        "runs": row["runs"],
+        "token_growth": row["token_growth"],
+        "unique_capsules": row["unique_capsules"],
+        "forbidden_leaks": row["forbidden_leaks"],
+        "critic_failures": row["critic_failures"],
+        "harmful_impact_ratio": row["harmful_impact_ratio"],
+        "created_at": row["created_at"],
+    }
+
+
+def _stress_trend_status(
+    totals: dict[str, Any],
+    *,
+    latest: dict[str, Any] | None,
+    min_samples: int,
+    min_latest_score: int,
+    max_latest_token_growth: float,
+    max_latest_harmful_ratio: float,
+) -> str:
+    if latest is None:
+        return "watch"
+    if (
+        latest["status"] == "fail"
+        or int(latest["score"]) < min_latest_score
+        or float(latest["token_growth"]) > max_latest_token_growth
+        or float(latest["harmful_impact_ratio"]) > max_latest_harmful_ratio
+        or int(latest["forbidden_leaks"]) > 0
+        or int(latest["critic_failures"]) > 0
+    ):
+        return "fail"
+    if totals["runs"] < min_samples or latest["status"] == "watch":
+        return "watch"
+    return "pass"
+
+
+def _stress_trend_recommendations(
+    status: str,
+    totals: dict[str, Any],
+    *,
+    latest: dict[str, Any] | None,
+    score_delta: int | None,
+    token_growth_delta: float | None,
+    harmful_ratio_delta: float | None,
+    min_samples: int,
+    min_latest_score: int,
+    max_latest_token_growth: float,
+    max_latest_harmful_ratio: float,
+) -> list[str]:
+    if latest is None:
+        return ["Record long-run stress runs from worker-loop before tuning recall thresholds."]
+    recommendations: list[str] = []
+    if totals["runs"] < min_samples:
+        recommendations.append(
+            f"Collect at least {min_samples} long-run stress samples before treating the trend as stable."
+        )
+    if latest["status"] == "fail":
+        recommendations.append("Latest long-run stress run failed; use current evidence and inspect failed cases.")
+    if int(latest["score"]) < min_latest_score:
+        recommendations.append("Latest stress score is below threshold; freeze threshold tuning and inspect recall drift.")
+    if float(latest["token_growth"]) > max_latest_token_growth:
+        recommendations.append("Latest stress run shows token growth above budget; tune recall before adding context.")
+    if float(latest["harmful_impact_ratio"]) > max_latest_harmful_ratio:
+        recommendations.append("Harmful impact ratio is too high; do not tune thresholds from this feedback.")
+    if int(latest["forbidden_leaks"]) > 0 or int(latest["critic_failures"]) > 0:
+        recommendations.append("Leakage or critic failures were observed; quarantine bad evidence before autonomous use.")
+    if score_delta is not None and score_delta < 0:
+        recommendations.append("Stress score is trending downward; keep the gate in watch until the next samples recover.")
+    if token_growth_delta is not None and token_growth_delta > 0:
+        recommendations.append("Token growth is trending upward; watch compression and recall budget pressure.")
+    if harmful_ratio_delta is not None and harmful_ratio_delta > 0:
+        recommendations.append("Harmful impact ratio is trending upward; review outcome labels before changing policy.")
+    if not recommendations:
+        recommendations.append("Long-run stress trend is stable enough for bounded use; keep collecting samples.")
+    if status == "watch" and all("tuning" not in item for item in recommendations):
+        recommendations.append("Watch status blocks automatic threshold tuning until trend evidence strengthens.")
     return recommendations
 
 

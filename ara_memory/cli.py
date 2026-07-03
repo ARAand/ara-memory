@@ -1374,7 +1374,17 @@ def main(argv: list[str] | None = None) -> int:
     long_run_stress.add_argument("--max-token-growth", type=float, default=0.35)
     long_run_stress.add_argument("--min-unique-capsules", type=int, default=2)
     long_run_stress.add_argument("--max-harmful-impact-ratio", type=float, default=0.34)
+    long_run_stress.add_argument("--record", action="store_true")
     long_run_stress.add_argument("--json", action="store_true")
+    long_run_trend = sub.add_parser(
+        "long-run-stress-trend",
+        help="Evaluate recorded long-run stress runs over time without rereading raw history.",
+    )
+    long_run_trend.add_argument("--scope", default="global")
+    long_run_trend.add_argument("--limit", type=int, default=50)
+    long_run_trend.add_argument("--min-samples", type=int, default=3)
+    long_run_trend.add_argument("--no-global", action="store_true")
+    long_run_trend.add_argument("--json", action="store_true")
     recall_regression = sub.add_parser("recall-regression")
     recall_regression.add_argument("--manifest", type=Path, required=True)
     recall_regression.add_argument("--baseline", type=Path, default=None)
@@ -3167,6 +3177,9 @@ def main(argv: list[str] | None = None) -> int:
             max_harmful_impact_ratio=args.max_harmful_impact_ratio,
         )
         payload = report.as_dict()
+        if args.record:
+            event = memory.record_long_run_stress(report)
+            payload["recorded_event_id"] = event.id
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
@@ -3178,6 +3191,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             for recommendation in payload["recommendations"]:
                 print(f"- {recommendation}")
+        return 0 if report.passed else 1
+
+    if args.cmd == "long-run-stress-trend":
+        report = memory.long_run_stress_trend(
+            scope=args.scope,
+            include_global=not args.no_global,
+            limit=args.limit,
+            min_samples=args.min_samples,
+        )
+        if args.json:
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(report.to_text())
         return 0 if report.passed else 1
 
     if args.cmd == "recall-regression":

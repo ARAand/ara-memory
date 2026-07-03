@@ -4999,6 +4999,8 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("runs=", long_run.evidence)
             self.assertIn("token_growth=", long_run.evidence)
             self.assertIn("harmful_impact_ratio=", long_run.evidence)
+            self.assertIn("trend=", long_run.evidence)
+            self.assertIn("samples=", long_run.evidence)
             agency = next(item for item in roadmap.items if item.name == "self-directed deliberation")
             self.assertIn("stance=", agency.evidence)
             self.assertIn("action_allowed=True", agency.evidence)
@@ -12530,8 +12532,11 @@ class MemoryFlowTests(unittest.TestCase):
             stress = report.reports[0]["long_run_stress"]
             self.assertIn(stress["status"], {"pass", "watch"})
             self.assertTrue(stress["passed"])
+            self.assertTrue(stress["event_id"].startswith("evt_"))
             self.assertEqual(stress["runs"], 3)
             self.assertEqual(stress["forbidden_leaks"], 0)
+            self.assertIn(stress["trend"]["status"], {"pass", "watch"})
+            self.assertEqual(stress["trend"]["runs"], 1)
 
     def test_worker_schedule_writes_reviewable_task_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -15781,6 +15786,43 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertGreater(payload["diagnostics"]["harmful_impact_ratio"], 0.2)
             self.assertIn("Impact feedback is trending harmful", " ".join(payload["recommendations"]))
 
+    def test_long_run_stress_records_append_only_run_and_trend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            scope = "long-run-trend"
+            for text in (
+                "Decision: Long-run memory trend should preserve natural memory purpose.",
+                "Decision: Memory health and impact feedback should be checked over time.",
+                "Decision: Reviewed impact evidence should block reward-hacking threshold changes.",
+            ):
+                memory.retain(kind="decision", text=text, source="test", scope=scope)
+            memory.consolidate()
+            memory.sleep(scope=scope)
+
+            report = memory.long_run_stress(
+                scope=scope,
+                iterations=1,
+                budget=1100,
+                include_global=False,
+                include_hot=False,
+                min_unique_capsules=1,
+            )
+            event = memory.record_long_run_stress(report, source="test-long-run-stress")
+
+            self.assertEqual(event.source, "test-long-run-stress")
+            self.assertIn("long_run_stress_run", event.metadata)
+            rows = memory.store.list_long_run_stress_runs(scope=scope, include_global=False)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["event_id"], event.id)
+            self.assertEqual(rows[0]["status"], report.status)
+            self.assertEqual(rows[0]["runs"], report.diagnostics["runs"])
+            trend = memory.long_run_stress_trend(scope=scope, include_global=False, min_samples=2)
+            self.assertTrue(trend.passed, trend.as_dict())
+            self.assertEqual(trend.status, "watch")
+            self.assertEqual(trend.totals["runs"], 1)
+            self.assertIn("Collect at least 2", " ".join(trend.recommendations))
+
     def test_long_run_stress_cli_outputs_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "memory"
@@ -15813,6 +15855,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "--no-hot",
                     "--min-unique-capsules",
                     "1",
+                    "--record",
                     "--json",
                 ],
                 cwd=Path(__file__).resolve().parents[1],
@@ -15824,6 +15867,33 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertTrue(payload["passed"], payload)
             self.assertEqual(payload["diagnostics"]["runs"], 3)
+            self.assertIn("recorded_event_id", payload)
+
+            trend = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(root),
+                    "long-run-stress-trend",
+                    "--scope",
+                    "cli-long-run",
+                    "--min-samples",
+                    "2",
+                    "--no-global",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn(trend.returncode, {0, 1}, trend.stderr)
+            trend_payload = json.loads(trend.stdout)
+            self.assertEqual(trend_payload["totals"]["runs"], 1)
+            self.assertIn(trend_payload["status"], {"watch", "fail"})
+            self.assertEqual(trend.returncode, 0 if trend_payload["passed"] else 1)
 
     def test_recall_regression_suite_passes_and_writes_baseline_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

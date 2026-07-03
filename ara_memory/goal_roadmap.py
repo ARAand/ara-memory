@@ -114,6 +114,7 @@ def build_goal_roadmap(
         include_hot=True,
         min_unique_capsules=2,
     )
+    long_run_stress_trend = memory.long_run_stress_trend(scope=scope, include_global=False, min_samples=3)
     agency = memory.agency_review(
         prompt="continue building Ara Memory OS natural memory with self-directed judgment",
         scope=scope,
@@ -252,8 +253,8 @@ def build_goal_roadmap(
         ),
         RoadmapItem(
             "long-run stress gate",
-            "fail" if long_run_stress.status == "fail" else "watch" if long_run_stress.status == "watch" else "pass",
-            _long_run_stress_evidence(long_run_stress),
+            _long_run_stress_status(long_run_stress, long_run_stress_trend),
+            _long_run_stress_evidence(long_run_stress, long_run_stress_trend),
             "Review token growth, leakage, critic failures, and harmful impact ratios before tuning recall thresholds.",
         ),
         RoadmapItem(
@@ -461,15 +462,26 @@ def _recall_policy_eval_evidence(recall_policy_eval: Any) -> str:
     )
 
 
-def _long_run_stress_evidence(report: Any) -> str:
+def _long_run_stress_status(report: Any, trend: Any) -> str:
+    if report.status == "fail" or trend.status == "fail":
+        return "fail"
+    if report.status == "watch" or trend.status == "watch":
+        return "watch"
+    return "pass"
+
+
+def _long_run_stress_evidence(report: Any, trend: Any) -> str:
     diagnostics = report.diagnostics
+    trend_totals = trend.totals
     return (
         f"{report.status}, score={report.score}/100, runs={diagnostics['runs']}, "
         f"token_growth={diagnostics['token_growth']:.3f}, "
         f"unique_capsules={diagnostics['unique_capsules']}, "
         f"leaks={diagnostics['forbidden_leaks']}, "
         f"critic_failures={diagnostics['critic_failures']}, "
-        f"harmful_impact_ratio={diagnostics['harmful_impact_ratio']:.3f}"
+        f"harmful_impact_ratio={diagnostics['harmful_impact_ratio']:.3f}; "
+        f"trend={trend.status}, samples={trend_totals['runs']}, "
+        f"score_delta={trend.score_delta}, token_growth_delta={trend.token_growth_delta}"
     )
 
 

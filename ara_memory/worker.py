@@ -433,11 +433,16 @@ def _run_locked_worker(
             min_unique_capsules=long_run_stress_min_unique_capsules,
             max_harmful_impact_ratio=long_run_stress_max_harmful_impact_ratio,
         )
+        stress_event = memory.record_long_run_stress(stress, source="worker-long-run-stress")
+        stress_trend = memory.long_run_stress_trend(scope=scope, include_global=False)
+        stress_payload = _long_run_stress_worker_payload(stress.as_dict())
+        stress_payload["event_id"] = stress_event.id
+        stress_payload["trend"] = _long_run_stress_trend_worker_payload(stress_trend.as_dict())
         steps.append(
             WorkerStep(
                 "long_run_stress",
-                stress.status != "fail",
-                _long_run_stress_worker_payload(stress.as_dict()),
+                stress.status != "fail" and stress_trend.status != "fail",
+                stress_payload,
             )
         )
 
@@ -585,6 +590,7 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
         "long_run_stress": {
             "status": _detail_value(long_run_stress, "status", ""),
             "passed": bool(long_run_stress.detail.get("passed", False)) if long_run_stress else None,
+            "event_id": _detail_value(long_run_stress, "event_id", ""),
             "score": _detail_value(long_run_stress, "score", 0),
             "runs": _detail_value(long_run_stress, "runs", 0),
             "token_growth": _detail_value(long_run_stress, "token_growth", 0.0),
@@ -592,6 +598,7 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
             "forbidden_leaks": _detail_value(long_run_stress, "forbidden_leaks", 0),
             "critic_failures": _detail_value(long_run_stress, "critic_failures", 0),
             "harmful_impact_ratio": _detail_value(long_run_stress, "harmful_impact_ratio", 0.0),
+            "trend": _detail_value(long_run_stress, "trend", {}),
         },
         "maintenance_integrity": maintenance.detail.get("sqlite_integrity") if maintenance else None,
     }
@@ -622,6 +629,23 @@ def _long_run_stress_worker_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "policy_impact_status": str((diagnostics.get("policy_impact") or {}).get("status", "")),
         "critic_impact_status": str((diagnostics.get("critic_impact") or {}).get("status", "")),
         "memory_impact_status": str((diagnostics.get("memory_impact") or {}).get("status", "")),
+        "recommendations": list(payload.get("recommendations", []))[:5],
+    }
+
+
+def _long_run_stress_trend_worker_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    latest = dict(payload.get("latest") or {})
+    totals = dict(payload.get("totals") or {})
+    return {
+        "status": str(payload.get("status", "unknown")),
+        "passed": bool(payload.get("passed", False)),
+        "runs": int(totals.get("runs", 0) or 0),
+        "fail": int(totals.get("fail", 0) or 0),
+        "watch": int(totals.get("watch", 0) or 0),
+        "latest_score": int(latest.get("score", 0) or 0),
+        "score_delta": payload.get("score_delta"),
+        "token_growth_delta": payload.get("token_growth_delta"),
+        "harmful_ratio_delta": payload.get("harmful_ratio_delta"),
         "recommendations": list(payload.get("recommendations", []))[:5],
     }
 

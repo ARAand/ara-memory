@@ -343,6 +343,16 @@ class AraMemory:
 
         return run_long_run_stress(self, **kwargs)
 
+    def record_long_run_stress(self, report: Any, **kwargs: Any) -> Event:
+        from ara_memory.evaluation import record_long_run_stress_run
+
+        return record_long_run_stress_run(self, report, **kwargs)
+
+    def long_run_stress_trend(self, **kwargs: Any) -> Any:
+        from ara_memory.evaluation import evaluate_long_run_stress_trend
+
+        return evaluate_long_run_stress_trend(self, **kwargs)
+
     def spool_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.spool import enqueue_turn
 

@@ -16,7 +16,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -760,6 +760,28 @@ CREATE TABLE IF NOT EXISTS recall_critic_impacts (
 
 CREATE INDEX IF NOT EXISTS idx_rci_scope_time ON recall_critic_impacts(scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_rci_status_decision ON recall_critic_impacts(scope, critic_status, decision, created_at);
+
+CREATE TABLE IF NOT EXISTS long_run_stress_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  status TEXT NOT NULL,
+  score INTEGER NOT NULL,
+  passed INTEGER NOT NULL,
+  runs INTEGER NOT NULL,
+  token_growth REAL NOT NULL,
+  unique_capsules INTEGER NOT NULL,
+  forbidden_leaks INTEGER NOT NULL,
+  critic_failures INTEGER NOT NULL,
+  harmful_impact_ratio REAL NOT NULL,
+  diagnostics_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(event_id) REFERENCES events(id),
+  UNIQUE(event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lrsr_scope_time ON long_run_stress_runs(scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_lrsr_scope_status ON long_run_stress_runs(scope, status, created_at);
 """
 
 
@@ -817,6 +839,8 @@ class MemoryStore:
                 _ensure_memory_mutation_rollback_v27_tables(conn)
             if old_version < 28:
                 _sync_recall_critic_impacts(conn)
+            if old_version < 29:
+                _sync_long_run_stress_runs(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -862,6 +886,7 @@ class MemoryStore:
                 _sync_working_memory_impact_event(conn, row_to_event(existing))
                 _sync_recall_policy_impact_event(conn, row_to_event(existing))
                 _sync_recall_critic_impact_event(conn, row_to_event(existing))
+                _sync_long_run_stress_event(conn, row_to_event(existing))
                 return row_to_event(existing)
 
             with ledger_path.open("a", encoding="utf-8") as fh:
@@ -893,6 +918,7 @@ class MemoryStore:
             _sync_working_memory_impact_event(conn, event)
             _sync_recall_policy_impact_event(conn, event)
             _sync_recall_critic_impact_event(conn, event)
+            _sync_long_run_stress_event(conn, event)
             return event
 
     def record_working_memory_impact(self, event: Event) -> None:
@@ -909,6 +935,11 @@ class MemoryStore:
         self.init()
         with self.session() as conn:
             _sync_recall_critic_impact_event(conn, event)
+
+    def record_long_run_stress(self, event: Event) -> None:
+        self.init()
+        with self.session() as conn:
+            _sync_long_run_stress_event(conn, event)
 
     def upsert_capsule(self, capsule: Capsule) -> None:
         self.init()
@@ -1420,6 +1451,7 @@ class MemoryStore:
                 "relation_nodes": conn.execute("SELECT COUNT(*) FROM relation_nodes").fetchone()[0],
                 "relation_edges": conn.execute("SELECT COUNT(*) FROM relation_edges").fetchone()[0],
                 "source_event_links": conn.execute("SELECT COUNT(*) FROM capsule_source_events").fetchone()[0],
+                "long_run_stress_runs": conn.execute("SELECT COUNT(*) FROM long_run_stress_runs").fetchone()[0],
             }
 
     def schema_version(self) -> int:
@@ -2865,6 +2897,39 @@ class MemoryStore:
             out.append(item)
         return out
 
+    def list_long_run_stress_runs(
+        self,
+        *,
+        scope: str,
+        include_global: bool = True,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        self.init()
+        if limit <= 0:
+            return []
+        clauses = ["(scope = ? OR scope = 'global')" if include_global and scope != "global" else "scope = ?"]
+        params: list[Any] = [scope, limit]
+        with self.session() as conn:
+            rows = list(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM long_run_stress_runs
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY created_at DESC, id ASC
+                    LIMIT ?
+                    """,
+                    params,
+                )
+            )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["passed"] = bool(item["passed"])
+            item["diagnostics"] = json.loads(item.pop("diagnostics_json"))
+            out.append(item)
+        return out
+
     def record_consolidation_run(
         self,
         *,
@@ -3599,6 +3664,21 @@ def _sync_recall_critic_impacts(conn: sqlite3.Connection) -> None:
         _sync_recall_critic_impact_event(conn, row_to_event(row))
 
 
+def _sync_long_run_stress_runs(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        WHERE source = 'long-run-stress'
+           OR source = 'worker-long-run-stress'
+           OR metadata_json LIKE '%long_run_stress_run%'
+        ORDER BY created_at ASC
+        """
+    )
+    for row in rows:
+        _sync_long_run_stress_event(conn, row_to_event(row))
+
+
 def _sync_recall_policy_impact_event(conn: sqlite3.Connection, event: Event) -> None:
     payload = event.metadata.get("recall_policy_impact")
     if not isinstance(payload, dict):
@@ -3632,6 +3712,25 @@ def _sync_recall_critic_impact_event(conn: sqlite3.Connection, event: Event) -> 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
+    )
+
+
+def _sync_long_run_stress_event(conn: sqlite3.Connection, event: Event) -> None:
+    payload = event.metadata.get("long_run_stress_run")
+    if not isinstance(payload, dict):
+        return
+    row = _long_run_stress_row(event, payload)
+    if row is None:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO long_run_stress_runs(
+          event_id, scope, status, score, passed, runs, token_growth, unique_capsules,
+          forbidden_leaks, critic_failures, harmful_impact_ratio, diagnostics_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        row,
     )
 
 
@@ -3701,6 +3800,41 @@ def _recall_critic_impact_rows(event: Event, payload: dict[str, Any]) -> list[tu
             )
         )
     return rows
+
+
+def _long_run_stress_row(event: Event, payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    diagnostics = payload.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    status = str(payload.get("status") or "unknown")
+    try:
+        score = int(payload.get("score", 0) or 0)
+        runs = int(diagnostics.get("runs", payload.get("runs", 0)) or 0)
+        token_growth = float(diagnostics.get("token_growth", payload.get("token_growth", 0.0)) or 0.0)
+        unique_capsules = int(diagnostics.get("unique_capsules", payload.get("unique_capsules", 0)) or 0)
+        forbidden_leaks = int(diagnostics.get("forbidden_leaks", payload.get("forbidden_leaks", 0)) or 0)
+        critic_failures = int(diagnostics.get("critic_failures", payload.get("critic_failures", 0)) or 0)
+        harmful_impact_ratio = float(
+            diagnostics.get("harmful_impact_ratio", payload.get("harmful_impact_ratio", 0.0)) or 0.0
+        )
+    except (TypeError, ValueError):
+        return None
+    passed = bool(payload.get("passed", status != "fail"))
+    return (
+        event.id,
+        event.scope,
+        status,
+        score,
+        1 if passed else 0,
+        runs,
+        token_growth,
+        unique_capsules,
+        forbidden_leaks,
+        critic_failures,
+        harmful_impact_ratio,
+        json.dumps(diagnostics, ensure_ascii=False, sort_keys=True),
+        event.created_at,
+    )
 
 
 def row_to_event(row: sqlite3.Row) -> Event:
