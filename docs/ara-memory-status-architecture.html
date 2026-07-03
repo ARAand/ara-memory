@@ -305,6 +305,16 @@
           <p>Added: <code>python -m ara_memory handoff-doctor --json</code> checks the public bundle, handoff docs, private gitignore rules, tracked-file boundary, and privacy-pre-push without requiring raw <code>.ara-memory</code>. Current local gate is watch/pass because reviewed fixture warnings remain non-fatal.</p>
           <span class="badge pass">new gate</span>
         </div>
+        <div class="row">
+          <strong>clean clone handoff</strong>
+          <p>Verified: a fresh GitHub clone at <code>C:\Users\Owner\AppData\Local\Temp\ara-memory-clean-handoff-20260703-145658</code> had no raw <code>.ara-memory</code>, passed <code>handoff-doctor --require-clean-worktree</code>, and passed the full test suite: 419 OK, skipped 1 Windows symlink-permission test.</p>
+          <span class="badge pass">clone pass</span>
+        </div>
+        <div class="row">
+          <strong>private raw memory package</strong>
+          <p>Raw <code>.ara-memory</code> was separated from the public repo and uploaded only as encrypted release asset <code>ara-memory-private-handoff-20260703-145658</code>. Local AES-GCM decryption was verified against plaintext SHA-256 before handoff.</p>
+          <span class="badge pass">encrypted</span>
+        </div>
       </div>
     </article>
 

@@ -614,6 +614,10 @@ python -m ara_memory handoff-doctor --json
 python -m ara_memory handoff-doctor --require-clean-worktree --json
 ```
 
+For the current GitHub-to-new-machine continuation record, including the
+encrypted raw-memory release asset, clean-clone test evidence, skipped test, and
+known failure context, see `docs/HANDOFF_CONTINUATION.md`.
+
 `reconsolidation-frame` is the read-only recontextualization layer before any
 memory rewrite. For a query, it combines recall-policy, working-memory,
 lifecycle tiers, and failure/self audits into five frames: purpose and identity,
