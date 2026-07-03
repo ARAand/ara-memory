@@ -148,8 +148,8 @@
       <div class="metric"><span class="label">작업 시간</span><span class="value">약 26시간째</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v29</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
-      <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 작업</span><span class="value">recall outcome capture</span></div>
+      <div class="metric"><span class="label">작업트리</span><span class="value">public handoff 문서 갱신됨</span></div>
+      <div class="metric"><span class="label">최근 작업</span><span class="value">recall quality gates pass</span></div>
     </aside>
   </header>
 
@@ -194,17 +194,17 @@
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,809</li>
-        <li>capsules: 3,979</li>
-        <li>stable capsules: 896</li>
-        <li>relation nodes: 7,387</li>
-        <li>relation edges: 28,949</li>
-        <li>source event links: 5,984</li>
-        <li>long-run stress runs: 3</li>
+        <li>source events: 1,833</li>
+        <li>capsules: 4,025</li>
+        <li>stable capsules: 904</li>
+        <li>relation nodes: 7,470</li>
+        <li>relation edges: 29,301</li>
+        <li>source event links: 6,040</li>
+        <li>long-run stress runs: 5</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 100</li>
-        <li>spool done: 135</li>
-        <li>storage: 354,456,949 bytes</li>
+        <li>review queue open: 120</li>
+        <li>spool done: 138</li>
+        <li>storage: 352,771,129 bytes</li>
         <li>public handoff: <code>docs/public-memory-bundle.md</code>, <code>docs/public-memory-bundle.json</code></li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
@@ -261,13 +261,13 @@
         </div>
         <div class="row">
           <strong>critic impact loop</strong>
-          <p>진행: critic 결정이 실제로 도움이 됐는지 <code>recall_critic_impacts</code>에 색인하고, <code>recall-quality</code>가 평가 요약을 노출한다. <code>recall-quality-impact</code>가 검토된 outcome을 critic/working-memory evidence로 한 번에 남길 수 있게 됐다.</p>
-          <span class="badge watch">needs outcomes</span>
+          <p>1차 완료: <code>recall-quality-impact</code>로 실제 회상 outcome을 기록했고, <code>recall-critic-impact-eval</code>이 pass 상태가 됐다. 계속할 일은 더 많은 실제 턴에서 도움이 됐는지/해로웠는지를 균형 있게 축적하는 것이다.</p>
+          <span class="badge pass">first pass</span>
         </div>
         <div class="row">
           <strong>long-run stress gate</strong>
-          <p>진행: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. v29부터 run 결과는 <code>long_run_stress_runs</code>에 축적되며 현재 표본은 3개, score delta 0, token growth delta 0이다.</p>
-          <span class="badge watch">samples=3</span>
+          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. 현재 trend는 pass, samples 5, latest score 95, leaks 0, critic failures 0이다.</p>
+          <span class="badge pass">trend pass</span>
         </div>
         <div class="row">
           <strong>memory purpose audit</strong>
@@ -276,8 +276,8 @@
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
-          <p>v1 완료: low-cost stress gate는 추가됐다. 다음은 실제 worker/capture/recall outcome을 <code>working-memory-impact</code>와 <code>recall-critic-impact</code>로 기록해 watch를 정직하게 줄이는 것이다.</p>
-          <span class="badge watch">6-12h</span>
+          <p>v1 완료: low-cost stress gate와 reviewed impact outcome이 연결되어 <code>goal-roadmap</code>과 <code>recall-quality</code>가 pass로 닫힌다. 다음은 24-72시간 동안 실제 사용 표본을 더 모아 pass가 일시적 착시가 아닌지 보는 것이다.</p>
+          <span class="badge pass">v1 pass</span>
         </div>
         <div class="row">
           <strong>public GitHub handoff</strong>
@@ -290,10 +290,10 @@
     <article class="span-4">
       <h2>판단</h2>
       <ul>
-        <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
+        <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate, recall-quality, long-run stress trend는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> 24-72시간 rehearsal 로그를 모아 stress trend와 impact feedback 표본을 축적하고, 임계값은 검토된 outcome으로만 조정한다.</li>
+        <li><span class="badge info">다음</span> 24-72시간 rehearsal 로그를 더 모아 pass가 유지되는지 확인하고, 임계값은 검토된 outcome으로만 조정한다.</li>
         <li><span class="badge info">인계</span> 공개 GitHub에는 <code>docs/public-memory-bundle.*</code>와 평가 문서를 올리고, 원본 로컬 기억 저장소는 계속 비공개 evidence로 둔다.</li>
       </ul>
     </article>

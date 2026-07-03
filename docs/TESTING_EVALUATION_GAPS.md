@@ -8,23 +8,23 @@ spool files, hot packs, or archived private evidence.
 
 - Health gate: pass. Run `python -m ara_memory health --scope ara-memory --compact --json --regression-manifest examples\recall_regression_manifest.json --regression-baseline .ara-memory\archive\recall-regression-baseline.json`.
 - Recall regression: pass. Run `python -m ara_memory recall-regression --manifest examples\recall_regression_manifest.json --baseline .ara-memory\archive\recall-regression-baseline.json`.
-- Long-run stress trend: watch. Three recorded samples exist, with no leaks, no critic failures, score delta 0, and token growth delta 0.
-- Recall quality: watch. Recall critic and policy route are usable, but reviewed recall-critic and working-memory outcome evidence is still too thin.
+- Long-run stress trend: pass. Five recorded samples exist; latest run passed with score 95, no leaks, no critic failures, harmful impact ratio 0, and bounded token growth.
+- Recall quality: pass. Recall critic, policy route, reviewed impact feedback, and long-run stress trend are all passing for the current purpose-recall gate.
 - Privacy pre-push: watch/pass. Existing warnings are fixture-like test strings; any private memory root, database, ledger, backup, spool, hot pack, archive, or non-fixture secret must fail publication.
 
 ## Missing Tests And Evaluation Methods
 
 1. Reviewed recall-critic outcomes
 
-   Method: after real turns where recall was used, run `recall-quality-impact --apply` with the actual query, reviewed outcome, and helped flag. This records recall-critic evidence from the same recall-quality run. Gate with `recall-critic-impact-eval --min-evaluated 3`.
+   Current status: first pass threshold reached locally. Continue after real turns where recall was used by running `recall-quality-impact --apply` with the actual query, reviewed outcome, and helped flag. Gate with `recall-critic-impact-eval --min-evaluated 3`.
 
 2. Reviewed working-memory outcomes
 
-   Method: after real turns where working memory projected capsule IDs, run `recall-quality-impact --apply` with the cue, reviewed outcome, and helped flag. This records projected capsule evidence without manually copying capsule IDs. Gate with `working-memory-impact-eval --min-evaluated 3`.
+   Current status: first pass threshold reached locally. Continue after real turns where working memory projected capsule IDs by running `recall-quality-impact --apply` with the cue, reviewed outcome, and helped flag. Gate with `working-memory-impact-eval --min-evaluated 3`.
 
 3. Long-run stress pass evidence
 
-   Method: keep recording `long-run-stress --record` from worker rehearsal, but do not treat repeated watch samples as pass. The stress trend should move to pass only after the underlying impact outcome gates pass.
+   Current status: pass after reviewed impact outcome gates became available. Keep recording `long-run-stress --record` from worker rehearsal; do not tune thresholds from this alone.
 
 4. Cross-machine handoff verification
 
@@ -36,7 +36,7 @@ spool files, hot packs, or archived private evidence.
 
 6. Goal continuity after handoff
 
-   Method: on the new machine, run `recall-quality "current Ara natural memory purpose recall" --scope ara-memory`. It may remain watch until local reviewed outcomes accumulate, but it must preserve purpose, identity, and evaluation gaps.
+   Method: on the new machine, run `recall-quality "current Ara natural memory purpose recall" --scope ara-memory`. It should preserve purpose, identity, and evaluation gaps. It may return watch on a fresh local store until reviewed outcome evidence accumulates there.
 
 7. Outcome capture ergonomics
 
