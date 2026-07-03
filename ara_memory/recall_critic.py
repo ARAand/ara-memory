@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
+
+from ara_memory.compressors import compact_text
+from ara_memory.models import Event
 
 
 @dataclass(slots=True)
@@ -40,6 +44,77 @@ class RecallCriticReport:
         lines.extend(f"- {item}" for item in (self.reasons or ["No risks detected."]))
         lines.append("## Recommendations")
         lines.extend(f"- {item}" for item in (self.recommendations or ["Use the recall pack normally."]))
+        return "\n".join(lines)
+
+
+@dataclass(slots=True)
+class RecallCriticImpactGroup:
+    key: str
+    total: int
+    helpful: int
+    harmful: int
+    unknown: int
+
+    @property
+    def evaluated(self) -> int:
+        return self.helpful + self.harmful
+
+    @property
+    def helpful_rate(self) -> float | None:
+        if self.evaluated == 0:
+            return None
+        return self.helpful / self.evaluated
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "key": self.key,
+            "total": self.total,
+            "evaluated": self.evaluated,
+            "helpful": self.helpful,
+            "harmful": self.harmful,
+            "unknown": self.unknown,
+            "helpful_rate": self.helpful_rate,
+        }
+
+
+@dataclass(slots=True)
+class RecallCriticImpactEvalReport:
+    scope: str
+    status: str
+    totals: dict[str, Any]
+    statuses: list[RecallCriticImpactGroup]
+    decisions: list[RecallCriticImpactGroup]
+    recommendations: list[str]
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "fail"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "scope": self.scope,
+            "status": self.status,
+            "totals": self.totals,
+            "statuses": [item.as_dict() for item in self.statuses],
+            "decisions": [item.as_dict() for item in self.decisions],
+            "recommendations": self.recommendations,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            f"# Ara Recall Critic Impact Eval: {self.scope}",
+            f"status: {self.status}",
+            "totals: "
+            f"impacts={self.totals['impacts']}, evaluated={self.totals['evaluated']}, "
+            f"helpful={self.totals['helpful']}, harmful={self.totals['harmful']}, "
+            f"unknown={self.totals['unknown']}",
+            "## By Critic Status",
+        ]
+        lines.extend(_impact_group_lines(self.statuses))
+        lines.append("## By Decision")
+        lines.extend(_impact_group_lines(self.decisions))
+        lines.append("## Recommendations")
+        lines.extend(f"- {item}" for item in self.recommendations)
         return "\n".join(lines)
 
 
@@ -167,6 +242,71 @@ def critic_payload_from_probe(
     ).as_dict()
 
 
+def record_recall_critic_impact(
+    memory: Any,
+    *,
+    scope: str,
+    query: str,
+    critic_status: str,
+    decisions: list[str],
+    outcome: str,
+    helped: bool | None = None,
+    source: str = "recall-critic-impact",
+) -> Event:
+    unique_decisions = list(dict.fromkeys(str(item).strip() for item in decisions if str(item).strip()))
+    payload = {
+        "query": query,
+        "critic_status": str(critic_status).strip() or "unknown",
+        "decisions": unique_decisions,
+        "outcome": outcome,
+        "helped": helped,
+    }
+    text = (
+        "Recall critic impact:\n"
+        f"Query: {compact_text(query, limit=260)}\n"
+        f"Critic status: {payload['critic_status']}\n"
+        f"Decisions: {', '.join(unique_decisions) or 'none'}\n"
+        f"Outcome: {compact_text(outcome, limit=500)}\n"
+        f"Helped: {helped if helped is not None else 'unknown'}"
+    )
+    event = memory.retain(
+        kind="note",
+        text=text,
+        source=source,
+        scope=scope,
+        metadata={"recall_critic_impact": payload},
+    )
+    memory.store.record_recall_critic_impact(event)
+    return event
+
+
+def evaluate_recall_critic_impact(
+    memory: Any,
+    *,
+    scope: str = "global",
+    include_global: bool = True,
+    limit: int = 500,
+    min_evaluated: int = 3,
+) -> RecallCriticImpactEvalReport:
+    rows = memory.store.list_recall_critic_impacts(
+        scope=scope,
+        include_global=include_global,
+        limit=limit,
+    )
+    totals = _impact_totals(rows)
+    statuses = _impact_groups(rows, key="critic_status")
+    decisions = _impact_groups(rows, key="decision")
+    status = _impact_status(totals, min_evaluated=min_evaluated)
+    return RecallCriticImpactEvalReport(
+        scope=scope,
+        status=status,
+        totals=totals,
+        statuses=statuses,
+        decisions=decisions,
+        recommendations=_impact_recommendations(totals, decisions, min_evaluated=min_evaluated),
+    )
+
+
 def _summary(diagnostics: dict[str, Any], *, budget: int | None) -> dict[str, Any]:
     budget_tokens = int(budget if budget is not None else diagnostics.get("budget_tokens", 0))
     if budget_tokens <= 0:
@@ -203,3 +343,90 @@ def _dedupe(items: list[str]) -> list[str]:
             seen.add(item)
             out.append(item)
     return out
+
+
+def _impact_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    helpful = sum(1 for row in rows if row.get("helped") == 1)
+    harmful = sum(1 for row in rows if row.get("helped") == 0)
+    unknown = sum(1 for row in rows if row.get("helped") is None)
+    return {
+        "impacts": len(rows),
+        "helpful": helpful,
+        "harmful": harmful,
+        "unknown": unknown,
+        "evaluated": helpful + harmful,
+    }
+
+
+def _impact_groups(rows: list[dict[str, Any]], *, key: str) -> list[RecallCriticImpactGroup]:
+    grouped: dict[str, Counter[str]] = {}
+    for row in rows:
+        group_key = str(row.get(key) or "unknown")
+        counts = grouped.setdefault(group_key, Counter())
+        helped = row.get("helped")
+        if helped == 1:
+            counts["helpful"] += 1
+        elif helped == 0:
+            counts["harmful"] += 1
+        else:
+            counts["unknown"] += 1
+        counts["total"] += 1
+    groups = [
+        RecallCriticImpactGroup(
+            key=key,
+            total=int(counts["total"]),
+            helpful=int(counts["helpful"]),
+            harmful=int(counts["harmful"]),
+            unknown=int(counts["unknown"]),
+        )
+        for key, counts in grouped.items()
+    ]
+    groups.sort(key=lambda item: (item.harmful, item.helpful, item.total, item.key), reverse=True)
+    return groups
+
+
+def _impact_status(totals: dict[str, Any], *, min_evaluated: int) -> str:
+    if totals["impacts"] == 0:
+        return "watch"
+    if totals["evaluated"] < min_evaluated:
+        return "watch"
+    if totals["harmful"] > totals["helpful"]:
+        return "fail"
+    if totals["unknown"] > totals["evaluated"]:
+        return "watch"
+    return "pass"
+
+
+def _impact_recommendations(
+    totals: dict[str, Any],
+    decisions: list[RecallCriticImpactGroup],
+    *,
+    min_evaluated: int,
+) -> list[str]:
+    if totals["impacts"] == 0:
+        return ["Record recall-critic-impact after reviewed turns so critic thresholds become auditable."]
+    recommendations: list[str] = []
+    if totals["evaluated"] < min_evaluated:
+        recommendations.append(
+            f"Need {min_evaluated - totals['evaluated']} more reviewed recall-critic outcomes before tuning thresholds."
+        )
+    harmful = [item for item in decisions if item.harmful > item.helpful and item.evaluated > 0]
+    for item in harmful[:3]:
+        recommendations.append(
+            f"Review critic decision '{item.key}'; harmful={item.harmful}, helpful={item.helpful}."
+        )
+    if not recommendations:
+        recommendations.append("Recall critic impact is bounded threshold evidence only; keep reviewing outcomes.")
+    return recommendations
+
+
+def _impact_group_lines(groups: list[RecallCriticImpactGroup]) -> list[str]:
+    if not groups:
+        return ["- None."]
+    return [
+        "- "
+        f"{item.key}: total={item.total}, evaluated={item.evaluated}, "
+        f"helpful={item.helpful}, harmful={item.harmful}, unknown={item.unknown}, "
+        f"helpful_rate={item.helpful_rate if item.helpful_rate is not None else 'n/a'}"
+        for item in groups[:10]
+    ]

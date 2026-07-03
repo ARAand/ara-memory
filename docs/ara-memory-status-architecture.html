@@ -146,7 +146,7 @@
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
       <div class="metric"><span class="label">작업 시간</span><span class="value">약 26시간째</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v27</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v28</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
       <div class="metric"><span class="label">최근 작업</span><span class="value">recall critic split</span></div>
@@ -183,22 +183,23 @@
         <li><code>fallback_plan</code>이 품질 실패나 비용 초과 시 current-evidence, recall-plan, working-memory cues 중 저비용 경로를 고른다.</li>
         <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
         <li><code>recall-critic</code>이 retriever가 만든 후보를 별도로 판정하고, <code>recall-quality</code>와 <code>govern-turn</code> fallback이 그 결과를 신뢰 차단 신호로 사용한다.</li>
+        <li><code>recall-critic-impact</code>가 critic 결정의 실제 outcome을 append-only로 기록해, 임계값 조정을 raw ledger 재스캔 없이 평가한다.</li>
       </ul>
     </article>
 
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,770</li>
-        <li>capsules: 3,886</li>
-        <li>stable capsules: 876</li>
-        <li>relation nodes: 7,233</li>
-        <li>relation edges: 28,275</li>
-        <li>source event links: 5,834</li>
+        <li>source events: 1,776</li>
+        <li>capsules: 3,903</li>
+        <li>stable capsules: 879</li>
+        <li>relation nodes: 7,263</li>
+        <li>relation edges: 28,402</li>
+        <li>source event links: 5,858</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 71</li>
-        <li>spool done: 129</li>
-        <li>storage: 346,062,015 bytes</li>
+        <li>review queue open: 76</li>
+        <li>spool done: 130</li>
+        <li>storage: 346,492,902 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -250,6 +251,11 @@
         <div class="row">
           <strong>recall retriever/critic split</strong>
           <p>1차 완료: retriever는 후보와 recall pack을 만들고, critic은 visible evidence, query term coverage, token budget, fallback usage, risk filtering을 독립 판정한다. 이것이 사람 같은 기억에서 '떠오른 것'과 '믿을 만한 것'을 나누는 첫 구조다.</p>
+          <span class="badge pass">v1 done</span>
+        </div>
+        <div class="row">
+          <strong>critic impact loop</strong>
+          <p>진행: critic 결정이 실제로 도움이 됐는지 <code>recall_critic_impacts</code>에 색인하고, <code>recall-quality</code>가 평가 요약을 노출한다. 다음은 장기 사용 결과로 임계값을 조정하는 것이다.</p>
           <span class="badge pass">v1 done</span>
         </div>
         <div class="row">

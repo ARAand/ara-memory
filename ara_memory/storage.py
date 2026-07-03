@@ -16,7 +16,7 @@ from ara_memory.models import Capsule, Event, EventKind, MemoryStatus, new_id, u
 from ara_memory.projection import search_projection
 
 
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 ACTIVE_FTS_STATUSES = {MemoryStatus.CANDIDATE.value, MemoryStatus.STABLE.value}
 SAFE_SCOPE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 SQLITE_IN_CHUNK_SIZE = 500
@@ -742,6 +742,24 @@ CREATE TABLE IF NOT EXISTS recall_policy_impacts (
 
 CREATE INDEX IF NOT EXISTS idx_rpi_scope_time ON recall_policy_impacts(scope, created_at);
 CREATE INDEX IF NOT EXISTS idx_rpi_intent_action ON recall_policy_impacts(scope, intent, action_name, created_at);
+
+CREATE TABLE IF NOT EXISTS recall_critic_impacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  query TEXT NOT NULL,
+  query_terms_json TEXT NOT NULL,
+  critic_status TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  outcome TEXT NOT NULL,
+  helped INTEGER,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(event_id) REFERENCES events(id),
+  UNIQUE(event_id, decision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rci_scope_time ON recall_critic_impacts(scope, created_at);
+CREATE INDEX IF NOT EXISTS idx_rci_status_decision ON recall_critic_impacts(scope, critic_status, decision, created_at);
 """
 
 
@@ -797,6 +815,8 @@ class MemoryStore:
                 _ensure_memory_mutation_v26_tables(conn)
             if old_version < 27:
                 _ensure_memory_mutation_rollback_v27_tables(conn)
+            if old_version < 28:
+                _sync_recall_critic_impacts(conn)
             conn.execute(
                 """
                 INSERT INTO memory_meta(key, value, updated_at)
@@ -840,6 +860,8 @@ class MemoryStore:
             ).fetchone()
             if existing is not None:
                 _sync_working_memory_impact_event(conn, row_to_event(existing))
+                _sync_recall_policy_impact_event(conn, row_to_event(existing))
+                _sync_recall_critic_impact_event(conn, row_to_event(existing))
                 return row_to_event(existing)
 
             with ledger_path.open("a", encoding="utf-8") as fh:
@@ -870,6 +892,7 @@ class MemoryStore:
             )
             _sync_working_memory_impact_event(conn, event)
             _sync_recall_policy_impact_event(conn, event)
+            _sync_recall_critic_impact_event(conn, event)
             return event
 
     def record_working_memory_impact(self, event: Event) -> None:
@@ -881,6 +904,11 @@ class MemoryStore:
         self.init()
         with self.session() as conn:
             _sync_recall_policy_impact_event(conn, event)
+
+    def record_recall_critic_impact(self, event: Event) -> None:
+        self.init()
+        with self.session() as conn:
+            _sync_recall_critic_impact_event(conn, event)
 
     def upsert_capsule(self, capsule: Capsule) -> None:
         self.init()
@@ -2794,6 +2822,49 @@ class MemoryStore:
             out.append(item)
         return out
 
+    def list_recall_critic_impacts(
+        self,
+        *,
+        scope: str,
+        include_global: bool = True,
+        critic_status: str | None = None,
+        decisions: list[str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        self.init()
+        if limit <= 0:
+            return []
+        clauses = ["(scope = ? OR scope = 'global')" if include_global and scope != "global" else "scope = ?"]
+        params: list[Any] = [scope]
+        if critic_status:
+            clauses.append("critic_status = ?")
+            params.append(critic_status)
+        unique_decisions = list(dict.fromkeys(str(item) for item in decisions or [] if str(item).strip()))
+        if unique_decisions:
+            placeholders = ",".join("?" for _ in unique_decisions)
+            clauses.append(f"decision IN ({placeholders})")
+            params.extend(unique_decisions)
+        params.append(limit)
+        with self.session() as conn:
+            rows = list(
+                conn.execute(
+                    f"""
+                    SELECT *
+                    FROM recall_critic_impacts
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY created_at DESC, id ASC
+                    LIMIT ?
+                    """,
+                    params,
+                )
+            )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["query_terms"] = json.loads(item.pop("query_terms_json"))
+            out.append(item)
+        return out
+
     def record_consolidation_run(
         self,
         *,
@@ -3514,6 +3585,20 @@ def _sync_recall_policy_impacts(conn: sqlite3.Connection) -> None:
         _sync_recall_policy_impact_event(conn, row_to_event(row))
 
 
+def _sync_recall_critic_impacts(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM events
+        WHERE source = 'recall-critic-impact'
+           OR metadata_json LIKE '%recall_critic_impact%'
+        ORDER BY created_at ASC
+        """
+    )
+    for row in rows:
+        _sync_recall_critic_impact_event(conn, row_to_event(row))
+
+
 def _sync_recall_policy_impact_event(conn: sqlite3.Connection, event: Event) -> None:
     payload = event.metadata.get("recall_policy_impact")
     if not isinstance(payload, dict):
@@ -3527,6 +3612,24 @@ def _sync_recall_policy_impact_event(conn: sqlite3.Connection, event: Event) -> 
           event_id, scope, query, query_terms_json, intent, strategy, action_name, outcome, helped, created_at
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+
+def _sync_recall_critic_impact_event(conn: sqlite3.Connection, event: Event) -> None:
+    payload = event.metadata.get("recall_critic_impact")
+    if not isinstance(payload, dict):
+        return
+    rows = _recall_critic_impact_rows(event, payload)
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO recall_critic_impacts(
+          event_id, scope, query, query_terms_json, critic_status, decision, outcome, helped, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         rows,
     )
@@ -3559,6 +3662,39 @@ def _recall_policy_impact_rows(event: Event, payload: dict[str, Any]) -> list[tu
                 intent,
                 strategy,
                 action_name,
+                outcome,
+                helped,
+                event.created_at,
+            )
+        )
+    return rows
+
+
+def _recall_critic_impact_rows(event: Event, payload: dict[str, Any]) -> list[tuple[Any, ...]]:
+    query = str(payload.get("query") or "").strip()
+    outcome = str(payload.get("outcome") or "").strip()
+    critic_status = str(payload.get("critic_status") or "").strip() or "unknown"
+    decisions = [
+        str(decision).strip()
+        for decision in payload.get("decisions", [])
+        if str(decision).strip()
+    ]
+    if not decisions:
+        return []
+    helped_raw = payload.get("helped")
+    helped = 1 if helped_raw is True else 0 if helped_raw is False else None
+    query_terms = extract_keywords(query or outcome, limit=24)
+    query_terms_json = json.dumps(query_terms, ensure_ascii=False)
+    rows = []
+    for decision in dict.fromkeys(decisions):
+        rows.append(
+            (
+                event.id,
+                event.scope,
+                query,
+                query_terms_json,
+                critic_status,
+                decision,
                 outcome,
                 helped,
                 event.created_at,

@@ -3772,6 +3772,53 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("distant-memory", {item.key for item in report.intents})
             self.assertIn("cold-map", {item.key for item in report.actions})
 
+    def test_recall_critic_impact_records_append_only_event_and_eval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+
+            event = memory.record_recall_critic_impact(
+                scope="alpha",
+                query="orphan nebula talisman",
+                critic_status="fail",
+                decisions=["current-evidence-fallback", "do-not-trust-memory", "current-evidence-fallback"],
+                outcome="Fallback avoided unrelated recalled context.",
+                helped=True,
+            )
+            unknown = memory.record_recall_critic_impact(
+                scope="alpha",
+                query="thin memory cue",
+                critic_status="watch",
+                decisions=["use-cues-only"],
+                outcome="Outcome not reviewed yet.",
+                helped=None,
+            )
+
+            rows = memory.store.get_events([event.id, unknown.id])
+            metadata = [json.loads(row["metadata_json"]) for row in rows]
+            self.assertEqual(event.kind.value, "note")
+            self.assertEqual(event.source, "recall-critic-impact")
+            self.assertIn("recall_critic_impact", metadata[0])
+            impacts = memory.store.list_recall_critic_impacts(scope="alpha", include_global=False)
+            impact_tuples = sorted((row["critic_status"], row["decision"], row["helped"]) for row in impacts)
+            self.assertEqual(
+                impact_tuples,
+                [
+                    ("fail", "current-evidence-fallback", 1),
+                    ("fail", "do-not-trust-memory", 1),
+                    ("watch", "use-cues-only", None),
+                ],
+            )
+
+            report = memory.evaluate_recall_critic_impact(scope="alpha", include_global=False, min_evaluated=2)
+            self.assertEqual(report.status, "pass", report.as_dict())
+            self.assertEqual(report.totals["impacts"], 3)
+            self.assertEqual(report.totals["evaluated"], 2)
+            self.assertEqual(report.totals["helpful"], 2)
+            self.assertEqual(report.totals["unknown"], 1)
+            self.assertIn("fail", {item.key for item in report.statuses})
+            self.assertIn("current-evidence-fallback", {item.key for item in report.decisions})
+
     def test_recall_policy_eval_warns_without_reviewed_outcomes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -8676,6 +8723,70 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["totals"]["impacts"], 1)
             self.assertEqual(payload["totals"]["helpful"], 1)
             self.assertEqual(payload["actions"][0]["key"], "cold-map")
+
+    def test_recall_critic_impact_and_eval_cli_output_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+
+            impact = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-critic-impact",
+                    "--scope",
+                    "alpha",
+                    "--query",
+                    "orphan nebula talisman",
+                    "--critic-status",
+                    "fail",
+                    "--decision",
+                    "current-evidence-fallback",
+                    "--outcome",
+                    "Fallback avoided unrelated memory.",
+                    "--helped",
+                    "true",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(impact.returncode, 0, impact.stderr)
+            impact_payload = json.loads(impact.stdout)
+            self.assertEqual(impact_payload["critic_status"], "fail")
+            self.assertEqual(impact_payload["decisions"], ["current-evidence-fallback"])
+            self.assertTrue(impact_payload["helped"])
+
+            evaluation = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-critic-impact-eval",
+                    "--scope",
+                    "alpha",
+                    "--min-evaluated",
+                    "1",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(evaluation.returncode, 0, evaluation.stderr)
+            payload = json.loads(evaluation.stdout)
+            self.assertEqual(payload["status"], "pass")
+            self.assertEqual(payload["totals"]["impacts"], 1)
+            self.assertEqual(payload["totals"]["helpful"], 1)
+            self.assertEqual(payload["decisions"][0]["key"], "current-evidence-fallback")
 
     def test_working_memory_impact_eval_cli_output_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -17986,8 +18097,10 @@ class MemoryFlowTests(unittest.TestCase):
             payload = report.as_dict()
             self.assertEqual(report.status, "fail", payload)
             self.assertEqual(payload["critic"]["status"], "fail")
+            self.assertEqual(payload["critic_impact"]["status"], "watch")
             self.assertTrue(payload["critic"]["diagnostics"]["low_evidence_fallback_suppressed"])
             self.assertEqual(payload["diagnostics"]["critic_status"], "fail")
+            self.assertEqual(payload["diagnostics"]["critic_impact_status"], "watch")
             self.assertIn("recall critic failed", " ".join(report.recommendations))
 
     def test_recall_quality_gate_fails_on_projected_harmful_capsule_feedback(self) -> None:

@@ -406,6 +406,16 @@ class AraMemory:
 
         return build_recall_critic(self, query, **kwargs)
 
+    def record_recall_critic_impact(self, **kwargs: Any) -> Event:
+        from ara_memory.recall_critic import record_recall_critic_impact
+
+        return record_recall_critic_impact(self, **kwargs)
+
+    def evaluate_recall_critic_impact(self, **kwargs: Any) -> Any:
+        from ara_memory.recall_critic import evaluate_recall_critic_impact
+
+        return evaluate_recall_critic_impact(self, **kwargs)
+
     def recall_context(self, query: str, **kwargs: Any) -> Any:
         from ara_memory.recall_plan import build_recall_context
 

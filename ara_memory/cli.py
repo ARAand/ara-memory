@@ -558,6 +558,28 @@ def main(argv: list[str] | None = None) -> int:
     recall_policy_eval.add_argument("--no-global", action="store_true")
     recall_policy_eval.add_argument("--json", action="store_true")
 
+    recall_critic_impact = sub.add_parser(
+        "recall-critic-impact",
+        help="Record whether a recall-critic decision helped a reviewed outcome.",
+    )
+    recall_critic_impact.add_argument("--scope", default="global")
+    recall_critic_impact.add_argument("--query", required=True)
+    recall_critic_impact.add_argument("--critic-status", required=True, choices=["pass", "watch", "fail", "unknown"])
+    recall_critic_impact.add_argument("--decision", action="append", required=True)
+    recall_critic_impact.add_argument("--outcome", required=True)
+    recall_critic_impact.add_argument("--helped", choices=["true", "false", "unknown"], default="unknown")
+    recall_critic_impact.add_argument("--json", action="store_true")
+
+    recall_critic_eval = sub.add_parser(
+        "recall-critic-impact-eval",
+        help="Evaluate recorded recall-critic outcomes by status and decision.",
+    )
+    recall_critic_eval.add_argument("--scope", default="global")
+    recall_critic_eval.add_argument("--limit", type=int, default=500)
+    recall_critic_eval.add_argument("--min-evaluated", type=int, default=3)
+    recall_critic_eval.add_argument("--no-global", action="store_true")
+    recall_critic_eval.add_argument("--json", action="store_true")
+
     working_memory = sub.add_parser(
         "working-memory",
         help="Build a tiny cue-led working memory pack for the current situation.",
@@ -1972,6 +1994,47 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "recall-critic-impact":
+        helped = None if args.helped == "unknown" else args.helped == "true"
+        decisions = [str(decision).strip() for decision in args.decision if str(decision).strip()]
+        if not decisions:
+            print("recall-critic-impact requires at least one non-empty --decision.", file=sys.stderr)
+            return 2
+        event = memory.record_recall_critic_impact(
+            scope=args.scope,
+            query=args.query,
+            critic_status=args.critic_status,
+            decisions=decisions,
+            outcome=args.outcome,
+            helped=helped,
+        )
+        payload = {
+            "event_id": event.id,
+            "scope": event.scope,
+            "query": args.query,
+            "critic_status": args.critic_status,
+            "decisions": list(dict.fromkeys(decisions)),
+            "helped": helped,
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(json.dumps(payload, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "recall-critic-impact-eval":
+        result = memory.evaluate_recall_critic_impact(
+            scope=args.scope,
+            include_global=not args.no_global,
+            limit=args.limit,
+            min_evaluated=args.min_evaluated,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "working-memory":
         prompt = args.prompt if args.prompt is not None else sys.stdin.read().strip()
