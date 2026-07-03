@@ -576,6 +576,11 @@ class AraMemory:
 
         return build_public_memory_bundle(self, **kwargs)
 
+    def handoff_doctor(self, **kwargs: Any) -> Any:
+        from ara_memory.handoff import run_handoff_doctor
+
+        return run_handoff_doctor(**kwargs)
+
     def govern_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.governor import govern_turn
 

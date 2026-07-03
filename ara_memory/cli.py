@@ -1417,6 +1417,13 @@ def main(argv: list[str] | None = None) -> int:
     public_bundle.add_argument("--regression-manifest", type=Path, default=None)
     public_bundle.add_argument("--regression-baseline", type=Path, default=None)
     public_bundle.add_argument("--json", action="store_true")
+    handoff_doctor = sub.add_parser(
+        "handoff-doctor",
+        help="Verify the public GitHub handoff boundary without requiring raw private memory.",
+    )
+    handoff_doctor.add_argument("--repo", type=Path, default=Path.cwd())
+    handoff_doctor.add_argument("--require-clean-worktree", action="store_true")
+    handoff_doctor.add_argument("--json", action="store_true")
     recall_regression = sub.add_parser("recall-regression")
     recall_regression.add_argument("--manifest", type=Path, required=True)
     recall_regression.add_argument("--baseline", type=Path, default=None)
@@ -3283,6 +3290,17 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(payload, ensure_ascii=False))
         return 0 if bundle.passed else 1
+
+    if args.cmd == "handoff-doctor":
+        report = memory.handoff_doctor(
+            repo=args.repo,
+            require_clean_worktree=args.require_clean_worktree,
+        )
+        if args.json:
+            print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(report.to_text())
+        return 0 if report.passed else 1
 
     if args.cmd == "recall-regression":
         cases = load_recall_regression_cases(args.manifest)

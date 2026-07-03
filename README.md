@@ -600,6 +600,20 @@ secret-like text outside test/docs fixtures. Fixture secrets remain visible as
 warnings so regression tests can keep adversarial examples without blocking a
 reviewed public push.
 
+`handoff-doctor` is the clean-checkout GitHub handoff gate. It does not require
+raw `.ara-memory` to exist. Instead it verifies that the required public
+handoff files are present, `docs/public-memory-bundle.json` is parseable and
+declares `raw_memory_included=false`, the Markdown bundle and testing checklist
+describe the GitHub/private-memory boundary, `.gitignore` protects private
+memory roots and backup files, no private memory paths or ZIP/database/log
+artifacts are tracked, and `privacy-pre-push` has no failing findings. On a new
+machine, run it before continuing work:
+
+```powershell
+python -m ara_memory handoff-doctor --json
+python -m ara_memory handoff-doctor --require-clean-worktree --json
+```
+
 `reconsolidation-frame` is the read-only recontextualization layer before any
 memory rewrite. For a query, it combines recall-policy, working-memory,
 lifecycle tiers, and failure/self audits into five frames: purpose and identity,

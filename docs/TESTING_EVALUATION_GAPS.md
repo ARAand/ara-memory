@@ -13,6 +13,7 @@ spool files, hot packs, or archived private evidence.
 - Review queue hygiene: pass. `review-compact` resolved 123 non-destructive low-quality review markers, leaving open review queue count at 0 without promoting, deleting, or decaying capsules.
 - Backup and restore drill: pass. Latest local backup `.ara-memory\backups\ara-memory-2026-07-03T053425Z0000.zip` passed `verify-backup` and `restore-drill` for `current Ara natural memory purpose recall`; manifest signature, archive escrow, SQLite integrity, and restored schema v29 were verified.
 - Backup stewardship: pass. Backup pressure from the new verified backup was resolved with `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"` after dry-run review; only one redundant verified backup was deleted, while the latest three and retention-cycle-referenced backups were preserved.
+- GitHub handoff doctor: watch/pass. `python -m ara_memory handoff-doctor --json` verifies required public handoff files, public bundle schema, publication boundary docs, `.gitignore` private-memory guards, tracked-file privacy, and `privacy-pre-push` without needing raw `.ara-memory`.
 - Privacy pre-push: watch/pass. Existing warnings are fixture-like test strings; any private memory root, database, ledger, backup, spool, hot pack, archive, or non-fixture secret must fail publication.
 
 ## Missing Tests And Evaluation Methods
@@ -31,7 +32,7 @@ spool files, hot packs, or archived private evidence.
 
 4. Cross-machine handoff verification
 
-   Method: clone the GitHub repository on a clean machine, run the test suite, generate `public-memory-bundle`, and verify that the bundle explains current memory state without needing raw local `.ara-memory` evidence.
+   Current status: local public-handoff doctor exists and passes as a watch/pass gate because fixture privacy warnings are reviewed. Method: clone the GitHub repository on a clean machine, run `python -m ara_memory handoff-doctor --json`, run the test suite, generate `public-memory-bundle`, and verify that the bundle explains current memory state without needing raw local `.ara-memory` evidence. Before release push, run `python -m ara_memory handoff-doctor --require-clean-worktree --json`.
 
 5. Public bundle privacy regression
 

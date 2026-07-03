@@ -194,18 +194,18 @@
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,846</li>
-        <li>capsules: 4,076</li>
-        <li>stable capsules: 912</li>
-        <li>relation nodes: 7,543</li>
-        <li>relation edges: 29,690</li>
-        <li>source event links: 6,130</li>
+        <li>source events: 1,852</li>
+        <li>capsules: 4,092</li>
+        <li>stable capsules: 916</li>
+        <li>relation nodes: 7,565</li>
+        <li>relation edges: 29,800</li>
+        <li>source event links: 6,155</li>
         <li>long-run stress runs: 6</li>
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue open: 0</li>
-        <li>spool done: 140</li>
+        <li>spool done: 141</li>
         <li>backup bytes: 127,140,901</li>
-        <li>storage: 360,917,485 bytes</li>
+        <li>storage: 361,424,529 bytes</li>
         <li>public handoff: <code>docs/public-memory-bundle.md</code>, <code>docs/public-memory-bundle.json</code></li>
         <li>latest verified backup: <code>.ara-memory\backups\ara-memory-2026-07-03T053425Z0000.zip</code></li>
       </ul>
@@ -299,6 +299,11 @@
           <strong>public GitHub handoff</strong>
           <p>진행: 원본 <code>.ara-memory</code> 대신 redacted public bundle, coverage digest, 평가 공백, 다음 테스트 방법을 GitHub에 올린다. 다른 컴퓨터는 이 번들로 상태를 인계받고 로컬 outcome evidence를 새로 축적한다.</p>
           <span class="badge watch">publishable</span>
+        </div>
+        <div class="row">
+          <strong>GitHub handoff doctor</strong>
+          <p>Added: <code>python -m ara_memory handoff-doctor --json</code> checks the public bundle, handoff docs, private gitignore rules, tracked-file boundary, and privacy-pre-push without requiring raw <code>.ara-memory</code>. Current local gate is watch/pass because reviewed fixture warnings remain non-fatal.</p>
+          <span class="badge pass">new gate</span>
         </div>
       </div>
     </article>
