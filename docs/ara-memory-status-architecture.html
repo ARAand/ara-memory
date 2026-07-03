@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v28</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 작업</span><span class="value">recall critic split</span></div>
+      <div class="metric"><span class="label">최근 작업</span><span class="value">long-run stress gate</span></div>
     </aside>
   </header>
 
@@ -184,22 +184,23 @@
         <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
         <li><code>recall-critic</code>이 retriever가 만든 후보를 별도로 판정하고, <code>recall-quality</code>와 <code>govern-turn</code> fallback이 그 결과를 신뢰 차단 신호로 사용한다.</li>
         <li><code>recall-critic-impact</code>가 critic 결정의 실제 outcome을 append-only로 기록해, 임계값 조정을 raw ledger 재스캔 없이 평가한다.</li>
+        <li><code>long-run-stress</code>가 multi-query recall, critic, token growth, leakage, impact feedback risk를 AI API 없이 검증하고 <code>goal-roadmap</code>에 포함된다.</li>
       </ul>
     </article>
 
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,776</li>
-        <li>capsules: 3,903</li>
-        <li>stable capsules: 879</li>
+        <li>source events: 1,782</li>
+        <li>capsules: 3,920</li>
+        <li>stable capsules: 883</li>
         <li>relation nodes: 7,263</li>
         <li>relation edges: 28,402</li>
-        <li>source event links: 5,858</li>
+        <li>source event links: 5,882</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 76</li>
-        <li>spool done: 130</li>
-        <li>storage: 346,492,902 bytes</li>
+        <li>review queue open: 81</li>
+        <li>spool done: 131</li>
+        <li>storage: 349,518,138 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -259,14 +260,19 @@
           <span class="badge pass">v1 done</span>
         </div>
         <div class="row">
+          <strong>long-run stress gate</strong>
+          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>에 연결된다.</p>
+          <span class="badge pass">v1 done</span>
+        </div>
+        <div class="row">
           <strong>memory purpose audit</strong>
           <p>장기 목표, Ara 정체성, 프로젝트 로그가 서로 섞이지 않도록 purpose/identity/self/failure kind audit을 더 강하게 묶는다.</p>
           <span class="badge watch">3-6h</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
-          <p>24-72시간 반복 capture/recall/worker/backup/rollback 테스트로 기억 오염, 중복, 비용 폭주, 회귀를 잡는다.</p>
-          <span class="badge risk">8-16h</span>
+          <p>v1 완료: low-cost stress gate는 추가됐다. 다음은 실제 24-72시간 worker/capture/recall/backup/rollback rehearsal로 기억 오염, 중복, 비용 폭주를 측정한다.</p>
+          <span class="badge watch">6-12h</span>
         </div>
       </div>
     </article>
@@ -277,7 +283,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> 장기 stress test와 impact feedback으로 critic 임계값을 실제 사용 결과에 맞게 조정한다.</li>
+        <li><span class="badge info">다음</span> 24-72시간 rehearsal에서 <code>long-run-stress</code>를 worker loop 경로로 반복 실행하고, impact feedback 임계값은 검토된 outcome으로만 조정한다.</li>
       </ul>
     </article>
   </section>

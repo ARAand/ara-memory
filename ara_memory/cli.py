@@ -1350,6 +1350,19 @@ def main(argv: list[str] | None = None) -> int:
     episode_summary.add_argument("--json", action="store_true")
     sub.add_parser("eval")
     sub.add_parser("context-eval")
+    long_run_stress = sub.add_parser(
+        "long-run-stress",
+        help="Run a low-cost multi-query stress gate for recall drift, token growth, leakage, and impact reward risk.",
+    )
+    long_run_stress.add_argument("--scope", default="global")
+    long_run_stress.add_argument("--iterations", type=int, default=3)
+    long_run_stress.add_argument("--budget", type=int, default=1200)
+    long_run_stress.add_argument("--no-global", action="store_true")
+    long_run_stress.add_argument("--no-hot", action="store_true")
+    long_run_stress.add_argument("--max-token-growth", type=float, default=0.35)
+    long_run_stress.add_argument("--min-unique-capsules", type=int, default=2)
+    long_run_stress.add_argument("--max-harmful-impact-ratio", type=float, default=0.34)
+    long_run_stress.add_argument("--json", action="store_true")
     recall_regression = sub.add_parser("recall-regression")
     recall_regression.add_argument("--manifest", type=Path, required=True)
     recall_regression.add_argument("--baseline", type=Path, default=None)
@@ -3116,6 +3129,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "context-eval":
         report = memory.contextual_evaluate()
         print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if report.passed else 1
+
+    if args.cmd == "long-run-stress":
+        report = memory.long_run_stress(
+            scope=args.scope,
+            iterations=args.iterations,
+            budget=args.budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            max_token_growth=args.max_token_growth,
+            min_unique_capsules=args.min_unique_capsules,
+            max_harmful_impact_ratio=args.max_harmful_impact_ratio,
+        )
+        payload = report.as_dict()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"long-run-stress: {payload['status']} score={payload['score']}/100")
+            print(
+                "runs={runs} token_growth={token_growth:.3f} unique_capsules={unique_capsules} "
+                "forbidden_leaks={forbidden_leaks} critic_failures={critic_failures} "
+                "harmful_impact_ratio={harmful_impact_ratio:.3f}".format(**payload["diagnostics"])
+            )
+            for recommendation in payload["recommendations"]:
+                print(f"- {recommendation}")
         return 0 if report.passed else 1
 
     if args.cmd == "recall-regression":

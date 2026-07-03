@@ -4858,14 +4858,20 @@ class MemoryFlowTests(unittest.TestCase):
             memory = AraMemory(Path(tmp) / "memory")
             event = memory.retain(
                 kind="prompt",
-                text="Goal: build an efficient natural memory store with purpose and identity continuity.",
+                text=(
+                    "Goal: build an efficient natural memory store with purpose and identity continuity. "
+                    "Health gates and impact feedback should stay visible without raw history rereads."
+                ),
                 source="test",
                 scope="alpha",
             )
             goal = Capsule.create(
                 kind=CapsuleKind.GOAL,
                 title="Goal memory: natural memory store",
-                body="Build an efficient natural memory store with purpose and identity continuity.",
+                body=(
+                    "Build an efficient natural memory store with purpose and identity continuity. "
+                    "Health gates and impact feedback should stay visible without raw history rereads."
+                ),
                 scope="alpha",
                 confidence=0.78,
                 salience=0.84,
@@ -4947,6 +4953,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "purpose-aware lifecycle policy",
                     "purpose-aware recall controller",
                     "recall-policy feedback loop",
+                    "long-run stress gate",
                     "self-directed deliberation",
                     "scheduled worker script readiness",
                 },
@@ -4988,6 +4995,10 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("impacts=", feedback.evidence)
             self.assertIn("helpful=3", feedback.evidence)
             self.assertIn("harmful=0", feedback.evidence)
+            long_run = next(item for item in roadmap.items if item.name == "long-run stress gate")
+            self.assertIn("runs=", long_run.evidence)
+            self.assertIn("token_growth=", long_run.evidence)
+            self.assertIn("harmful_impact_ratio=", long_run.evidence)
             agency = next(item for item in roadmap.items if item.name == "self-directed deliberation")
             self.assertIn("stance=", agency.evidence)
             self.assertIn("action_allowed=True", agency.evidence)
@@ -15626,6 +15637,140 @@ class MemoryFlowTests(unittest.TestCase):
         report = AraMemory().contextual_evaluate()
         self.assertTrue(report.passed, report.as_dict())
         self.assertEqual(len(report.results), 5)
+
+    def test_long_run_stress_reports_bounded_watch_or_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            scope = "long-run"
+            for text in (
+                "Decision: Long-run natural memory preserves memory purpose through compact stable recall.",
+                "Decision: Health gates should run before trusting recall and avoid reading raw history.",
+                "Decision: Impact feedback is reviewed threshold evidence, not an unreviewed reward signal.",
+            ):
+                memory.retain(kind="decision", text=text, source="test", scope=scope)
+            memory.consolidate()
+            memory.sleep(scope=scope)
+            memory.build_hot(scope=scope, budget=500)
+
+            report = memory.long_run_stress(
+                scope=scope,
+                iterations=2,
+                budget=1100,
+                include_global=False,
+                include_hot=True,
+                min_unique_capsules=1,
+            )
+
+            payload = report.as_dict()
+            self.assertTrue(report.passed, payload)
+            self.assertIn(payload["status"], {"pass", "watch"})
+            self.assertEqual(payload["diagnostics"]["runs"], 6)
+            self.assertEqual(payload["diagnostics"]["forbidden_leaks"], 0)
+            self.assertGreaterEqual(payload["diagnostics"]["unique_capsules"], 1)
+
+    def test_long_run_stress_fails_on_harmful_impact_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            scope = "long-run-harm"
+            event = memory.retain(
+                kind="decision",
+                text="Decision: Impact feedback must never become an unreviewed reward loop.",
+                source="test",
+                scope=scope,
+            )
+            memory.consolidate()
+            memory.sleep(scope=scope)
+            capsule_id = memory.list_capsules(scope=scope, limit=1)[0]["id"]
+            for index in range(3):
+                memory.record_memory_impact(
+                    scope=scope,
+                    cue=f"harmful impact cue {index}",
+                    capsule_ids=[capsule_id],
+                    outcome="Reviewed outcome: impact feedback pushed the wrong memory.",
+                    helped=False,
+                    source="test",
+                )
+                memory.record_recall_policy_impact(
+                    scope=scope,
+                    intent="purpose-continuity",
+                    strategy="hot-core",
+                    query=f"harmful policy cue {index}",
+                    action_names=["use-hot-core"],
+                    outcome="Reviewed outcome: route over-trusted positive feedback.",
+                    helped=False,
+                    source="test",
+                )
+                memory.record_recall_critic_impact(
+                    scope=scope,
+                    query=f"harmful critic cue {index}",
+                    critic_status="pass",
+                    decisions=["trust-pack"],
+                    outcome="Reviewed outcome: critic allowed a bad recall pack.",
+                    helped=False,
+                    source="test",
+                )
+
+            report = memory.long_run_stress(
+                scope=scope,
+                iterations=1,
+                budget=1200,
+                include_global=False,
+                include_hot=False,
+                max_harmful_impact_ratio=0.2,
+                min_unique_capsules=1,
+            )
+
+            payload = report.as_dict()
+            self.assertFalse(report.passed, payload)
+            self.assertEqual(payload["status"], "fail")
+            self.assertGreater(payload["diagnostics"]["harmful_impact_ratio"], 0.2)
+            self.assertIn("Impact feedback is trending harmful", " ".join(payload["recommendations"]))
+
+    def test_long_run_stress_cli_outputs_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            memory = AraMemory(root)
+            memory.init()
+            memory.retain(
+                kind="decision",
+                text="Decision: Long-run memory health protects impact feedback from reward hacking.",
+                source="test",
+                scope="cli-long-run",
+            )
+            memory.consolidate()
+            memory.sleep(scope="cli-long-run")
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(root),
+                    "long-run-stress",
+                    "--scope",
+                    "cli-long-run",
+                    "--iterations",
+                    "1",
+                    "--budget",
+                    "1000",
+                    "--no-global",
+                    "--no-hot",
+                    "--min-unique-capsules",
+                    "1",
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["passed"], payload)
+            self.assertEqual(payload["diagnostics"]["runs"], 3)
 
     def test_recall_regression_suite_passes_and_writes_baseline_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

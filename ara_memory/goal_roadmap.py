@@ -106,6 +106,14 @@ def build_goal_roadmap(
         cold_group_limit=3,
     )
     recall_policy_eval = memory.evaluate_recall_policy(scope=scope, include_global=False, min_evaluated=3)
+    long_run_stress = memory.long_run_stress(
+        scope=scope,
+        iterations=2,
+        budget=1200,
+        include_global=False,
+        include_hot=True,
+        min_unique_capsules=2,
+    )
     agency = memory.agency_review(
         prompt="continue building Ara Memory OS natural memory with self-directed judgment",
         scope=scope,
@@ -241,6 +249,12 @@ def build_goal_roadmap(
             "fail" if recall_policy_eval.status == "fail" else "watch" if recall_policy_eval.status == "watch" else "pass",
             _recall_policy_eval_evidence(recall_policy_eval),
             "Record recall-policy-impact after real turns so recall routing can be audited without reward hacking.",
+        ),
+        RoadmapItem(
+            "long-run stress gate",
+            "fail" if long_run_stress.status == "fail" else "watch" if long_run_stress.status == "watch" else "pass",
+            _long_run_stress_evidence(long_run_stress),
+            "Review token growth, leakage, critic failures, and harmful impact ratios before tuning recall thresholds.",
         ),
         RoadmapItem(
             "self-directed deliberation",
@@ -444,6 +458,18 @@ def _recall_policy_eval_evidence(recall_policy_eval: Any) -> str:
         f"{recall_policy_eval.status}, impacts={totals['impacts']}, "
         f"evaluated={totals['evaluated']}, helpful={totals['helpful']}, "
         f"harmful={totals['harmful']}, unknown={totals['unknown']}"
+    )
+
+
+def _long_run_stress_evidence(report: Any) -> str:
+    diagnostics = report.diagnostics
+    return (
+        f"{report.status}, score={report.score}/100, runs={diagnostics['runs']}, "
+        f"token_growth={diagnostics['token_growth']:.3f}, "
+        f"unique_capsules={diagnostics['unique_capsules']}, "
+        f"leaks={diagnostics['forbidden_leaks']}, "
+        f"critic_failures={diagnostics['critic_failures']}, "
+        f"harmful_impact_ratio={diagnostics['harmful_impact_ratio']:.3f}"
     )
 
 

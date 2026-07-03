@@ -338,6 +338,11 @@ class AraMemory:
 
         return run_contextual_evaluation()
 
+    def long_run_stress(self, **kwargs: Any) -> Any:
+        from ara_memory.evaluation import run_long_run_stress
+
+        return run_long_run_stress(self, **kwargs)
+
     def spool_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.spool import enqueue_turn
 
