@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v27</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 커밋</span><span class="value">govern-turn quality/cost gates</span></div>
+      <div class="metric"><span class="label">최근 커밋</span><span class="value">fallback plan status dashboard</span></div>
     </aside>
   </header>
 
@@ -182,6 +182,7 @@
         <li><code>budget_profile</code>이 quick/standard/deep/debug/mutation 작업별 recall 예산과 입력 ceiling을 자동 선택한다.</li>
         <li><code>fallback_plan</code>이 품질 실패나 비용 초과 시 current-evidence, recall-plan, working-memory cues 중 저비용 경로를 고른다.</li>
         <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
+        <li>현재 다음 축은 retriever가 후보를 찾고 critic이 그 기억을 믿어도 되는지 판정하는 분리 구조다.</li>
       </ul>
     </article>
 
@@ -195,9 +196,9 @@
         <li>relation edges: 28,041</li>
         <li>source event links: 5,794</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 58</li>
+        <li>review queue open: 61</li>
         <li>spool done: 127</li>
-        <li>storage: 348,055,446 bytes</li>
+        <li>storage: 348,211,263 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -238,13 +239,23 @@
         </div>
         <div class="row">
           <strong>memory worker 분리</strong>
-          <p>진행: worker가 drain/consolidate/quality/governance/review/doctor/regression/maintenance를 분리 실행한다. 다음은 retriever/critic 세부 역할을 더 작게 쪼개는 것이다.</p>
+          <p>1차 완료: worker가 drain/consolidate/quality/governance/review/doctor/regression/maintenance를 분리 실행한다. 남은 핵심은 recall 후보 생성기와 recall critic을 분리해 잘못된 회상을 더 싸게 거절하는 것이다.</p>
           <span class="badge pass">v1 done</span>
         </div>
         <div class="row">
           <strong>cost governor</strong>
-          <p>진행: <code>govern-turn</code>과 worker <code>governance_probe</code>가 작업 종류별 budget profile, 입력 토큰/모델 비용 ceiling, 저비용 fallback 전략을 적용한다.</p>
+          <p>1차 완료: <code>govern-turn</code>과 worker <code>governance_probe</code>가 작업 종류별 budget profile, 입력 토큰/모델 비용 ceiling, 저비용 fallback 전략을 적용한다.</p>
           <span class="badge pass">v1 done</span>
+        </div>
+        <div class="row">
+          <strong>recall retriever/critic split</strong>
+          <p>다음 구현: retriever는 후보만 만들고, critic은 visible evidence, query term coverage, token budget, fallback usage, risk filtering을 독립 판정한다. 이것이 사람 같은 기억에서 '떠오른 것'과 '믿을 만한 것'을 나누는 첫 구조다.</p>
+          <span class="badge watch">4-8h</span>
+        </div>
+        <div class="row">
+          <strong>memory purpose audit</strong>
+          <p>장기 목표, Ara 정체성, 프로젝트 로그가 서로 섞이지 않도록 purpose/identity/self/failure kind audit을 더 강하게 묶는다.</p>
+          <span class="badge watch">3-6h</span>
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
@@ -260,7 +271,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> retriever/critic 분리를 더 작게 만들어, 필요한 맥락만 더 싸게 찾게 한다.</li>
+        <li><span class="badge info">다음</span> retriever/critic 분리로, 필요한 맥락만 찾고 믿을 수 없는 회상은 저비용 fallback으로 돌린다.</li>
       </ul>
     </article>
   </section>
@@ -271,7 +282,9 @@
       <ul>
         <li>운영 안전성 1차 완성: 완료</li>
         <li>자연스러운 기억 품질 루프 1차: 완료</li>
-        <li>비용/토큰 governor 포함 실사용 베타: 6-12시간</li>
+        <li>retriever/critic 분리와 CLI/worker 연결: 4-8시간</li>
+        <li>purpose/identity audit 강화: 3-6시간</li>
+        <li>실사용 베타 판정: 8-14시간</li>
         <li>72시간 장기 안정성 검증까지: 추가 3일</li>
       </ul>
     </article>
