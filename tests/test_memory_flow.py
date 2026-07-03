@@ -10615,6 +10615,9 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertFalse(report.passed, payload)
             self.assertEqual(payload["cost_gate"]["status"], "fail")
+            self.assertEqual(payload["fallback_plan"]["strategy"], "current-evidence-first")
+            self.assertEqual(payload["fallback_plan"]["model_context"], "none")
+            self.assertIn("run-recall-plan-before-context", payload["fallback_plan"]["actions"])
             self.assertTrue(any(risk.startswith("block: selected input tokens") for risk in payload["risks"]))
             cost_actions = [action for action in payload["actions"] if action["name"] == "cost-gate"]
             self.assertEqual(cost_actions[0]["status"], "block")
@@ -10668,6 +10671,43 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["budget_profile"]["budgets"], [700])
             self.assertEqual(payload["budget_profile"]["budgets_source"], "explicit")
             self.assertEqual(payload["budget_profile"]["working_budget"], 1400)
+
+    def test_govern_turn_fallback_plan_stops_trusting_memory_on_quality_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: quality fallback",
+                body="A harmful projected memory should force current evidence fallback.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[],
+                tags=["quality", "fallback"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="quality fallback",
+                capsule_ids=[capsule.id],
+                outcome="Projected memory was harmful.",
+                helped=False,
+            )
+
+            payload = memory.govern_turn(
+                {"prompt": "quality fallback"},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+            ).as_dict()
+
+            self.assertEqual(payload["recall_quality"]["status"], "fail")
+            self.assertEqual(payload["fallback_plan"]["strategy"], "do-not-trust-memory")
+            self.assertEqual(payload["fallback_plan"]["model_context"], "current-evidence")
+            self.assertIn("review-recall-quality", payload["fallback_plan"]["actions"])
 
     def test_govern_turn_skips_projection_impact_without_reviewed_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -11743,6 +11783,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(governance.passed)
             self.assertEqual(governance.detail["cost_gate_status"], "fail")
             self.assertEqual(governance.detail["budget_profile"], "deep")
+            self.assertEqual(governance.detail["fallback_strategy"], "current-evidence-first")
             self.assertTrue(any(risk.startswith("block: selected input tokens") for risk in governance.detail["risks"]))
 
     def test_memory_worker_records_failed_relation_merge_review_queue(self) -> None:

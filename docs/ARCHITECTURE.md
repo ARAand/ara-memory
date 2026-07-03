@@ -70,6 +70,7 @@ govern_turn(envelope)
   -> projection_gate verifies visible/projected overlap, action coverage, and token budget
   -> recall_quality gate verifies reviewed recall habits before trusting projected memory
   -> cost_gate blocks configured input-token or estimated-model-cost overruns
+  -> fallback_plan chooses current evidence, recall-plan, or working-memory cues when trust/cost gates are not clean
   -> optional reviewed working-memory-impact event for projected capsule ids
   -> action recommendation: capture, recall-quality, cost-gate, agency-review, working-memory, recall-context, or current evidence
   -> no event retention by default and no AI API call
@@ -248,6 +249,7 @@ govern_turn(turn)
   -> run projection_gate so working memory must be visible, action-bearing, and within budget before being treated as clean next-action context
   -> run recall_quality so harmful reviewed memory habits can block projected-memory trust
   -> run cost_gate so configured token/cost ceilings can block before model context is spent
+  -> run fallback_plan so blocked or watched memory has a lower-cost route instead of silent context spending
   -> optionally record projection outcome as working-memory-impact only when an explicit reviewed outcome is supplied
   -> block anti-judgment, destructive, or safety-deferred frames from being treated as normal clearance
   -> still keep the operation local and model-free

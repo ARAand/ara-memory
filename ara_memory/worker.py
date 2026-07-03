@@ -526,6 +526,8 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
         "governance_probe": {
             "passed": bool(governance.detail.get("passed", False)) if governance else None,
             "budget_profile": _detail_value(governance, "budget_profile", ""),
+            "fallback_strategy": _detail_value(governance, "fallback_strategy", ""),
+            "fallback_model_context": _detail_value(governance, "fallback_model_context", ""),
             "recall_quality": _detail_value(governance, "recall_quality_status", ""),
             "cost_gate": _detail_value(governance, "cost_gate_status", ""),
             "risks": _detail_value(governance, "risks", []),
@@ -587,6 +589,8 @@ def _governance_probe_payload(
         "budget_profile": payload["budget_profile"]["name"],
         "budget_profile_reason": payload["budget_profile"]["reason"],
         "budget_profile_budgets": list(payload["budget_profile"]["budgets"]),
+        "fallback_strategy": payload["fallback_plan"]["strategy"],
+        "fallback_model_context": payload["fallback_plan"]["model_context"],
         "recall_quality_status": payload["recall_quality"]["status"],
         "recall_quality_recommendations": list(payload["recall_quality"].get("recommendations", []))[:5],
         "cost_gate_status": payload["cost_gate"]["status"],

@@ -186,7 +186,10 @@ use working memory, broader recall context, current evidence only, ask first,
 repair memory evidence, or reframe the request. The default `--budget-profile
 auto` classifies quick status, standard implementation, deep architecture,
 debugging, and mutation/rollback turns so recall budgets and input ceilings are
-sized to the risk instead of using one budget for every memory call.
+sized to the risk instead of using one budget for every memory call. It also
+emits a `fallback_plan`: if recall quality fails or selected context exceeds the
+budget, the governor names a cheaper route such as current evidence first,
+recall-plan before context, or working-memory as cues only.
 
 ```powershell
 @'
@@ -892,7 +895,9 @@ worker failures; `--governance-max-input-tokens` and
 `--governance-max-model-cost-usd` let scheduled runs fail fast when the selected
 memory context would exceed an operator-set budget. Worker-loop reports include
 the governance budget profile name so scheduled logs show whether a probe used
-quick, standard, deep, debug, or mutation recall sizing.
+quick, standard, deep, debug, or mutation recall sizing. They also include the
+fallback strategy and model-context mode so scheduled logs show whether memory
+was trusted, reduced to cues, or withheld.
 `worker-loop` repeats the same worker pass with a compact per-iteration report.
 Use `--iterations 1` under Task Scheduler/cron, or a higher iteration count for
 a foreground loop while developing.

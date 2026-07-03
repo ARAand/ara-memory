@@ -43,6 +43,7 @@ class TurnGovernanceReport:
     working_memory_impact: dict[str, Any]
     cost: dict[str, Any]
     cost_gate: dict[str, Any]
+    fallback_plan: dict[str, Any]
     risks: list[str] = field(default_factory=list)
     actions: list[GovernanceAction] = field(default_factory=list)
 
@@ -66,6 +67,7 @@ class TurnGovernanceReport:
             "working_memory_impact": self.working_memory_impact,
             "cost": self.cost,
             "cost_gate": self.cost_gate,
+            "fallback_plan": self.fallback_plan,
             "risks": list(self.risks),
             "actions": [action.as_dict() for action in self.actions],
         }
@@ -141,6 +143,11 @@ class TurnGovernanceReport:
             "- cost_gate: "
             f"status={self.cost_gate.get('status')} "
             f"input_tokens={self.cost_gate.get('selected_input_tokens', 0)}"
+        )
+        lines.append(
+            "- fallback_plan: "
+            f"strategy={self.fallback_plan.get('strategy')} "
+            f"model_context={self.fallback_plan.get('model_context')}"
         )
         if self.risks:
             lines.append("## Risks")
@@ -269,6 +276,19 @@ def govern_turn(
         output_usd_per_million=output_usd_per_million,
     )
     cost_gate = _cost_gate(cost, max_input_tokens=max_input_tokens, max_model_cost_usd=max_model_cost_usd)
+    fallback_plan = _fallback_plan(
+        recall_probe=selected_probe,
+        working=working_payload,
+        projection_gate=projection_gate,
+        recall_quality=recall_quality,
+        cost=cost,
+        cost_gate=cost_gate,
+        budget_profile=resolved_profile,
+        scope=scope,
+        recall_query=recall_query,
+        include_global=include_global,
+        include_hot=include_hot,
+    )
     risks = _risks(
         capture_plan,
         selected_probe,
@@ -306,6 +326,7 @@ def govern_turn(
         working_memory_impact=working_impact,
         cost=cost,
         cost_gate=cost_gate,
+        fallback_plan=fallback_plan,
         risks=risks,
         actions=actions,
     )
@@ -601,6 +622,91 @@ def _actions(
             )
         )
     return actions
+
+
+def _fallback_plan(
+    *,
+    recall_probe: dict[str, Any],
+    working: dict[str, Any],
+    projection_gate: dict[str, Any],
+    recall_quality: dict[str, Any],
+    cost: dict[str, Any],
+    cost_gate: dict[str, Any],
+    budget_profile: dict[str, Any],
+    scope: str,
+    recall_query: str,
+    include_global: bool,
+    include_hot: bool,
+) -> dict[str, Any]:
+    no_global = " --no-global" if not include_global else ""
+    no_hot = " --no-hot" if not include_hot else ""
+    query_hint = _shell_hint(recall_query)
+    commands: list[str] = []
+    reasons: list[str] = []
+    actions: list[str] = []
+    strategy = "use-working-memory"
+    model_context = "working-memory"
+    max_input_tokens = int(cost_gate.get("max_input_tokens", 0))
+    selected_input_tokens = int(cost.get("selected_input_tokens", 0))
+
+    if cost_gate.get("status") == "fail":
+        strategy = "current-evidence-first"
+        model_context = "none"
+        reasons.extend(str(item) for item in cost_gate.get("reasons", [])[:3])
+        actions.extend(["use-current-files-and-user-prompt", "run-recall-plan-before-context"])
+        commands.append(f"python -m ara_memory recall-plan \"{query_hint}\" --scope {scope} --budgets {_budget_arg(budget_profile)}{no_global}{no_hot}")
+        if int(working.get("estimated_tokens", 0)) <= max_input_tokens or max_input_tokens <= 0:
+            actions.append("use-working-memory-only-if-current-evidence-confirms")
+            commands.append(f"python -m ara_memory working-memory \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+    elif recall_quality.get("status") == "fail":
+        strategy = "do-not-trust-memory"
+        model_context = "current-evidence"
+        reasons.extend(str(item) for item in recall_quality.get("recommendations", [])[:3])
+        actions.extend(["use-current-evidence", "review-recall-quality", "record-reviewed-impact-before-retry"])
+        commands.append(f"python -m ara_memory recall-quality \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+    elif bool(recall_probe.get("low_evidence_fallback_suppressed")) or int(recall_probe.get("visible_capsules", 0)) == 0:
+        strategy = "current-evidence-first"
+        model_context = "current-evidence"
+        reasons.append("no direct visible memory evidence; low-evidence fallback should stay out of model context")
+        actions.extend(["use-current-files-and-user-prompt", "ask-for-missing-context-if-needed"])
+    elif projection_gate.get("status") != "pass":
+        strategy = "bounded-working-memory-with-review"
+        model_context = "working-memory-watch"
+        reasons.extend(str(item) for item in projection_gate.get("reasons", [])[:3])
+        actions.extend(["use-working-memory-as-cues-only", "verify-against-current-evidence"])
+        commands.append(f"python -m ara_memory working-memory \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+    elif recall_quality.get("status") == "watch":
+        strategy = "use-working-memory-and-record-impact"
+        model_context = "working-memory"
+        reasons.extend(str(item) for item in recall_quality.get("recommendations", [])[:3])
+        actions.extend(["use-working-memory", "record-working-memory-impact-after-reviewed-outcome"])
+        commands.append(f"python -m ara_memory working-memory \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+    else:
+        reasons.append("working memory and cost gate are within current policy")
+        actions.append("use-working-memory")
+        commands.append(f"python -m ara_memory working-memory \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+
+    if int(recall_probe.get("visible_capsules", 0)) >= 4 and cost_gate.get("status") == "pass":
+        actions.append("optional-recall-context")
+        commands.append(f"python -m ara_memory recall-context \"{query_hint}\" --scope {scope}{no_global}{no_hot}")
+
+    return {
+        "strategy": strategy,
+        "model_context": model_context,
+        "profile": budget_profile.get("name"),
+        "selected_input_tokens": selected_input_tokens,
+        "max_input_tokens": max_input_tokens,
+        "recall_budget": int(recall_probe.get("budget", 0)),
+        "working_memory_tokens": int(working.get("estimated_tokens", 0)),
+        "reasons": reasons[:6],
+        "actions": actions[:8],
+        "commands": commands[:6],
+    }
+
+
+def _budget_arg(budget_profile: dict[str, Any]) -> str:
+    budgets = [str(item) for item in budget_profile.get("budgets", []) if int(item) > 0]
+    return ",".join(budgets) if budgets else "800"
 
 
 def _risks(
