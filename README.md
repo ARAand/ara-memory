@@ -293,6 +293,7 @@ python -m ara_memory recall-context "current project memory" --scope project --b
 python -m ara_memory recall-policy "old deployment archive evidence" --scope project --json
 python -m ara_memory recall-policy-impact --scope project --query "old deployment archive evidence" --intent distant-memory --strategy "cold-map first" --action-name cold-map --action-name recall-context --outcome "cold-map found the right archive group" --helped true
 python -m ara_memory recall-policy-eval --scope project
+python -m ara_memory recall-quality "current task prompt" --scope project --json
 python -m ara_memory working-memory "current task prompt" --scope project --active-file ara_memory/recall.py
 python -m ara_memory working-memory-impact-eval --scope project
 python -m ara_memory agency-review "should I continue this memory architecture work?" --scope project --record
@@ -334,6 +335,13 @@ impact rows for its proposed actions and surfaces them as Policy Feedback:
 helpful history explains confidence, harmful history lowers the route to watch,
 and unknown history stays diagnostic. This keeps routing memory local and
 auditable without turning feedback into a self-reinforcing reward.
+`recall-quality` is the read-only gate above recall-policy and working-memory.
+It runs the current policy route, projects the cue-led working memory, reads
+reviewed recall-policy and working-memory impact feedback, then returns
+pass/watch/fail before Codex treats recalled memory as a natural next-action
+habit. Projected capsules with harmful reviewed history fail the gate; missing
+feedback stays watch and asks for reviewed impact after the turn. The gate never
+changes rankings, statuses, hot eligibility, pruning gates, or policy commands.
 Recall budgets are ceilings, not targets. When hot memory is included and the
 pack already has enough visible evidence, recall applies a smaller soft budget
 instead of spending the whole allowance. Hot-memory items also avoid repeating

@@ -226,6 +226,25 @@ def main(argv: list[str] | None = None) -> int:
     recall_policy.add_argument("--output-usd-per-million", type=float, default=0.0)
     recall_policy.add_argument("--json", action="store_true")
 
+    recall_quality = sub.add_parser(
+        "recall-quality",
+        help="Gate a recall route with policy and working-memory impact feedback.",
+    )
+    recall_quality.add_argument("query")
+    recall_quality.add_argument("--scope", default="global")
+    recall_quality.add_argument(
+        "--budgets",
+        default="800,1600,2500",
+        help="Comma-separated active recall budgets to test before choosing an action.",
+    )
+    recall_quality.add_argument("--working-budget", type=int, default=900)
+    recall_quality.add_argument("--recall-budget", type=int, default=1600)
+    recall_quality.add_argument("--limit", type=int, default=500)
+    recall_quality.add_argument("--min-evaluated", type=int, default=3)
+    recall_quality.add_argument("--no-global", action="store_true")
+    recall_quality.add_argument("--no-hot", action="store_true")
+    recall_quality.add_argument("--json", action="store_true")
+
     reconsolidation_frame = sub.add_parser(
         "reconsolidation-frame",
         help="Build a read-only purpose/identity/decision/failure frame for the current query.",
@@ -1516,6 +1535,24 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "recall-quality":
+        result = memory.recall_quality(
+            args.query,
+            scope=args.scope,
+            budgets=_parse_budget_list(args.budgets),
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+            working_budget=args.working_budget,
+            recall_budget=args.recall_budget,
+            limit=args.limit,
+            min_evaluated=args.min_evaluated,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.passed else 1
 
     if args.cmd == "reconsolidation-frame":
         query = args.query if args.query is not None else sys.stdin.read().strip()

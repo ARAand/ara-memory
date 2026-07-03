@@ -147,6 +147,14 @@ working_memory_impact_eval(scope)
   -> recommend review for capsules with harmful >= helpful
   -> never mutate ranking, memory status, policy routes, or review queues
 
+recall_quality(query, scope)
+  -> run recall-policy and cue-led working-memory for the current query
+  -> read recall-policy-impact and working-memory-impact eval summaries
+  -> attach reviewed feedback for capsule ids projected into working memory
+  -> fail when projected capsule feedback has harmful history or policy/impact eval fails
+  -> watch when feedback is missing, mixed, or still under-reviewed
+  -> never mutate rankings, memory status, hot eligibility, pruning gates, or policy commands
+
 reconsolidation_review(scope)
   -> review candidate-only reconsolidation witnesses for unchanged evidence capsules
   -> compare the approval rollback witness preview against the approved frame fingerprint

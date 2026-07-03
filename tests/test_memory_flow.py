@@ -17661,6 +17661,216 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(unknown.status, "watch")
             self.assertEqual(unknown.totals["evaluated"], 0)
 
+    def test_recall_quality_gate_warns_without_reviewed_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: recall quality cue should use reviewed feedback before trust.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: recall quality cue",
+                body="Recall quality cue should use reviewed feedback before trust.",
+                scope="alpha",
+                confidence=0.85,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "cue"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            report = memory.recall_quality(
+                "recall quality cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                min_evaluated=1,
+            )
+
+            payload = report.as_dict()
+            self.assertEqual(report.status, "watch", payload)
+            self.assertIn(capsule.id, payload["working_memory"]["projected_capsule_ids"])
+            self.assertIn("no reviewed capsule feedback", " ".join(report.recommendations))
+            self.assertFalse(payload["diagnostics"]["automatic_policy_mutation"])
+
+    def test_recall_quality_gate_fails_on_projected_harmful_capsule_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: harmful recall quality cue should be gated.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: harmful recall quality cue",
+                body="Harmful recall quality cue should be gated before it steers the next action.",
+                scope="alpha",
+                confidence=0.85,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "harmful"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="harmful recall quality cue",
+                intent="balanced-recall",
+                strategy="smallest useful recall-plan budget",
+                action_names=["recall-context"],
+                outcome="Recall route was reviewed.",
+                helped=True,
+            )
+            for outcome in ("Steered the fix toward stale context.", "Repeated the same stale context."):
+                memory.record_memory_impact(
+                    scope="alpha",
+                    cue="harmful recall quality cue",
+                    capsule_ids=[capsule.id],
+                    outcome=outcome,
+                    helped=False,
+                )
+
+            report = memory.recall_quality(
+                "harmful recall quality cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                min_evaluated=1,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(report.status, "fail", payload)
+            self.assertEqual(payload["projected_feedback"][0]["capsule_id"], capsule.id)
+            self.assertEqual(payload["projected_feedback"][0]["verdict"], "harmful-history")
+            self.assertIn("Do not trust projected capsule", " ".join(report.recommendations))
+
+    def test_recall_quality_gate_passes_with_helpful_policy_and_capsule_feedback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Procedure: helpful recall quality cue should inspect current files first.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: helpful recall quality cue",
+                body="Helpful recall quality cue should inspect current files first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "helpful"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="helpful recall quality cue",
+                intent="balanced-recall",
+                strategy="smallest useful recall-plan budget",
+                action_names=["recall-context"],
+                outcome="Recall route found the right procedure.",
+                helped=True,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="helpful recall quality cue",
+                capsule_ids=[capsule.id],
+                outcome="Projected procedure helped choose the next command.",
+                helped=True,
+            )
+
+            report = memory.recall_quality(
+                "helpful recall quality cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                min_evaluated=1,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(report.status, "pass", payload)
+            self.assertEqual(payload["projected_feedback"][0]["verdict"], "helpful-history")
+            self.assertIn("Recall quality gate passed", " ".join(report.recommendations))
+
+    def test_recall_quality_cli_outputs_json_and_nonzero_on_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="decision",
+                text="Decision: CLI recall quality harmful cue should fail.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: CLI recall quality harmful cue",
+                body="CLI recall quality harmful cue should fail before steering action.",
+                scope="alpha",
+                confidence=0.85,
+                salience=0.84,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "cli"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="CLI recall quality harmful cue",
+                intent="balanced-recall",
+                strategy="smallest useful recall-plan budget",
+                action_names=["recall-context"],
+                outcome="Policy path was okay.",
+                helped=True,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="CLI recall quality harmful cue",
+                capsule_ids=[capsule.id],
+                outcome="Projected capsule hurt the turn.",
+                helped=False,
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "recall-quality",
+                    "CLI recall quality harmful cue",
+                    "--scope",
+                    "alpha",
+                    "--no-global",
+                    "--no-hot",
+                    "--min-evaluated",
+                    "1",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["status"], "fail")
+            self.assertEqual(payload["projected_feedback"][0]["verdict"], "harmful-history")
+
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

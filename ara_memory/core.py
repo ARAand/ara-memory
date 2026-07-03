@@ -531,6 +531,11 @@ class AraMemory:
 
         return evaluate_memory_impact(self, **kwargs)
 
+    def recall_quality(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_quality import build_recall_quality_gate
+
+        return build_recall_quality_gate(self, query, **kwargs)
+
     def govern_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.governor import govern_turn
 
