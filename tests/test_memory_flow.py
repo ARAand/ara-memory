@@ -18644,6 +18644,74 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(payload["status"], "fail")
             self.assertEqual(payload["projected_feedback"][0]["verdict"], "harmful-history")
 
+    def test_public_memory_bundle_redacts_private_memory_and_lists_eval_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / "README.md").write_text("public repo fixture\n", encoding="utf-8")
+            memory = AraMemory(root)
+            memory.init()
+            memory.retain(
+                kind="prompt",
+                text="Goal: public handoff should not leak private-local-marker-12345.",
+                source="test",
+                scope="alpha",
+            )
+
+            bundle = memory.public_memory_bundle(scope="alpha", include_global=False, repo=repo)
+            payload = bundle.as_dict()
+
+            self.assertFalse(payload["publication_policy"]["raw_memory_included"])
+            self.assertIn(".ara-memory", payload["publication_policy"]["private_paths_excluded"])
+            self.assertTrue(payload["evaluation"]["missing_tests_and_methods"])
+            self.assertIn("redacted_recall_evidence", payload)
+            markdown = bundle.to_markdown()
+            self.assertIn("Missing Tests And Evaluation Methods", markdown)
+            self.assertNotIn("private-local-marker-12345", markdown)
+            self.assertIn("Raw `.ara-memory`", markdown)
+
+    def test_public_memory_bundle_cli_writes_markdown_for_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "memory"
+            output = Path(tmp) / "public-bundle.md"
+            memory = AraMemory(root)
+            memory.init()
+            memory.retain(
+                kind="prompt",
+                text="Goal: CLI public bundle should document handoff gaps.",
+                source="test",
+                scope="alpha",
+            )
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(root),
+                    "public-memory-bundle",
+                    "--scope",
+                    "alpha",
+                    "--no-global",
+                    "--output",
+                    str(output),
+                    "--json",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertIn(completed.returncode, {0, 1}, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["output"], str(output))
+            self.assertTrue(output.exists())
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("Ara Memory Public Bundle", text)
+            self.assertIn("GitHub Boundary", text)
+
     def test_sleep_consolidates_same_artifact_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")

@@ -1386,6 +1386,19 @@ def main(argv: list[str] | None = None) -> int:
     long_run_trend.add_argument("--min-samples", type=int, default=3)
     long_run_trend.add_argument("--no-global", action="store_true")
     long_run_trend.add_argument("--json", action="store_true")
+    public_bundle = sub.add_parser(
+        "public-memory-bundle",
+        help="Write a redacted public handoff bundle without raw private memory stores.",
+    )
+    public_bundle.add_argument("--scope", default="global")
+    public_bundle.add_argument("--query", default="current Ara natural memory architecture purpose recall safety and evaluation gaps")
+    public_bundle.add_argument("--budget", type=int, default=1600)
+    public_bundle.add_argument("--output", type=Path, required=True)
+    public_bundle.add_argument("--format", choices=["markdown", "json"], default="markdown")
+    public_bundle.add_argument("--no-global", action="store_true")
+    public_bundle.add_argument("--regression-manifest", type=Path, default=None)
+    public_bundle.add_argument("--regression-baseline", type=Path, default=None)
+    public_bundle.add_argument("--json", action="store_true")
     recall_regression = sub.add_parser("recall-regression")
     recall_regression.add_argument("--manifest", type=Path, required=True)
     recall_regression.add_argument("--baseline", type=Path, default=None)
@@ -3207,6 +3220,28 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(report.to_text())
         return 0 if report.passed else 1
+
+    if args.cmd == "public-memory-bundle":
+        from ara_memory.public_bundle import write_public_memory_bundle
+
+        cases = load_recall_regression_cases(args.regression_manifest) if args.regression_manifest else None
+        baseline = load_recall_regression_baseline(args.regression_baseline) if args.regression_baseline else None
+        bundle = memory.public_memory_bundle(
+            scope=args.scope,
+            query=args.query,
+            budget=args.budget,
+            include_global=not args.no_global,
+            regression_cases=cases,
+            regression_baseline=baseline,
+            repo=Path.cwd(),
+        )
+        output = write_public_memory_bundle(bundle, args.output, json_output=args.format == "json")
+        payload = {"output": str(output), "status": bundle.status, "passed": bundle.passed}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(json.dumps(payload, ensure_ascii=False))
+        return 0 if bundle.passed else 1
 
     if args.cmd == "recall-regression":
         cases = load_recall_regression_cases(args.manifest)

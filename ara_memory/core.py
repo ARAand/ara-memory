@@ -566,6 +566,11 @@ class AraMemory:
 
         return build_recall_quality_gate(self, query, **kwargs)
 
+    def public_memory_bundle(self, **kwargs: Any) -> Any:
+        from ara_memory.public_bundle import build_public_memory_bundle
+
+        return build_public_memory_bundle(self, **kwargs)
+
     def govern_turn(self, turn: dict[str, Any], **kwargs: Any) -> Any:
         from ara_memory.governor import govern_turn
 
