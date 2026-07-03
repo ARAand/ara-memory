@@ -179,10 +179,11 @@ Use `govern-turn` when the acting session needs a deterministic front door. It
 does not store the turn. It inspects the same envelope, chooses the capture
 mode, probes recall candidates, projects a working-memory pack only when
 visible evidence exists, runs a projection gate over visible/projected overlap,
-action-section coverage, and token budget, runs `agency-review`, reports
-avoided raw-token cost, and recommends whether to use working memory, broader
-recall context, current evidence only, ask first, repair memory evidence, or
-reframe the request.
+action-section coverage, and token budget, runs `recall-quality` over the same
+cue, runs `agency-review`, applies optional token/cost ceilings, reports avoided
+raw-token cost, and recommends whether to use working memory, broader recall
+context, current evidence only, ask first, repair memory evidence, or reframe
+the request.
 
 ```powershell
 @'
@@ -432,7 +433,11 @@ feedback guides recall without turning it into an unchecked reward signal.
 `govern-turn` now adds a `projection_gate` over that pack: it watches when the
 projection has no items, no action section, no overlap with visible recall
 evidence, or exceeds the working-memory budget. This makes the next-action
-context auditable without forcing Codex to read a full recall pack.
+context auditable without forcing Codex to read a full recall pack. It also
+includes a `recall_quality` gate and `cost_gate`: harmful reviewed recall habits
+block trust in the projected memory, missing feedback stays watch, and configured
+`--max-input-tokens` or `--max-model-cost-usd` ceilings block before a turn spends
+model context.
 After a reviewed turn outcome, `govern-turn --record-working-impact` can record
 the projected capsule ids as `working-memory-impact` rows. This reuses the same
 bounded impact table as manual feedback: helpful/harmful outcomes can nudge

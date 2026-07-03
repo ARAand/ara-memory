@@ -38,8 +38,10 @@ class TurnGovernanceReport:
     recall_probe: dict[str, Any]
     working_memory: dict[str, Any]
     projection_gate: dict[str, Any]
+    recall_quality: dict[str, Any]
     working_memory_impact: dict[str, Any]
     cost: dict[str, Any]
+    cost_gate: dict[str, Any]
     risks: list[str] = field(default_factory=list)
     actions: list[GovernanceAction] = field(default_factory=list)
 
@@ -58,8 +60,10 @@ class TurnGovernanceReport:
             "recall_probe": self.recall_probe,
             "working_memory": self.working_memory,
             "projection_gate": self.projection_gate,
+            "recall_quality": self.recall_quality,
             "working_memory_impact": self.working_memory_impact,
             "cost": self.cost,
+            "cost_gate": self.cost_gate,
             "risks": list(self.risks),
             "actions": [action.as_dict() for action in self.actions],
         }
@@ -107,6 +111,11 @@ class TurnGovernanceReport:
             f"overlap={self.projection_gate.get('visible_projected_overlap')} "
             f"action_items={self.projection_gate.get('action_items')}"
         )
+        lines.append(
+            "- recall_quality: "
+            f"status={self.recall_quality.get('status')} "
+            f"projected_feedback={len(self.recall_quality.get('projected_feedback', []))}"
+        )
         impact_state = self.working_memory_impact.get("status", "not-requested")
         if impact_state != "not-requested":
             lines.append(
@@ -119,6 +128,11 @@ class TurnGovernanceReport:
             "- local_only=True "
             f"avoided_raw_tokens={self.cost.get('avoided_raw_tokens', 0)} "
             f"estimated_model_cost_usd={self.cost.get('estimated_model_cost_usd', 0.0):.6f}"
+        )
+        lines.append(
+            "- cost_gate: "
+            f"status={self.cost_gate.get('status')} "
+            f"input_tokens={self.cost_gate.get('selected_input_tokens', 0)}"
         )
         if self.risks:
             lines.append("## Risks")
@@ -142,6 +156,8 @@ def govern_turn(
     output_tokens: int = 0,
     input_usd_per_million: float = 0.0,
     output_usd_per_million: float = 0.0,
+    max_input_tokens: int = 0,
+    max_model_cost_usd: float = 0.0,
     record_working_impact: bool = False,
     impact_outcome: str = "",
     impact_helped: bool | None = None,
@@ -206,6 +222,16 @@ def govern_turn(
     )
     agency_payload = _agency_payload(agency)
     projection_gate = _projection_gate(working_payload, selected_probe, working_budget=working_budget)
+    recall_quality = _recall_quality_payload(
+        memory,
+        cue=cue,
+        scope=scope,
+        budgets=budgets,
+        include_global=include_global,
+        include_hot=include_hot,
+        working_budget=working_budget,
+        recall_budget=int(selected_probe["budget"]),
+    )
     working_impact = _record_working_impact(
         memory,
         scope=scope,
@@ -215,7 +241,6 @@ def govern_turn(
         outcome=impact_outcome,
         helped=impact_helped,
     )
-    risks = _risks(capture_plan, selected_probe, working_payload, projection_gate, command_errors, agency_payload)
     cost = _cost_payload(
         capture_plan,
         working_payload,
@@ -223,11 +248,24 @@ def govern_turn(
         input_usd_per_million=input_usd_per_million,
         output_usd_per_million=output_usd_per_million,
     )
+    cost_gate = _cost_gate(cost, max_input_tokens=max_input_tokens, max_model_cost_usd=max_model_cost_usd)
+    risks = _risks(
+        capture_plan,
+        selected_probe,
+        working_payload,
+        projection_gate,
+        recall_quality,
+        cost_gate,
+        command_errors,
+        agency_payload,
+    )
     actions = _actions(
         capture_plan,
         selected_probe,
         working_payload,
         projection_gate,
+        recall_quality,
+        cost_gate,
         agency_payload,
         scope=scope,
         recall_query=recall_query,
@@ -243,8 +281,10 @@ def govern_turn(
         recall_probe=selected_probe,
         working_memory=working_payload,
         projection_gate=projection_gate,
+        recall_quality=recall_quality,
         working_memory_impact=working_impact,
         cost=cost,
+        cost_gate=cost_gate,
         risks=risks,
         actions=actions,
     )
@@ -335,6 +375,48 @@ def _working_payload(working: Any) -> dict[str, Any]:
     }
 
 
+def _recall_quality_payload(
+    memory: Any,
+    *,
+    cue: str,
+    scope: str,
+    budgets: list[int],
+    include_global: bool,
+    include_hot: bool,
+    working_budget: int,
+    recall_budget: int,
+) -> dict[str, Any]:
+    if not cue:
+        return {
+            "status": "skip",
+            "projected_feedback": [],
+            "recommendations": [],
+            "policy": {},
+            "working_memory": {},
+            "cost_control": "not-run-without-cue",
+        }
+    report = memory.recall_quality(
+        cue,
+        scope=scope,
+        budgets=budgets,
+        include_global=include_global,
+        include_hot=include_hot,
+        working_budget=working_budget,
+        recall_budget=recall_budget,
+    )
+    payload = report.as_dict()
+    return {
+        "status": payload["status"],
+        "projected_feedback": payload["projected_feedback"],
+        "recommendations": payload["recommendations"],
+        "policy": payload["policy"],
+        "working_memory": payload["working_memory"],
+        "memory_impact": payload["memory_impact"],
+        "policy_eval": payload["policy_eval"],
+        "cost_control": "local-read-only-quality-gate",
+    }
+
+
 def _agency_payload(agency: Any) -> dict[str, Any]:
     if agency is None:
         return {
@@ -416,6 +498,8 @@ def _actions(
     recall_probe: dict[str, Any],
     working: dict[str, Any],
     projection_gate: dict[str, Any],
+    recall_quality: dict[str, Any],
+    cost_gate: dict[str, Any],
     agency: dict[str, Any],
     *,
     scope: str,
@@ -433,6 +517,24 @@ def _actions(
     ]
     no_global = " --no-global" if not include_global else ""
     no_hot = " --no-hot" if not include_hot else ""
+    quality_status = str(recall_quality.get("status", "skip"))
+    if quality_status not in {"skip", "pass"}:
+        actions.append(
+            GovernanceAction(
+                name="recall-quality",
+                status="block" if quality_status == "fail" else "watch",
+                reason=_quality_reason(recall_quality),
+                command=f"python -m ara_memory recall-quality \"{_shell_hint(recall_query)}\" --scope {scope}{no_global}{no_hot}",
+            )
+        )
+    if cost_gate.get("status") != "pass":
+        actions.append(
+            GovernanceAction(
+                name="cost-gate",
+                status="block" if cost_gate.get("status") == "fail" else "watch",
+                reason="; ".join(str(item) for item in cost_gate.get("reasons", [])) or "cost gate requires review",
+            )
+        )
     agency_stance = str(agency.get("stance", "skip"))
     if agency_stance not in {"skip", "proceed"}:
         if agency_stance in {"refuse-or-reframe", "defer-for-safety", "ask-before-acting"}:
@@ -485,6 +587,8 @@ def _risks(
     recall_probe: dict[str, Any],
     working: dict[str, Any],
     projection_gate: dict[str, Any],
+    recall_quality: dict[str, Any],
+    cost_gate: dict[str, Any],
     command_errors: list[str],
     agency: dict[str, Any],
 ) -> list[str]:
@@ -503,6 +607,14 @@ def _risks(
         risks.extend(f"watch: {reason}" for reason in projection_gate.get("reasons", [])[:3])
     elif projection_gate.get("status") == "fail":
         risks.extend(f"block: {reason}" for reason in projection_gate.get("reasons", [])[:3])
+    if recall_quality.get("status") == "watch":
+        risks.extend(f"watch: recall-quality {reason}" for reason in recall_quality.get("recommendations", [])[:3])
+    elif recall_quality.get("status") == "fail":
+        risks.extend(f"block: recall-quality {reason}" for reason in recall_quality.get("recommendations", [])[:3])
+    if cost_gate.get("status") == "watch":
+        risks.extend(f"watch: {reason}" for reason in cost_gate.get("reasons", [])[:3])
+    elif cost_gate.get("status") == "fail":
+        risks.extend(f"block: {reason}" for reason in cost_gate.get("reasons", [])[:3])
     agency_stance = str(agency.get("stance", "skip"))
     if agency_stance == "refuse-or-reframe":
         risks.append("block: agency review rejected the instruction frame")
@@ -570,6 +682,13 @@ def _agency_reason(agency: dict[str, Any]) -> str:
     return str(agency.get("stance", "review needed"))
 
 
+def _quality_reason(recall_quality: dict[str, Any]) -> str:
+    recommendations = [str(item) for item in recall_quality.get("recommendations", [])[:2]]
+    if recommendations:
+        return "; ".join(recommendations)
+    return f"recall quality status is {recall_quality.get('status')}"
+
+
 def _cost_payload(
     capture_plan: dict[str, Any],
     working: dict[str, Any],
@@ -598,6 +717,36 @@ def _cost_payload(
         "estimated_model_cost_usd": estimate.total_cost_usd,
         "input_cost_usd": estimate.input_cost_usd,
         "output_cost_usd": estimate.output_cost_usd,
+    }
+
+
+def _cost_gate(
+    cost: dict[str, Any],
+    *,
+    max_input_tokens: int,
+    max_model_cost_usd: float,
+) -> dict[str, Any]:
+    selected_input_tokens = int(cost.get("selected_input_tokens", 0))
+    estimated_cost = float(cost.get("estimated_model_cost_usd", 0.0))
+    reasons: list[str] = []
+    status = "pass"
+    if int(max_input_tokens) > 0 and selected_input_tokens > int(max_input_tokens):
+        status = "fail"
+        reasons.append(f"selected input tokens {selected_input_tokens} exceed max_input_tokens {int(max_input_tokens)}")
+    if float(max_model_cost_usd) > 0 and estimated_cost > float(max_model_cost_usd):
+        status = "fail"
+        reasons.append(
+            f"estimated model cost {estimated_cost:.6f} exceeds max_model_cost_usd {float(max_model_cost_usd):.6f}"
+        )
+    if not reasons:
+        reasons.append("cost is within configured limits")
+    return {
+        "status": status,
+        "selected_input_tokens": selected_input_tokens,
+        "estimated_model_cost_usd": estimated_cost,
+        "max_input_tokens": int(max_input_tokens),
+        "max_model_cost_usd": float(max_model_cost_usd),
+        "reasons": reasons,
     }
 
 

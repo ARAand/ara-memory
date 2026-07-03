@@ -599,6 +599,8 @@ def main(argv: list[str] | None = None) -> int:
     govern_turn.add_argument("--output-tokens", type=int, default=0)
     govern_turn.add_argument("--input-usd-per-million", type=float, default=0.0)
     govern_turn.add_argument("--output-usd-per-million", type=float, default=0.0)
+    govern_turn.add_argument("--max-input-tokens", type=int, default=0)
+    govern_turn.add_argument("--max-model-cost-usd", type=float, default=0.0)
     govern_turn.add_argument(
         "--record-working-impact",
         action="store_true",
@@ -1997,6 +1999,8 @@ def main(argv: list[str] | None = None) -> int:
             output_tokens=args.output_tokens,
             input_usd_per_million=args.input_usd_per_million,
             output_usd_per_million=args.output_usd_per_million,
+            max_input_tokens=args.max_input_tokens,
+            max_model_cost_usd=args.max_model_cost_usd,
             record_working_impact=args.record_working_impact,
             impact_outcome=args.impact_outcome,
             impact_helped=impact_helped,

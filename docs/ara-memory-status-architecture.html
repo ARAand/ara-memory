@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v27</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 커밋</span><span class="value">rewrite rollback approvals</span></div>
+      <div class="metric"><span class="label">최근 커밋</span><span class="value">govern-turn quality/cost gates</span></div>
     </aside>
   </header>
 
@@ -178,6 +178,7 @@
         <li>delete는 물리 삭제가 아니라 <code>APPLY MEMORY SOFT DELETE</code> 확인문을 요구하는 <code>rejected</code> 상태 전환으로만 열린다.</li>
         <li>review queue는 compact/review-worker 경로로 관리되고, 자동 적용은 witness를 남긴다.</li>
         <li><code>recall-quality</code>가 recall-policy, working-memory, impact feedback을 묶어 기억 호출의 pass/watch/fail을 판정한다.</li>
+        <li><code>govern-turn</code>이 <code>recall-quality</code>와 <code>cost_gate</code>를 함께 보고 자동 실행 전 품질/비용 초과를 막는다.</li>
       </ul>
     </article>
 
@@ -191,8 +192,8 @@
         <li>relation edges: 27,582</li>
         <li>source event links: 5,685</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 38</li>
-        <li>storage: 344,176,785 bytes</li>
+        <li>review queue open: 43</li>
+        <li>storage: 343,258,701 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -255,7 +256,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> recall-quality 결과를 worker와 cost governor에 연결해 자동 실행 전 품질/비용을 함께 본다.</li>
+        <li><span class="badge info">다음</span> worker-loop가 recall-quality/cost-gate 결과를 주기적으로 요약해 품질 회귀를 더 빨리 드러내게 한다.</li>
       </ul>
     </article>
   </section>

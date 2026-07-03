@@ -10543,6 +10543,82 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(event["source"], "govern-turn-working-memory-impact")
             self.assertIn("working_memory_impact", event["metadata_json"])
 
+    def test_govern_turn_blocks_harmful_recall_quality_before_trusting_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision memory: harmful governed recall",
+                body="Harmful governed recall should be blocked before it steers the next action.",
+                scope="alpha",
+                confidence=0.88,
+                salience=0.84,
+                source_event_ids=[],
+                tags=["harmful", "governed", "recall"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="harmful governed recall",
+                intent="balanced-recall",
+                strategy="smallest useful recall-plan budget",
+                action_names=["recall-context"],
+                outcome="Policy route was reviewed.",
+                helped=True,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="harmful governed recall",
+                capsule_ids=[capsule.id],
+                outcome="Projected memory pushed the wrong next action.",
+                helped=False,
+            )
+
+            report = memory.govern_turn(
+                {"prompt": "harmful governed recall"},
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+            )
+            payload = report.as_dict()
+
+            self.assertFalse(report.passed, payload)
+            self.assertEqual(payload["recall_quality"]["status"], "fail")
+            self.assertTrue(any(risk.startswith("block: recall-quality") for risk in payload["risks"]))
+            quality_actions = [action for action in payload["actions"] if action["name"] == "recall-quality"]
+            self.assertEqual(quality_actions[0]["status"], "block")
+
+    def test_govern_turn_blocks_when_cost_gate_exceeds_configured_input_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            artifact = root / "large.txt"
+            artifact.write_text("large cost gate artifact\n" * 80, encoding="utf-8")
+
+            report = memory.govern_turn(
+                {
+                    "prompt": "Cost gate should block excessive model input.",
+                    "files": [{"path": str(artifact)}],
+                },
+                scope="alpha",
+                budgets=[700],
+                include_global=False,
+                include_hot=False,
+                capture_cwd=root,
+                max_input_tokens=1,
+            )
+            payload = report.as_dict()
+
+            self.assertFalse(report.passed, payload)
+            self.assertEqual(payload["cost_gate"]["status"], "fail")
+            self.assertTrue(any(risk.startswith("block: selected input tokens") for risk in payload["risks"]))
+            cost_actions = [action for action in payload["actions"] if action["name"] == "cost-gate"]
+            self.assertEqual(cost_actions[0]["status"], "block")
+
     def test_govern_turn_skips_projection_impact_without_reviewed_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
