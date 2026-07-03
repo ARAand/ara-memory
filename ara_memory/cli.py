@@ -962,6 +962,12 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--regression-manifest", type=Path, default=None)
     worker.add_argument("--regression-baseline", type=Path, default=None)
     worker.add_argument("--regression-baseline-warn-only", action="store_true")
+    worker.add_argument("--long-run-stress", action="store_true")
+    worker.add_argument("--long-run-stress-iterations", type=int, default=1)
+    worker.add_argument("--long-run-stress-budget", type=int, default=1200)
+    worker.add_argument("--long-run-stress-max-token-growth", type=float, default=0.35)
+    worker.add_argument("--long-run-stress-min-unique-capsules", type=int, default=2)
+    worker.add_argument("--long-run-stress-max-harmful-impact-ratio", type=float, default=0.34)
     worker.add_argument("--no-maintenance", action="store_true")
     worker.add_argument("--no-vacuum", action="store_true")
     worker.add_argument("--report-item-limit", type=int, default=20)
@@ -995,6 +1001,12 @@ def main(argv: list[str] | None = None) -> int:
     worker_loop.add_argument("--regression-manifest", type=Path, default=None)
     worker_loop.add_argument("--regression-baseline", type=Path, default=None)
     worker_loop.add_argument("--regression-baseline-warn-only", action="store_true")
+    worker_loop.add_argument("--long-run-stress", action="store_true")
+    worker_loop.add_argument("--long-run-stress-iterations", type=int, default=1)
+    worker_loop.add_argument("--long-run-stress-budget", type=int, default=1200)
+    worker_loop.add_argument("--long-run-stress-max-token-growth", type=float, default=0.35)
+    worker_loop.add_argument("--long-run-stress-min-unique-capsules", type=int, default=2)
+    worker_loop.add_argument("--long-run-stress-max-harmful-impact-ratio", type=float, default=0.34)
     worker_loop.add_argument("--no-maintenance", action="store_true")
     worker_loop.add_argument("--no-vacuum", action="store_true")
     worker_loop.add_argument("--report-item-limit", type=int, default=20)
@@ -2670,6 +2682,12 @@ def main(argv: list[str] | None = None) -> int:
             regression_manifest=args.regression_manifest,
             regression_baseline=args.regression_baseline,
             regression_baseline_drift_warn_only=args.regression_baseline_warn_only,
+            long_run_stress=args.long_run_stress,
+            long_run_stress_iterations=args.long_run_stress_iterations,
+            long_run_stress_budget=args.long_run_stress_budget,
+            long_run_stress_max_token_growth=args.long_run_stress_max_token_growth,
+            long_run_stress_min_unique_capsules=args.long_run_stress_min_unique_capsules,
+            long_run_stress_max_harmful_impact_ratio=args.long_run_stress_max_harmful_impact_ratio,
             run_maintenance_step=not args.no_maintenance,
             vacuum=not args.no_vacuum,
             report_item_limit=args.report_item_limit,
@@ -2708,6 +2726,12 @@ def main(argv: list[str] | None = None) -> int:
             regression_manifest=args.regression_manifest,
             regression_baseline=args.regression_baseline,
             regression_baseline_drift_warn_only=args.regression_baseline_warn_only,
+            long_run_stress=args.long_run_stress,
+            long_run_stress_iterations=args.long_run_stress_iterations,
+            long_run_stress_budget=args.long_run_stress_budget,
+            long_run_stress_max_token_growth=args.long_run_stress_max_token_growth,
+            long_run_stress_min_unique_capsules=args.long_run_stress_min_unique_capsules,
+            long_run_stress_max_harmful_impact_ratio=args.long_run_stress_max_harmful_impact_ratio,
             run_maintenance_step=not args.no_maintenance,
             vacuum=not args.no_vacuum,
             report_item_limit=args.report_item_limit,

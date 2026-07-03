@@ -5003,6 +5003,9 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("stance=", agency.evidence)
             self.assertIn("action_allowed=True", agency.evidence)
             self.assertIn("working_items=", agency.evidence)
+            worker_schedule = next(item for item in roadmap.items if item.name == "scheduled worker script readiness")
+            if worker_schedule.status == "pass":
+                self.assertIn("long_run_stress=", worker_schedule.evidence)
             self.assertTrue(all(not item.next_action for item in roadmap.items if item.status == "pass"))
 
     def test_goal_roadmap_recall_policy_feedback_requires_scope_local_evidence(self) -> None:
@@ -12493,6 +12496,43 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertFalse(warn_only.reports[0]["recall_regression_baseline_passed"])
             self.assertTrue(warn_only.reports[0]["recall_regression_baseline_warn_only"])
 
+    def test_worker_loop_can_run_long_run_stress_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory = AraMemory(root / "memory")
+            memory.init()
+            scope = "loop-stress"
+            for text in (
+                "Decision: Long-run natural memory preserves memory purpose through compact stable recall.",
+                "Decision: Health gates should run before trusting memory recall.",
+                "Decision: Impact feedback is reviewed threshold evidence, not an unreviewed reward mutation.",
+            ):
+                memory.retain(kind="decision", text=text, source="test", scope=scope)
+            memory.consolidate()
+            memory.sleep(scope=scope)
+            memory.build_hot(scope=scope, budget=500)
+
+            report = memory.worker_loop(
+                scope=scope,
+                iterations=1,
+                interval_seconds=0,
+                doctor_query="worker loop stress health",
+                recall_budget=1200,
+                hot_budget=700,
+                long_run_stress=True,
+                long_run_stress_iterations=1,
+                long_run_stress_budget=1100,
+                long_run_stress_min_unique_capsules=1,
+                run_maintenance_step=False,
+            )
+
+            self.assertTrue(report.passed, report.as_dict())
+            stress = report.reports[0]["long_run_stress"]
+            self.assertIn(stress["status"], {"pass", "watch"})
+            self.assertTrue(stress["passed"])
+            self.assertEqual(stress["runs"], 3)
+            self.assertEqual(stress["forbidden_leaks"], 0)
+
     def test_worker_schedule_writes_reviewable_task_script(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -12554,6 +12594,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("Running worker preflight before registering scheduled task", script)
             self.assertIn("& $PythonPath @WorkerArgs", script)
             self.assertLess(script.index("Worker preflight failed"), script.index("Register-ScheduledTask"))
+            self.assertIn("--long-run-stress", script)
             self.assertIn("New-TimeSpan -Minutes 7", script)
             self.assertIn("ExecutionTimeLimit", script)
             self.assertIn("StartWhenAvailable", script)
@@ -12569,6 +12610,7 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(verification.passed, verification.as_dict())
             self.assertEqual(verification.details["interval_minutes"], 7)
             self.assertTrue(verification.details["regression_baseline_warn_only"])
+            self.assertTrue(verification.details["long_run_stress"])
             strict = memory.verify_worker_schedule(
                 output=output,
                 scope="test-scope",
@@ -12642,6 +12684,17 @@ class MemoryFlowTests(unittest.TestCase):
             )
             self.assertFalse(missing_warn_only.passed)
             self.assertTrue(any("--regression-baseline-warn-only" in item for item in missing_warn_only.issues))
+            output.write_text(
+                script.replace("    '--long-run-stress',\n", ""),
+                encoding="utf-8",
+            )
+            missing_long_run = memory.verify_worker_schedule(
+                output=output,
+                scope="test-scope",
+                max_interval_minutes=10,
+            )
+            self.assertFalse(missing_long_run.passed)
+            self.assertTrue(any("--long-run-stress" in item for item in missing_long_run.issues))
 
     def test_worker_schedule_verify_cli_reports_missing_or_valid_scripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

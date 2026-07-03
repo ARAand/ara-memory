@@ -93,6 +93,12 @@ def run_memory_worker(
     regression_manifest: Path | None = None,
     regression_baseline: Path | None = None,
     regression_baseline_drift_warn_only: bool = False,
+    long_run_stress: bool = False,
+    long_run_stress_iterations: int = 1,
+    long_run_stress_budget: int = 1200,
+    long_run_stress_max_token_growth: float = 0.35,
+    long_run_stress_min_unique_capsules: int = 2,
+    long_run_stress_max_harmful_impact_ratio: float = 0.34,
     run_maintenance_step: bool = True,
     vacuum: bool = True,
     report_item_limit: int = 20,
@@ -140,6 +146,12 @@ def run_memory_worker(
                 regression_manifest=regression_manifest,
                 regression_baseline=regression_baseline,
                 regression_baseline_drift_warn_only=regression_baseline_drift_warn_only,
+                long_run_stress=long_run_stress,
+                long_run_stress_iterations=long_run_stress_iterations,
+                long_run_stress_budget=long_run_stress_budget,
+                long_run_stress_max_token_growth=long_run_stress_max_token_growth,
+                long_run_stress_min_unique_capsules=long_run_stress_min_unique_capsules,
+                long_run_stress_max_harmful_impact_ratio=long_run_stress_max_harmful_impact_ratio,
                 run_maintenance_step=run_maintenance_step,
                 vacuum=vacuum,
                 report_item_limit=report_item_limit,
@@ -173,6 +185,12 @@ def run_memory_worker(
         regression_manifest=regression_manifest,
         regression_baseline=regression_baseline,
         regression_baseline_drift_warn_only=regression_baseline_drift_warn_only,
+        long_run_stress=long_run_stress,
+        long_run_stress_iterations=long_run_stress_iterations,
+        long_run_stress_budget=long_run_stress_budget,
+        long_run_stress_max_token_growth=long_run_stress_max_token_growth,
+        long_run_stress_min_unique_capsules=long_run_stress_min_unique_capsules,
+        long_run_stress_max_harmful_impact_ratio=long_run_stress_max_harmful_impact_ratio,
         run_maintenance_step=run_maintenance_step,
         vacuum=vacuum,
         report_item_limit=report_item_limit,
@@ -236,6 +254,12 @@ def _run_locked_worker(
     regression_manifest: Path | None,
     regression_baseline: Path | None,
     regression_baseline_drift_warn_only: bool,
+    long_run_stress: bool,
+    long_run_stress_iterations: int,
+    long_run_stress_budget: int,
+    long_run_stress_max_token_growth: float,
+    long_run_stress_min_unique_capsules: int,
+    long_run_stress_max_harmful_impact_ratio: float,
     run_maintenance_step: bool,
     vacuum: bool,
     report_item_limit: int,
@@ -398,6 +422,25 @@ def _run_locked_worker(
         )
         steps.append(WorkerStep("recall_regression", regression_passed, regression_payload))
 
+    if long_run_stress:
+        stress = memory.long_run_stress(
+            scope=scope,
+            iterations=long_run_stress_iterations,
+            budget=long_run_stress_budget,
+            include_global=False,
+            include_hot=True,
+            max_token_growth=long_run_stress_max_token_growth,
+            min_unique_capsules=long_run_stress_min_unique_capsules,
+            max_harmful_impact_ratio=long_run_stress_max_harmful_impact_ratio,
+        )
+        steps.append(
+            WorkerStep(
+                "long_run_stress",
+                stress.status != "fail",
+                _long_run_stress_worker_payload(stress.as_dict()),
+            )
+        )
+
     if run_maintenance_step:
         maintenance = memory.maintenance(vacuum=vacuum)
         steps.append(
@@ -469,6 +512,7 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
     doctor = by_name.get("doctor")
     governance = by_name.get("governance_probe")
     regression = by_name.get("recall_regression")
+    long_run_stress = by_name.get("long_run_stress")
     maintenance = by_name.get("maintenance")
     episode = by_name.get("episode_summary")
     failed_steps = [step.name for step in report.steps if not step.passed]
@@ -538,6 +582,17 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
         "recall_regression_baseline_warn_only": (
             bool(regression.detail.get("baseline_drift_warn_only", False)) if regression else None
         ),
+        "long_run_stress": {
+            "status": _detail_value(long_run_stress, "status", ""),
+            "passed": bool(long_run_stress.detail.get("passed", False)) if long_run_stress else None,
+            "score": _detail_value(long_run_stress, "score", 0),
+            "runs": _detail_value(long_run_stress, "runs", 0),
+            "token_growth": _detail_value(long_run_stress, "token_growth", 0.0),
+            "unique_capsules": _detail_value(long_run_stress, "unique_capsules", 0),
+            "forbidden_leaks": _detail_value(long_run_stress, "forbidden_leaks", 0),
+            "critic_failures": _detail_value(long_run_stress, "critic_failures", 0),
+            "harmful_impact_ratio": _detail_value(long_run_stress, "harmful_impact_ratio", 0.0),
+        },
         "maintenance_integrity": maintenance.detail.get("sqlite_integrity") if maintenance else None,
     }
 
@@ -550,6 +605,25 @@ def _regression_worker_payload(payload: dict[str, Any], *, baseline_drift_warn_o
     annotated["baseline_passed"] = all(bool(item.get("passed", False)) for item in baseline)
     annotated["baseline_drift_warn_only"] = baseline_drift_warn_only
     return annotated
+
+
+def _long_run_stress_worker_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = dict(payload.get("diagnostics", {}) or {})
+    return {
+        "passed": bool(payload.get("passed", False)),
+        "status": str(payload.get("status", "unknown")),
+        "score": int(payload.get("score", 0) or 0),
+        "runs": int(diagnostics.get("runs", 0) or 0),
+        "token_growth": float(diagnostics.get("token_growth", 0.0) or 0.0),
+        "unique_capsules": int(diagnostics.get("unique_capsules", 0) or 0),
+        "forbidden_leaks": int(diagnostics.get("forbidden_leaks", 0) or 0),
+        "critic_failures": int(diagnostics.get("critic_failures", 0) or 0),
+        "harmful_impact_ratio": float(diagnostics.get("harmful_impact_ratio", 0.0) or 0.0),
+        "policy_impact_status": str((diagnostics.get("policy_impact") or {}).get("status", "")),
+        "critic_impact_status": str((diagnostics.get("critic_impact") or {}).get("status", "")),
+        "memory_impact_status": str((diagnostics.get("memory_impact") or {}).get("status", "")),
+        "recommendations": list(payload.get("recommendations", []))[:5],
+    }
 
 
 def _governance_probe_payload(

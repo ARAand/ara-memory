@@ -422,7 +422,7 @@ def _worker_schedule_evidence(worker_schedule: Any) -> str:
     if worker_schedule.passed:
         return (
             f"script={worker_schedule.path}, interval={details.get('interval_minutes')}m, "
-            f"task={details.get('task_name')}"
+            f"task={details.get('task_name')}, long_run_stress={details.get('long_run_stress', False)}"
         )
     if worker_schedule.issues:
         return "; ".join(worker_schedule.issues[:3])
