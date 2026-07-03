@@ -914,6 +914,10 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--no-candidate-summary", action="store_true")
     worker.add_argument("--candidate-summary-min-group-size", type=int, default=3)
     worker.add_argument("--candidate-summary-limit", type=int, default=80)
+    worker.add_argument("--no-governance-probe", action="store_true")
+    worker.add_argument("--governance-query", default="")
+    worker.add_argument("--governance-max-input-tokens", type=int, default=0)
+    worker.add_argument("--governance-max-model-cost-usd", type=float, default=0.0)
     worker.add_argument("--doctor-query", default="current memory state")
     worker.add_argument("--recall-budget", type=int, default=1600)
     worker.add_argument("--hot-budget", type=int, default=1200)
@@ -943,6 +947,10 @@ def main(argv: list[str] | None = None) -> int:
     worker_loop.add_argument("--no-candidate-summary", action="store_true")
     worker_loop.add_argument("--candidate-summary-min-group-size", type=int, default=3)
     worker_loop.add_argument("--candidate-summary-limit", type=int, default=80)
+    worker_loop.add_argument("--no-governance-probe", action="store_true")
+    worker_loop.add_argument("--governance-query", default="")
+    worker_loop.add_argument("--governance-max-input-tokens", type=int, default=0)
+    worker_loop.add_argument("--governance-max-model-cost-usd", type=float, default=0.0)
     worker_loop.add_argument("--doctor-query", default="current memory state")
     worker_loop.add_argument("--recall-budget", type=int, default=1600)
     worker_loop.add_argument("--hot-budget", type=int, default=1200)
@@ -2545,6 +2553,10 @@ def main(argv: list[str] | None = None) -> int:
             candidate_summary=not args.no_candidate_summary,
             candidate_summary_min_group_size=args.candidate_summary_min_group_size,
             candidate_summary_limit=args.candidate_summary_limit,
+            governance_probe=not args.no_governance_probe,
+            governance_query=args.governance_query,
+            governance_max_input_tokens=args.governance_max_input_tokens,
+            governance_max_model_cost_usd=args.governance_max_model_cost_usd,
             doctor_query=args.doctor_query,
             recall_budget=args.recall_budget,
             hot_budget=args.hot_budget,
@@ -2579,6 +2591,10 @@ def main(argv: list[str] | None = None) -> int:
             candidate_summary=not args.no_candidate_summary,
             candidate_summary_min_group_size=args.candidate_summary_min_group_size,
             candidate_summary_limit=args.candidate_summary_limit,
+            governance_probe=not args.no_governance_probe,
+            governance_query=args.governance_query,
+            governance_max_input_tokens=args.governance_max_input_tokens,
+            governance_max_model_cost_usd=args.governance_max_model_cost_usd,
             doctor_query=args.doctor_query,
             recall_budget=args.recall_budget,
             hot_budget=args.hot_budget,

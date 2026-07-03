@@ -861,8 +861,10 @@ after rollback approval.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,
-runs the review worker in dry-run mode by
-default, summarizes the review queue through triage, reruns relation-merge and
+runs a `govern-turn` governance probe so recall-quality and configured cost
+ceilings are visible in scheduled logs before model context is trusted, runs the
+review worker in dry-run mode by default, summarizes the review queue through
+triage, reruns relation-merge and
 reconsolidation witness review with queue recording, reports open
 relation-review and reconsolidation-review pressure, runs
 doctor, optionally runs recall regression, and finishes with lossless
@@ -882,7 +884,10 @@ safely instead of draining the same queue twice. Use
 `--lock-stale-seconds` to recover stale locks after a crashed worker, and
 `--processing-stale-seconds` to recover interrupted spool records. Use
 `--no-episode-summary` or `--no-candidate-summary` only when explicitly
-debugging raw capture pressure.
+debugging raw capture pressure. Use `--no-governance-probe` only when isolating
+worker failures; `--governance-max-input-tokens` and
+`--governance-max-model-cost-usd` let scheduled runs fail fast when the selected
+memory context would exceed an operator-set budget.
 `worker-loop` repeats the same worker pass with a compact per-iteration report.
 Use `--iterations 1` under Task Scheduler/cron, or a higher iteration count for
 a foreground loop while developing.

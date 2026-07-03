@@ -284,6 +284,7 @@ worker(scope)
   -> drain_spool(scope)
   -> episode_summary() + candidate_summary()
   -> quality(persist=True)
+  -> governance_probe(govern_turn with recall_quality + cost_gate)
   -> review_worker(dry_run=True by default)
   -> review_triage()
   -> relation_merge_review(record_queue=True)
@@ -319,7 +320,7 @@ review_worker(scope)
 
 worker_loop(iterations, interval)
   -> repeat worker(scope)
-  -> compact per-iteration report
+  -> compact per-iteration report with governance quality/cost status
 
 sleep()
   -> review candidate memories through advisor interface

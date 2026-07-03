@@ -83,6 +83,10 @@ def run_memory_worker(
     candidate_summary: bool = True,
     candidate_summary_min_group_size: int = 3,
     candidate_summary_limit: int = 80,
+    governance_probe: bool = True,
+    governance_query: str = "",
+    governance_max_input_tokens: int = 0,
+    governance_max_model_cost_usd: float = 0.0,
     doctor_query: str = "current memory state",
     recall_budget: int = 1600,
     hot_budget: int = 1200,
@@ -126,6 +130,10 @@ def run_memory_worker(
                 candidate_summary=candidate_summary,
                 candidate_summary_min_group_size=candidate_summary_min_group_size,
                 candidate_summary_limit=candidate_summary_limit,
+                governance_probe=governance_probe,
+                governance_query=governance_query,
+                governance_max_input_tokens=governance_max_input_tokens,
+                governance_max_model_cost_usd=governance_max_model_cost_usd,
                 doctor_query=doctor_query,
                 recall_budget=recall_budget,
                 hot_budget=hot_budget,
@@ -155,6 +163,10 @@ def run_memory_worker(
         candidate_summary=candidate_summary,
         candidate_summary_min_group_size=candidate_summary_min_group_size,
         candidate_summary_limit=candidate_summary_limit,
+        governance_probe=governance_probe,
+        governance_query=governance_query,
+        governance_max_input_tokens=governance_max_input_tokens,
+        governance_max_model_cost_usd=governance_max_model_cost_usd,
         doctor_query=doctor_query,
         recall_budget=recall_budget,
         hot_budget=hot_budget,
@@ -214,6 +226,10 @@ def _run_locked_worker(
     candidate_summary: bool,
     candidate_summary_min_group_size: int,
     candidate_summary_limit: int,
+    governance_probe: bool,
+    governance_query: str,
+    governance_max_input_tokens: int,
+    governance_max_model_cost_usd: float,
     doctor_query: str,
     recall_budget: int,
     hot_budget: int,
@@ -276,6 +292,18 @@ def _run_locked_worker(
     quality = memory.quality(scope=scope, limit=quality_limit, persist=True)
     quality_payload = _compact_quality(quality.as_dict(), limit=report_item_limit)
     steps.append(WorkerStep("quality", True, quality_payload))
+
+    if governance_probe:
+        governance_payload = _governance_probe_payload(
+            memory,
+            scope=scope,
+            query=governance_query or doctor_query,
+            recall_budget=recall_budget,
+            hot_budget=hot_budget,
+            max_input_tokens=governance_max_input_tokens,
+            max_model_cost_usd=governance_max_model_cost_usd,
+        )
+        steps.append(WorkerStep("governance_probe", bool(governance_payload["passed"]), governance_payload))
 
     review = memory.review_worker(scope=scope, limit=review_limit, dry_run=not apply_review)
     review_payload = _limit_items(review.as_dict(), "items", limit=report_item_limit)
@@ -439,6 +467,7 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
     reconsolidation_review = by_name.get("reconsolidation_review")
     reconsolidation_queue = by_name.get("reconsolidation_review_queue")
     doctor = by_name.get("doctor")
+    governance = by_name.get("governance_probe")
     regression = by_name.get("recall_regression")
     maintenance = by_name.get("maintenance")
     episode = by_name.get("episode_summary")
@@ -494,6 +523,12 @@ def _compact_worker_loop_report(report: WorkerReport, *, iteration: int) -> dict
             "superseded": _detail_value(episode, "superseded", 0),
         },
         "doctor_passed": bool(doctor.detail.get("passed", False)) if doctor else None,
+        "governance_probe": {
+            "passed": bool(governance.detail.get("passed", False)) if governance else None,
+            "recall_quality": _detail_value(governance, "recall_quality_status", ""),
+            "cost_gate": _detail_value(governance, "cost_gate_status", ""),
+            "risks": _detail_value(governance, "risks", []),
+        },
         "recall_regression_passed": bool(regression.detail.get("passed", False)) if regression else None,
         "recall_regression_cases_passed": bool(regression.detail.get("cases_passed", False)) if regression else None,
         "recall_regression_baseline_passed": bool(regression.detail.get("baseline_passed", False)) if regression else None,
@@ -512,6 +547,55 @@ def _regression_worker_payload(payload: dict[str, Any], *, baseline_drift_warn_o
     annotated["baseline_passed"] = all(bool(item.get("passed", False)) for item in baseline)
     annotated["baseline_drift_warn_only"] = baseline_drift_warn_only
     return annotated
+
+
+def _governance_probe_payload(
+    memory: Any,
+    *,
+    scope: str,
+    query: str,
+    recall_budget: int,
+    hot_budget: int,
+    max_input_tokens: int,
+    max_model_cost_usd: float,
+) -> dict[str, Any]:
+    report = memory.govern_turn(
+        {
+            "prompt": query,
+            "assistant": "Scheduled memory worker governance probe.",
+        },
+        scope=scope,
+        budgets=[recall_budget],
+        working_budget=hot_budget,
+        max_input_tokens=max_input_tokens,
+        max_model_cost_usd=max_model_cost_usd,
+    )
+    payload = report.as_dict()
+    actions = [
+        {
+            "name": str(action.get("name", "")),
+            "status": str(action.get("status", "")),
+            "reason": str(action.get("reason", "")),
+        }
+        for action in payload.get("actions", [])
+        if isinstance(action, dict) and action.get("status") in {"block", "watch"}
+    ]
+    return {
+        "passed": bool(payload["passed"]),
+        "query": query,
+        "recall_quality_status": payload["recall_quality"]["status"],
+        "recall_quality_recommendations": list(payload["recall_quality"].get("recommendations", []))[:5],
+        "cost_gate_status": payload["cost_gate"]["status"],
+        "cost_gate_reasons": list(payload["cost_gate"].get("reasons", []))[:5],
+        "projection_gate_status": payload["projection_gate"]["status"],
+        "working_memory_items": payload["working_memory"]["items"],
+        "working_memory_tokens": payload["working_memory"]["estimated_tokens"],
+        "selected_input_tokens": payload["cost"]["selected_input_tokens"],
+        "estimated_model_cost_usd": payload["cost"]["estimated_model_cost_usd"],
+        "avoided_raw_tokens": payload["cost"]["avoided_raw_tokens"],
+        "risks": list(payload.get("risks", []))[:8],
+        "actions": actions[:8],
+    }
 
 
 def _relation_merge_review_worker_payload(

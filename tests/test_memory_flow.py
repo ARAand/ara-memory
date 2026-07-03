@@ -11638,6 +11638,7 @@ class MemoryFlowTests(unittest.TestCase):
                     "episode_summary",
                     "candidate_summary",
                     "quality",
+                    "governance_probe",
                     "review_worker",
                     "review_triage",
                     "relation_merge_review",
@@ -11655,15 +11656,43 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertEqual(drain_detail["recovered"], 0)
             self.assertIn("summaries_created", report.steps[2].detail)
             self.assertIn("summaries_created", report.steps[3].detail)
-            self.assertIn("groups", report.steps[6].detail)
-            self.assertIn("groups_truncated", report.steps[6].detail)
-            self.assertEqual(report.steps[7].detail["reviewed"], 0)
-            self.assertEqual(report.steps[8].detail["total_open"], 0)
-            self.assertEqual(report.steps[9].detail["reviewed"], 0)
-            self.assertEqual(report.steps[10].detail["total_open"], 0)
-            self.assertTrue(report.steps[11].detail["passed"])
+            self.assertEqual(report.steps[5].detail["cost_gate_status"], "pass")
+            self.assertIn("groups", report.steps[7].detail)
+            self.assertIn("groups_truncated", report.steps[7].detail)
+            self.assertEqual(report.steps[8].detail["reviewed"], 0)
+            self.assertEqual(report.steps[9].detail["total_open"], 0)
+            self.assertEqual(report.steps[10].detail["reviewed"], 0)
+            self.assertEqual(report.steps[11].detail["total_open"], 0)
+            self.assertTrue(report.steps[12].detail["passed"])
             self.assertIn("items_truncated", report.steps[4].detail)
-            self.assertIn("items_truncated", report.steps[5].detail)
+            self.assertIn("items_truncated", report.steps[6].detail)
+
+    def test_memory_worker_governance_probe_blocks_configured_cost_overrun(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.retain(
+                kind="decision",
+                text="Decision: worker governance probe should surface cost gate overruns.",
+                source="test",
+                scope="worker-cost",
+            )
+
+            report = memory.worker(
+                scope="worker-cost",
+                episode_summary=False,
+                candidate_summary=False,
+                run_maintenance_step=False,
+                doctor_query="worker governance probe cost overrun",
+                recall_budget=900,
+                hot_budget=700,
+                governance_max_input_tokens=1,
+            )
+
+            self.assertFalse(report.passed, report.as_dict())
+            governance = next(step for step in report.steps if step.name == "governance_probe")
+            self.assertFalse(governance.passed)
+            self.assertEqual(governance.detail["cost_gate_status"], "fail")
+            self.assertTrue(any(risk.startswith("block: selected input tokens") for risk in governance.detail["risks"]))
 
     def test_memory_worker_records_failed_relation_merge_review_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
