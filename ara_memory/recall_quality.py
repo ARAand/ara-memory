@@ -39,6 +39,7 @@ class RecallQualityReport:
     working_summary: dict[str, Any]
     policy_eval_summary: dict[str, Any]
     memory_impact_summary: dict[str, Any]
+    stress_trend_summary: dict[str, Any]
     projected_feedback: list[ProjectedCapsuleFeedback]
     diagnostics: dict[str, Any]
     recommendations: list[str]
@@ -58,6 +59,7 @@ class RecallQualityReport:
             "working_memory": self.working_summary,
             "policy_eval": self.policy_eval_summary,
             "memory_impact": self.memory_impact_summary,
+            "long_run_stress_trend": self.stress_trend_summary,
             "projected_feedback": [item.as_dict() for item in self.projected_feedback],
             "diagnostics": self.diagnostics,
             "recommendations": self.recommendations,
@@ -89,6 +91,13 @@ class RecallQualityReport:
                 f"status={self.critic_impact_summary['status']}, "
                 f"evaluated={self.critic_impact_summary['totals'].get('evaluated', 0)}, "
                 f"harmful={self.critic_impact_summary['totals'].get('harmful', 0)}"
+            ),
+            "## Long-Run Stress Trend",
+            (
+                "- "
+                f"status={self.stress_trend_summary['status']}, "
+                f"runs={self.stress_trend_summary['totals'].get('runs', 0)}, "
+                f"latest_score={self.stress_trend_summary.get('latest', {}).get('score', 'n/a')}"
             ),
             "## Working Memory",
             (
@@ -124,6 +133,7 @@ def build_recall_quality_gate(
     recall_budget: int = 1600,
     limit: int = 500,
     min_evaluated: int = 3,
+    stress_min_samples: int = 3,
 ) -> RecallQualityReport:
     policy = memory.recall_policy(
         query,
@@ -158,10 +168,25 @@ def build_recall_quality_gate(
         limit=limit,
         min_evaluated=min_evaluated,
     )
+    stress_trend = memory.long_run_stress_trend(
+        scope=scope,
+        include_global=include_global,
+        limit=limit,
+        min_samples=stress_min_samples,
+    )
     projected_ids = working.influential_capsule_ids
     projected_feedback = _projected_feedback(projected_ids, impact_eval.capsules)
     critic = _critic_summary(policy)
-    status = _quality_status(policy, critic, critic_impact_eval, policy_eval, impact_eval, projected_feedback)
+    stress_summary = _stress_trend_summary(stress_trend)
+    status = _quality_status(
+        policy,
+        critic,
+        critic_impact_eval,
+        policy_eval,
+        impact_eval,
+        stress_summary,
+        projected_feedback,
+    )
     return RecallQualityReport(
         query=query,
         scope=scope,
@@ -172,18 +197,24 @@ def build_recall_quality_gate(
         working_summary=_working_summary(working),
         policy_eval_summary=_eval_summary(policy_eval),
         memory_impact_summary=_eval_summary(impact_eval),
+        stress_trend_summary=stress_summary,
         projected_feedback=projected_feedback,
         diagnostics={
             "query_terms": extract_keywords(query, limit=16),
             "include_global": include_global,
             "include_hot": include_hot,
             "min_evaluated": min_evaluated,
+            "stress_min_samples": stress_min_samples,
             "limit": limit,
-            "quality_basis": "recall-policy + recall-critic + working-memory + reviewed impact feedback",
+            "quality_basis": (
+                "recall-policy + recall-critic + working-memory + reviewed impact feedback "
+                "+ long-run stress trend"
+            ),
             "automatic_policy_mutation": False,
             "critic_status": critic["status"],
             "critic_score": critic["score"],
             "critic_impact_status": critic_impact_eval.status,
+            "long_run_stress_trend_status": stress_summary["status"],
         },
         recommendations=_quality_recommendations(
             policy,
@@ -191,6 +222,7 @@ def build_recall_quality_gate(
             critic_impact_eval,
             policy_eval,
             impact_eval,
+            stress_summary,
             projected_feedback,
             projected_ids=projected_ids,
         ),
@@ -247,6 +279,18 @@ def _eval_summary(report: Any) -> dict[str, Any]:
     }
 
 
+def _stress_trend_summary(report: Any) -> dict[str, Any]:
+    return {
+        "status": report.status,
+        "totals": dict(report.totals),
+        "latest": dict(report.latest or {}),
+        "score_delta": report.score_delta,
+        "token_growth_delta": report.token_growth_delta,
+        "harmful_ratio_delta": report.harmful_ratio_delta,
+        "recommendations": list(report.recommendations),
+    }
+
+
 def _projected_feedback(projected_ids: list[str], groups: list[Any]) -> list[ProjectedCapsuleFeedback]:
     by_id = {group.key: group for group in groups}
     feedback: list[ProjectedCapsuleFeedback] = []
@@ -281,6 +325,7 @@ def _quality_status(
     critic_impact_eval: Any,
     policy_eval: Any,
     impact_eval: Any,
+    stress_trend: dict[str, Any],
     projected: list[ProjectedCapsuleFeedback],
 ) -> str:
     if critic.get("status") == "fail":
@@ -288,6 +333,8 @@ def _quality_status(
     if policy.status == "fail":
         return "fail"
     if any(item.verdict == "harmful-history" for item in projected):
+        return "fail"
+    if stress_trend["status"] == "fail":
         return "fail"
     if policy_eval.status == "fail" or impact_eval.status == "fail":
         return "fail"
@@ -298,6 +345,7 @@ def _quality_status(
         or critic.get("status") == "watch"
         or policy_eval.status == "watch"
         or impact_eval.status == "watch"
+        or stress_trend["status"] == "watch"
         or not projected
         or any(item.verdict in {"mixed-history", "unknown"} for item in projected)
     ):
@@ -311,6 +359,7 @@ def _quality_recommendations(
     critic_impact_eval: Any,
     policy_eval: Any,
     impact_eval: Any,
+    stress_trend: dict[str, Any],
     projected: list[ProjectedCapsuleFeedback],
     *,
     projected_ids: list[str],
@@ -335,6 +384,11 @@ def _quality_recommendations(
         recommendations.extend(policy_eval.recommendations[:2])
     if impact_eval.status != "pass":
         recommendations.extend(impact_eval.recommendations[:2])
+    if stress_trend["status"] != "pass":
+        recommendations.extend(stress_trend["recommendations"][:2])
+        recommendations.append(
+            f"Resolve long-run stress trend status {stress_trend['status']} before treating recall quality as stable."
+        )
     if projected_ids and not projected:
         recommendations.append(
             "Record working-memory-impact for projected capsule ids after this turn; current cue has no reviewed capsule feedback."

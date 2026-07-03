@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v29</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 작업</span><span class="value">stress trend store</span></div>
+      <div class="metric"><span class="label">최근 작업</span><span class="value">stress trend recall gate</span></div>
     </aside>
   </header>
 
@@ -186,6 +186,7 @@
         <li><code>recall-critic-impact</code>가 critic 결정의 실제 outcome을 append-only로 기록해, 임계값 조정을 raw ledger 재스캔 없이 평가한다.</li>
         <li><code>long-run-stress</code>가 multi-query recall, critic, token growth, leakage, impact feedback risk를 AI API 없이 검증하고 <code>goal-roadmap</code>과 scheduled worker rehearsal에 포함된다.</li>
         <li><code>long_run_stress_runs</code>가 worker rehearsal 결과를 append-only event와 색인 테이블에 남겨 score/token/harmful trend를 본다.</li>
+        <li><code>recall-quality</code>가 장기 스트레스 추세를 실제 pass/watch/fail 판정에 포함해, 표본이 부족하거나 실패 추세가 있으면 recall route를 안정 상태로 보지 않는다.</li>
       </ul>
     </article>
 
@@ -202,7 +203,7 @@
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue open: 95</li>
         <li>spool done: 134</li>
-        <li>storage: 353,993,272 bytes</li>
+        <li>storage: 351,101,286 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -263,7 +264,7 @@
         </div>
         <div class="row">
           <strong>long-run stress gate</strong>
-          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code> 및 <code>worker-loop</code> rehearsal에 연결된다. v29부터 run 결과는 <code>long_run_stress_runs</code>에 축적된다.</p>
+          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. v29부터 run 결과는 <code>long_run_stress_runs</code>에 축적된다.</p>
           <span class="badge pass">v1 done</span>
         </div>
         <div class="row">

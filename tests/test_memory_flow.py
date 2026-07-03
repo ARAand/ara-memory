@@ -18327,7 +18327,10 @@ class MemoryFlowTests(unittest.TestCase):
             payload = report.as_dict()
             self.assertEqual(report.status, "watch", payload)
             self.assertIn(capsule.id, payload["working_memory"]["projected_capsule_ids"])
+            self.assertEqual(payload["long_run_stress_trend"]["status"], "watch")
+            self.assertEqual(payload["diagnostics"]["long_run_stress_trend_status"], "watch")
             self.assertIn("no reviewed capsule feedback", " ".join(report.recommendations))
+            self.assertIn("long-run stress trend status watch", " ".join(report.recommendations))
             self.assertFalse(payload["diagnostics"]["automatic_policy_mutation"])
 
     def test_recall_quality_gate_fails_when_recall_critic_rejects_pack(self) -> None:
@@ -18463,6 +18466,28 @@ class MemoryFlowTests(unittest.TestCase):
                 outcome="Projected procedure helped choose the next command.",
                 helped=True,
             )
+            for index in range(3):
+                memory.retain(
+                    kind="note",
+                    text=f"Long-run stress run {index}: helpful recall quality trend stayed stable.",
+                    source="test-long-run-stress",
+                    scope="alpha",
+                    metadata={
+                        "long_run_stress_run": {
+                            "status": "pass",
+                            "passed": True,
+                            "score": 88 + index,
+                            "diagnostics": {
+                                "runs": 3,
+                                "token_growth": 0.05,
+                                "unique_capsules": 4,
+                                "forbidden_leaks": 0,
+                                "critic_failures": 0,
+                                "harmful_impact_ratio": 0.0,
+                            },
+                        }
+                    },
+                )
 
             report = memory.recall_quality(
                 "helpful recall quality cue",
@@ -18475,7 +18500,82 @@ class MemoryFlowTests(unittest.TestCase):
 
             self.assertEqual(report.status, "pass", payload)
             self.assertEqual(payload["projected_feedback"][0]["verdict"], "helpful-history")
+            self.assertEqual(payload["long_run_stress_trend"]["status"], "pass")
             self.assertIn("Recall quality gate passed", " ".join(report.recommendations))
+
+    def test_recall_quality_gate_fails_when_long_run_stress_trend_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Procedure: stress-gated recall quality cue should inspect current files first.",
+                source="test",
+                scope="alpha",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.PROCEDURE,
+                title="Procedure: stress-gated recall quality cue",
+                body="Stress-gated recall quality cue should inspect current files first.",
+                scope="alpha",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["recall", "quality", "stress"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+            memory.record_recall_policy_impact(
+                scope="alpha",
+                query="stress-gated recall quality cue",
+                intent="balanced-recall",
+                strategy="smallest useful recall-plan budget",
+                action_names=["recall-context"],
+                outcome="Recall route found the right procedure.",
+                helped=True,
+            )
+            memory.record_memory_impact(
+                scope="alpha",
+                cue="stress-gated recall quality cue",
+                capsule_ids=[capsule.id],
+                outcome="Projected procedure helped choose the next command.",
+                helped=True,
+            )
+            memory.retain(
+                kind="note",
+                text="Long-run stress run: recall quality trend failed due to token growth.",
+                source="test-long-run-stress",
+                scope="alpha",
+                metadata={
+                    "long_run_stress_run": {
+                        "status": "fail",
+                        "passed": False,
+                        "score": 40,
+                        "diagnostics": {
+                            "runs": 3,
+                            "token_growth": 0.90,
+                            "unique_capsules": 4,
+                            "forbidden_leaks": 0,
+                            "critic_failures": 0,
+                            "harmful_impact_ratio": 0.0,
+                        },
+                    }
+                },
+            )
+
+            report = memory.recall_quality(
+                "stress-gated recall quality cue",
+                scope="alpha",
+                include_global=False,
+                include_hot=False,
+                min_evaluated=1,
+            )
+            payload = report.as_dict()
+
+            self.assertEqual(report.status, "fail", payload)
+            self.assertEqual(payload["long_run_stress_trend"]["status"], "fail")
+            self.assertEqual(payload["diagnostics"]["long_run_stress_trend_status"], "fail")
+            self.assertIn("long-run stress trend status fail", " ".join(report.recommendations))
 
     def test_recall_quality_cli_outputs_json_and_nonzero_on_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

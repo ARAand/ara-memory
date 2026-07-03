@@ -252,6 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     recall_quality.add_argument("--recall-budget", type=int, default=1600)
     recall_quality.add_argument("--limit", type=int, default=500)
     recall_quality.add_argument("--min-evaluated", type=int, default=3)
+    recall_quality.add_argument("--stress-min-samples", type=int, default=3)
     recall_quality.add_argument("--no-global", action="store_true")
     recall_quality.add_argument("--no-hot", action="store_true")
     recall_quality.add_argument("--json", action="store_true")
@@ -1644,6 +1645,7 @@ def main(argv: list[str] | None = None) -> int:
             recall_budget=args.recall_budget,
             limit=args.limit,
             min_evaluated=args.min_evaluated,
+            stress_min_samples=args.stress_min_samples,
         )
         if args.json:
             print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
