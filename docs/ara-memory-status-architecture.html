@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v29</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 작업</span><span class="value">stress trend recall gate</span></div>
+      <div class="metric"><span class="label">최근 작업</span><span class="value">stress trend samples</span></div>
     </aside>
   </header>
 
@@ -193,17 +193,17 @@
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,801</li>
-        <li>capsules: 3,962</li>
-        <li>stable capsules: 891</li>
-        <li>relation nodes: 7,366</li>
-        <li>relation edges: 28,839</li>
-        <li>source event links: 5,955</li>
-        <li>long-run stress runs: 1</li>
+        <li>source events: 1,809</li>
+        <li>capsules: 3,979</li>
+        <li>stable capsules: 896</li>
+        <li>relation nodes: 7,387</li>
+        <li>relation edges: 28,949</li>
+        <li>source event links: 5,984</li>
+        <li>long-run stress runs: 3</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 95</li>
-        <li>spool done: 134</li>
-        <li>storage: 351,101,286 bytes</li>
+        <li>review queue open: 100</li>
+        <li>spool done: 135</li>
+        <li>storage: 354,456,949 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -259,13 +259,13 @@
         </div>
         <div class="row">
           <strong>critic impact loop</strong>
-          <p>진행: critic 결정이 실제로 도움이 됐는지 <code>recall_critic_impacts</code>에 색인하고, <code>recall-quality</code>가 평가 요약을 노출한다. 다음은 장기 사용 결과로 임계값을 조정하는 것이다.</p>
-          <span class="badge pass">v1 done</span>
+          <p>진행: critic 결정이 실제로 도움이 됐는지 <code>recall_critic_impacts</code>에 색인하고, <code>recall-quality</code>가 평가 요약을 노출한다. 현재 장기 스트레스는 안정적이지만 critic/working impact outcome 표본이 부족해 watch로 남는다.</p>
+          <span class="badge watch">needs outcomes</span>
         </div>
         <div class="row">
           <strong>long-run stress gate</strong>
-          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. v29부터 run 결과는 <code>long_run_stress_runs</code>에 축적된다.</p>
-          <span class="badge pass">v1 done</span>
+          <p>진행: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. v29부터 run 결과는 <code>long_run_stress_runs</code>에 축적되며 현재 표본은 3개, score delta 0, token growth delta 0이다.</p>
+          <span class="badge watch">samples=3</span>
         </div>
         <div class="row">
           <strong>memory purpose audit</strong>
@@ -274,7 +274,7 @@
         </div>
         <div class="row">
           <strong>long-run stress test</strong>
-          <p>v1 완료: low-cost stress gate는 추가됐다. 다음은 실제 24-72시간 worker/capture/recall/backup/rollback rehearsal로 기억 오염, 중복, 비용 폭주를 측정한다.</p>
+          <p>v1 완료: low-cost stress gate는 추가됐다. 다음은 실제 worker/capture/recall outcome을 <code>working-memory-impact</code>와 <code>recall-critic-impact</code>로 기록해 watch를 정직하게 줄이는 것이다.</p>
           <span class="badge watch">6-12h</span>
         </div>
       </div>
