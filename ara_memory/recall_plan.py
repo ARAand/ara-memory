@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ara_memory.costs import estimate_api_cost
+from ara_memory.recall_critic import build_recall_critic_from_diagnostics
 
 
 @dataclass(slots=True)
@@ -55,7 +56,8 @@ class RecallPlan:
                 "- "
                 f"budget={item['budget']}, hot={item['include_hot']}, global={item['include_global']}, "
                 f"tokens={item['estimated_tokens']}, capsules={item['selected_capsules']}, "
-                f"visible={item['visible_capsules']}, quality={item['quality_score']}"
+                f"visible={item['visible_capsules']}, quality={item['quality_score']}, "
+                f"critic={item.get('critic_status', 'unknown')}/{item.get('critic_score', 0)}"
             )
         return "\n".join(lines)
 
@@ -104,6 +106,12 @@ def build_recall_plan(
             include_hot=include_hot,
         )
         diagnostics = result.diagnostics
+        critic = build_recall_critic_from_diagnostics(
+            query,
+            scope=scope,
+            diagnostics=diagnostics,
+            budget=budget,
+        )
         alternatives.append(
             {
                 "budget": budget,
@@ -146,6 +154,11 @@ def build_recall_plan(
                 "relevance_score_avg": float(diagnostics.get("relevance_score_avg", 0.0)),
                 "selected_capsule_ids": list(diagnostics["selected_capsule_ids"]),
                 "visible_capsule_ids": list(diagnostics.get("visible_capsule_ids", [])),
+                "critic_status": critic.status,
+                "critic_score": critic.score,
+                "critic_reasons": list(critic.reasons),
+                "critic_recommendations": list(critic.recommendations),
+                "critic": critic.as_dict(),
             }
         )
         alternatives[-1]["quality_score"] = _alternative_quality(alternatives[-1])
@@ -230,8 +243,18 @@ def _select_alternative(alternatives: list[dict[str, Any]]) -> dict[str, Any]:
     if not non_empty:
         return alternatives[0]
     for item in non_empty:
-        if float(item["quality_score"]) >= 60.0:
+        if item.get("critic_status") == "pass" and float(item["quality_score"]) >= 60.0:
             return item
+    cautious = [item for item in non_empty if item.get("critic_status") != "fail"]
+    if cautious:
+        return max(
+            cautious,
+            key=lambda item: (
+                float(item["quality_score"]),
+                int(item.get("critic_score", 0)),
+                -int(item["budget"]),
+            ),
+        )
     return max(non_empty, key=lambda item: (float(item["quality_score"]), -int(item["budget"])))
 
 
@@ -249,9 +272,14 @@ def _rationale(
     ]
     items.append(
         f"Selected pack quality={selected['quality_score']}, "
+        f"critic={selected.get('critic_status', 'unknown')}/{selected.get('critic_score', 0)}, "
         f"visible_capsules={selected['visible_capsules']}, "
         f"visible_query_terms={selected['query_terms_visible_count']}/{selected['query_term_count']}."
     )
+    if selected.get("critic_status") == "fail":
+        items.append("Recall critic does not trust the selected pack; use current evidence first.")
+    elif selected.get("critic_status") == "watch":
+        items.append("Recall critic marked the selected pack as usable only with caution.")
     if selected.get("low_evidence_fallback_suppressed"):
         items.append("Selected pack had no direct evidence; salience fallback bodies were suppressed.")
     elif selected.get("fallback_used"):
@@ -303,6 +331,11 @@ def _alternative_quality(item: dict[str, Any]) -> int:
 def _selected_diagnostics(selected: dict[str, Any]) -> dict[str, Any]:
     return {
         "quality_score": int(selected.get("quality_score", 0)),
+        "critic_status": str(selected.get("critic_status", "unknown")),
+        "critic_score": int(selected.get("critic_score", 0)),
+        "critic_reasons": list(selected.get("critic_reasons", [])),
+        "critic_recommendations": list(selected.get("critic_recommendations", [])),
+        "critic": dict(selected.get("critic", {})),
         "visible_capsules": int(selected.get("visible_capsules", 0)),
         "rendered_capsules": int(selected.get("rendered_capsules", 0)),
         "selected_capsules": int(selected.get("selected_capsules", 0)),

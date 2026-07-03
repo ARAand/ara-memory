@@ -7,6 +7,7 @@ from typing import Any
 
 from ara_memory.compressors import compact_text, estimate_tokens, extract_keywords
 from ara_memory.costs import estimate_api_cost
+from ara_memory.recall_critic import critic_payload_from_probe
 from ara_memory.turn import plan_turn_ingress
 
 
@@ -249,6 +250,22 @@ def govern_turn(
     )
     agency_payload = _agency_payload(agency)
     projection_gate = _projection_gate(working_payload, selected_probe, working_budget=working_budget)
+    recall_critic = (
+        critic_payload_from_probe(cue, scope=scope, probe=selected_probe)
+        if cue
+        else {
+            "status": "pass",
+            "score": 100,
+            "reasons": [],
+            "recommendations": [],
+            "diagnostics": {},
+        }
+    )
+    selected_probe["critic_status"] = recall_critic.get("status")
+    selected_probe["critic_score"] = recall_critic.get("score")
+    selected_probe["critic_reasons"] = list(recall_critic.get("reasons", []))
+    selected_probe["critic_recommendations"] = list(recall_critic.get("recommendations", []))
+    selected_probe["critic"] = recall_critic
     recall_quality = _recall_quality_payload(
         memory,
         cue=cue,

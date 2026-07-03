@@ -149,7 +149,7 @@
       <div class="metric"><span class="label">스키마</span><span class="value">v27</span></div>
       <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
       <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
-      <div class="metric"><span class="label">최근 커밋</span><span class="value">fallback plan status dashboard</span></div>
+      <div class="metric"><span class="label">최근 작업</span><span class="value">recall critic split</span></div>
     </aside>
   </header>
 
@@ -182,7 +182,7 @@
         <li><code>budget_profile</code>이 quick/standard/deep/debug/mutation 작업별 recall 예산과 입력 ceiling을 자동 선택한다.</li>
         <li><code>fallback_plan</code>이 품질 실패나 비용 초과 시 current-evidence, recall-plan, working-memory cues 중 저비용 경로를 고른다.</li>
         <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
-        <li>현재 다음 축은 retriever가 후보를 찾고 critic이 그 기억을 믿어도 되는지 판정하는 분리 구조다.</li>
+        <li><code>recall-critic</code>이 retriever가 만든 후보를 별도로 판정해, 직접 근거 없는 회상과 위험 필터링을 pass/watch/fail로 나눈다.</li>
       </ul>
     </article>
 
@@ -196,9 +196,9 @@
         <li>relation edges: 28,182</li>
         <li>source event links: 5,816</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 61</li>
-        <li>spool done: 127</li>
-        <li>storage: 346,570,423 bytes</li>
+        <li>review queue open: 66</li>
+        <li>spool done: 128</li>
+        <li>storage: 345,567,467 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -249,8 +249,8 @@
         </div>
         <div class="row">
           <strong>recall retriever/critic split</strong>
-          <p>다음 구현: retriever는 후보만 만들고, critic은 visible evidence, query term coverage, token budget, fallback usage, risk filtering을 독립 판정한다. 이것이 사람 같은 기억에서 '떠오른 것'과 '믿을 만한 것'을 나누는 첫 구조다.</p>
-          <span class="badge watch">4-8h</span>
+          <p>1차 완료: retriever는 후보와 recall pack을 만들고, critic은 visible evidence, query term coverage, token budget, fallback usage, risk filtering을 독립 판정한다. 이것이 사람 같은 기억에서 '떠오른 것'과 '믿을 만한 것'을 나누는 첫 구조다.</p>
+          <span class="badge pass">v1 done</span>
         </div>
         <div class="row">
           <strong>memory purpose audit</strong>
@@ -271,7 +271,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> retriever/critic 분리로, 필요한 맥락만 찾고 믿을 수 없는 회상은 저비용 fallback으로 돌린다.</li>
+        <li><span class="badge info">다음</span> critic 판정을 recall-quality와 장기 stress test에 더 강하게 묶어, 믿을 수 없는 회상을 저비용 fallback으로 돌린다.</li>
       </ul>
     </article>
   </section>
@@ -282,7 +282,7 @@
       <ul>
         <li>운영 안전성 1차 완성: 완료</li>
         <li>자연스러운 기억 품질 루프 1차: 완료</li>
-        <li>retriever/critic 분리와 CLI/worker 연결: 4-8시간</li>
+        <li>retriever/critic 분리와 CLI/governance 연결: 1차 완료</li>
         <li>purpose/identity audit 강화: 3-6시간</li>
         <li>실사용 베타 판정: 8-14시간</li>
         <li>72시간 장기 안정성 검증까지: 추가 3일</li>

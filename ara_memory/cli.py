@@ -187,6 +187,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
+    recall_critic = sub.add_parser(
+        "recall-critic",
+        help="Judge whether a rendered recall pack is trustworthy enough to use.",
+    )
+    recall_critic.add_argument("query")
+    recall_critic.add_argument("--scope", default="global")
+    recall_critic.add_argument("--budget", type=int, default=1600)
+    recall_critic.add_argument("--no-global", action="store_true")
+    recall_critic.add_argument("--no-hot", action="store_true")
+    recall_critic.add_argument("--json", action="store_true")
+
     recall_context = sub.add_parser(
         "recall-context",
         help="Build the selected recall pack using recall-plan.",
@@ -1514,6 +1525,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(result.to_text())
         return 0
+
+    if args.cmd == "recall-critic":
+        result = memory.recall_critic(
+            args.query,
+            scope=args.scope,
+            budget=args.budget,
+            include_global=not args.no_global,
+            include_hot=not args.no_hot,
+        )
+        if args.json:
+            print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(result.to_text())
+        return 0 if result.status in {"pass", "watch"} else 1
 
     if args.cmd == "recall-context":
         result = memory.recall_context(

@@ -1766,6 +1766,52 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("No direct memory evidence matched this query", fallback.pack)
             self.assertNotIn("Visible evidence diagnostics should be counted", fallback.pack)
 
+    def test_recall_critic_rejects_low_evidence_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            event = memory.retain(
+                kind="decision",
+                text="Decision: recall critic should require visible evidence.",
+                source="test",
+                scope="alpha",
+            )
+            decision = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="Decision: recall critic visible evidence",
+                body="Recall critic should trust direct rendered evidence before using memory context.",
+                scope="alpha",
+                confidence=0.8,
+                salience=0.7,
+                source_event_ids=[event.id],
+                tags=["recall", "critic", "evidence"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(decision)
+
+            passed = memory.recall_critic(
+                "recall critic evidence",
+                scope="alpha",
+                budget=700,
+                include_hot=False,
+                include_global=False,
+            )
+            failed = memory.recall_critic(
+                "orphan nebula talisman",
+                scope="alpha",
+                budget=700,
+                include_hot=False,
+                include_global=False,
+            )
+
+            self.assertEqual(passed.status, "pass")
+            self.assertTrue(passed.passed)
+            self.assertGreater(passed.score, failed.score)
+            self.assertEqual(failed.status, "fail")
+            self.assertFalse(failed.passed)
+            self.assertTrue(failed.diagnostics["low_evidence_fallback_suppressed"])
+            self.assertEqual(failed.diagnostics["visible_capsules"], 0)
+            self.assertIn("current evidence", " ".join(failed.recommendations))
+
     def test_recall_result_never_exceeds_tiny_hard_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
@@ -1855,11 +1901,16 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertTrue(fallback_alt["fallback_used"])
             self.assertTrue(fallback_alt["low_evidence_fallback_suppressed"])
             self.assertEqual(fallback_alt["quality_score"], 0)
+            self.assertEqual(matched_alt["critic_status"], "pass")
+            self.assertEqual(fallback_alt["critic_status"], "fail")
+            self.assertEqual(fallback_plan.as_dict()["diagnostics"]["critic_status"], "fail")
             self.assertGreater(matched_alt["quality_score"], fallback_alt["quality_score"])
             self.assertIn("no direct evidence", " ".join(fallback_plan.as_dict()["rationale"]))
+            self.assertIn("Recall critic does not trust", " ".join(fallback_plan.as_dict()["rationale"]))
             self.assertEqual(matched_plan.as_dict()["diagnostics"]["quality_score"], matched_alt["quality_score"])
             self.assertIn("visible=", matched_plan.to_text())
             self.assertIn("quality=", matched_plan.to_text())
+            self.assertIn("critic=", matched_plan.to_text())
 
     def test_recall_plan_carries_graph_activation_aggregates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

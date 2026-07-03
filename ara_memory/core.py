@@ -401,6 +401,11 @@ class AraMemory:
 
         return build_recall_plan(self, query, **kwargs)
 
+    def recall_critic(self, query: str, **kwargs: Any) -> Any:
+        from ara_memory.recall_critic import build_recall_critic
+
+        return build_recall_critic(self, query, **kwargs)
+
     def recall_context(self, query: str, **kwargs: Any) -> Any:
         from ara_memory.recall_plan import build_recall_context
 
