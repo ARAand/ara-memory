@@ -201,6 +201,157 @@
       color: var(--muted);
     }
 
+    .system-map-wrap {
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+
+    .system-map {
+      position: relative;
+      min-width: 1180px;
+      min-height: 720px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(217, 222, 214, .28) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(217, 222, 214, .28) 1px, transparent 1px),
+        #fbfcfa;
+      background-size: 28px 28px;
+    }
+
+    .map-wires {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    .map-wires path {
+      fill: none;
+      stroke: #6d766f;
+      stroke-width: 2;
+    }
+
+    .map-wires .guard-wire { stroke: var(--red); stroke-dasharray: 7 5; }
+    .map-wires .recall-wire { stroke: var(--blue); }
+    .map-wires .handoff-wire { stroke: var(--green); stroke-dasharray: 9 5; }
+    .map-wires .ops-wire { stroke: var(--amber); stroke-dasharray: 4 5; }
+    .map-wires text {
+      fill: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      paint-order: stroke;
+      stroke: #fbfcfa;
+      stroke-width: 4px;
+      stroke-linejoin: round;
+    }
+
+    .zone {
+      position: absolute;
+      border: 1px solid #bfc8bf;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .72);
+      z-index: 2;
+    }
+
+    .zone-title {
+      position: absolute;
+      left: 12px;
+      top: -13px;
+      background: #fbfcfa;
+      padding: 1px 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .zone-local { left: 212px; top: 206px; width: 520px; height: 360px; }
+    .zone-workers { left: 780px; top: 206px; width: 250px; height: 250px; }
+    .zone-handoff { left: 780px; top: 500px; width: 338px; height: 150px; }
+    .zone-public { left: 870px; top: 40px; width: 250px; height: 122px; }
+    .zone-safety { left: 58px; top: 456px; width: 172px; height: 192px; }
+
+    .map-node {
+      position: absolute;
+      z-index: 3;
+      width: 150px;
+      min-height: 76px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px 10px 10px 46px;
+      box-shadow: 0 2px 8px rgba(24, 33, 29, .08);
+    }
+
+    .map-node strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.2;
+      margin-bottom: 4px;
+    }
+
+    .map-node span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .map-node .icon {
+      position: absolute;
+      left: 10px;
+      top: 12px;
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .actor .icon { background: var(--ink); }
+    .ingress .icon, .local .icon { background: var(--blue); }
+    .guard .icon, .safety .icon { background: var(--red); }
+    .worker .icon { background: var(--violet); }
+    .recall .icon { background: var(--green); }
+    .handoff .icon { background: var(--amber); }
+    .public .icon { background: #5f6662; }
+
+    .node-user { left: 482px; top: 28px; width: 180px; min-height: 82px; }
+    .node-ingress { left: 60px; top: 130px; width: 170px; }
+    .node-guard { left: 292px; top: 130px; width: 172px; }
+    .node-spool { left: 250px; top: 260px; }
+    .node-ledger { left: 430px; top: 250px; width: 162px; }
+    .node-index { left: 560px; top: 376px; }
+    .node-hot { left: 292px; top: 424px; }
+    .node-archive { left: 544px; top: 260px; }
+    .node-worker { left: 814px; top: 254px; width: 176px; }
+    .node-quality { left: 814px; top: 354px; width: 176px; }
+    .node-recall { left: 458px; top: 602px; width: 184px; }
+    .node-pack { left: 686px; top: 602px; width: 160px; }
+    .node-action { left: 956px; top: 602px; width: 146px; }
+    .node-public { left: 910px; top: 72px; width: 170px; }
+    .node-bundle { left: 806px; top: 542px; width: 142px; }
+    .node-release { left: 964px; top: 542px; width: 142px; }
+    .node-gates { left: 78px; top: 502px; width: 132px; min-height: 118px; }
+
+    .map-note {
+      position: absolute;
+      z-index: 4;
+      left: 34px;
+      top: 40px;
+      width: 260px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
     footer {
       color: var(--muted);
       font-size: 13px;
@@ -219,6 +370,7 @@
       .hero, .meta, .span-12, .span-8, .span-6, .span-4, .span-3 { grid-column: 1; }
       .cards, .pipe { grid-template-columns: 1fr; }
       .layer, .row { grid-template-columns: 1fr; }
+      .system-map { min-width: 1120px; }
     }
   </style>
 </head>
@@ -236,7 +388,7 @@
     <aside class="meta">
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">최신 공개 커밋</span><span class="value">a5e5f37</span></div>
+      <div class="metric"><span class="label">최근 공개 기준</span><span class="value">e5a59d0</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v29</span></div>
       <div class="metric"><span class="label">Goal Roadmap</span><span class="value">pass</span></div>
       <div class="metric"><span class="label">Operational Health</span><span class="value">watch 90/100</span></div>
@@ -263,6 +415,165 @@
         <div class="card">
           <b><span class="badge watch">주의</span> 현재 로컬 health</b>
           <p>목표 종료 후 추가 캡처 때문에 recall-regression baseline drift와 review marker가 생겨 health는 watch 90/100이다. Roadmap은 여전히 pass다.</p>
+        </div>
+      </div>
+    </article>
+  </section>
+
+  <section class="grid">
+    <article class="span-12">
+      <h2>한눈에 보는 Ara Memory OS 작동 구조</h2>
+      <p>
+        Ara Memory는 Codex가 모든 원문을 매번 다시 읽는 구조가 아니다. 입력은 로컬 우선 저장소에 증거로 남기고,
+        별도 정리 작업자가 압축 기억을 만들며, Codex는 현재 질문에 필요한 작은 기억 묶음만 받아 행동한다.
+      </p>
+      <div class="system-map-wrap" aria-label="Ara Memory OS architecture map">
+        <div class="system-map">
+          <svg class="map-wires" viewBox="0 0 1180 720" aria-hidden="true">
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#6d766f"></path>
+              </marker>
+              <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#1f5f8f"></path>
+              </marker>
+              <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#12613d"></path>
+              </marker>
+              <marker id="arrow-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                <path d="M0,0 L0,6 L9,3 z" fill="#9b3028"></path>
+              </marker>
+            </defs>
+
+            <path d="M570 110 L570 122 L146 122 L146 130" marker-end="url(#arrow)"></path>
+            <text x="240" y="112">prompts, files, images, commands</text>
+            <path class="guard-wire" d="M230 168 L292 168" marker-end="url(#arrow-red)"></path>
+            <text x="232" y="156">raw envelope</text>
+            <path class="guard-wire" d="M464 168 L520 168 L520 250" marker-end="url(#arrow-red)"></path>
+            <text x="477" y="156">redacted / allowed</text>
+            <path d="M520 326 L520 376" marker-end="url(#arrow)"></path>
+            <path d="M520 326 L632 326 L632 376" marker-end="url(#arrow)"></path>
+            <path d="M430 290 L400 290 L400 424" marker-end="url(#arrow)"></path>
+            <path d="M592 294 L814 294" marker-end="url(#arrow)"></path>
+            <text x="640" y="284">episodes + links</text>
+            <path class="recall-wire" d="M902 432 L902 480 L550 480 L550 602" marker-end="url(#arrow-blue)"></path>
+            <text x="676" y="470">capsules, scores, relations</text>
+            <path class="recall-wire" d="M560 452 L560 570 L550 570 L550 602" marker-end="url(#arrow-blue)"></path>
+            <path class="recall-wire" d="M442 464 L442 570 L550 570" marker-end="url(#arrow-blue)"></path>
+            <path class="recall-wire" d="M642 640 L686 640" marker-end="url(#arrow-blue)"></path>
+            <text x="646" y="626">bounded recall</text>
+            <path class="recall-wire" d="M846 640 L956 640" marker-end="url(#arrow-blue)"></path>
+            <text x="865" y="626">small context pack</text>
+            <path class="ops-wire" d="M210 560 L458 650" marker-end="url(#arrow)"></path>
+            <path class="ops-wire" d="M210 540 L430 300" marker-end="url(#arrow)"></path>
+            <text x="230" y="535">doctor, health, regression, rollback</text>
+            <path class="handoff-wire" d="M592 294 L760 294 L760 574 L806 574" marker-end="url(#arrow-green)"></path>
+            <text x="716" y="560">public evidence</text>
+            <path class="handoff-wire" d="M594 294 L760 294 L760 612 L964 612" marker-end="url(#arrow-green)"></path>
+            <text x="830" y="602">encrypted raw memory</text>
+            <path class="handoff-wire" d="M948 542 L948 162" marker-end="url(#arrow-green)"></path>
+            <text x="954" y="350">GitHub handoff</text>
+            <path d="M570 110 L570 56 L995 56 L995 72" marker-end="url(#arrow)"></path>
+            <text x="716" y="46">other computer resumes from repo</text>
+          </svg>
+
+          <div class="map-note">
+            <strong>핵심 원리</strong><br>
+            원본은 로컬/암호화 경로에 보존하고, 공개 저장소에는 재현 가능한 코드와 redacted handoff만 둔다.
+            Codex는 recall controller가 고른 작은 맥락만 읽는다.
+          </div>
+
+          <div class="zone zone-local"><span class="zone-title">Local Private Memory Boundary</span></div>
+          <div class="zone zone-workers"><span class="zone-title">Background Memory AI / Workers</span></div>
+          <div class="zone zone-handoff"><span class="zone-title">Handoff Boundary</span></div>
+          <div class="zone zone-public"><span class="zone-title">Public Continuity</span></div>
+          <div class="zone zone-safety"><span class="zone-title">Safety Control Plane</span></div>
+
+          <div class="map-node actor node-user">
+            <span class="icon">U</span>
+            <strong>Jongseo + Codex</strong>
+            <span>대화, 파일, 이미지, 명령, 판단 요청</span>
+          </div>
+          <div class="map-node ingress node-ingress">
+            <span class="icon">I</span>
+            <strong>Ingress Skill</strong>
+            <span>turn envelope, artifact reference, git/worktree snapshot</span>
+          </div>
+          <div class="map-node guard node-guard">
+            <span class="icon">G</span>
+            <strong>Privacy Guard</strong>
+            <span>secret 차단, 숨은 추론 배제, 민감값 redaction</span>
+          </div>
+          <div class="map-node local node-spool">
+            <span class="icon">S</span>
+            <strong>Sealed Spool</strong>
+            <span>큰 입력과 실패 가능 작업을 먼저 안전하게 대기</span>
+          </div>
+          <div class="map-node local node-ledger">
+            <span class="icon">L</span>
+            <strong>Append-only Ledger</strong>
+            <span>원문 증거와 출처 링크를 삭제 없이 기록</span>
+          </div>
+          <div class="map-node local node-archive">
+            <span class="icon">A</span>
+            <strong>Archive Objects</strong>
+            <span>파일, 이미지, 번들, 백업, 검증 산출물</span>
+          </div>
+          <div class="map-node local node-index">
+            <span class="icon">D</span>
+            <strong>SQLite / FTS</strong>
+            <span>캡슐, 이벤트, 링크, 품질 점수 색인</span>
+          </div>
+          <div class="map-node local node-hot">
+            <span class="icon">H</span>
+            <strong>Hot Memory</strong>
+            <span>정체성, 목표, 최근 결정, 즉시 필요한 절차</span>
+          </div>
+          <div class="map-node worker node-worker">
+            <span class="icon">W</span>
+            <strong>Consolidation Workers</strong>
+            <span>episode-summary, candidate-summary, conflict adjudication</span>
+          </div>
+          <div class="map-node worker node-quality">
+            <span class="icon">Q</span>
+            <strong>Quality Scorer</strong>
+            <span>promotion, quarantine, review queue, cold pressure</span>
+          </div>
+          <div class="map-node recall node-recall">
+            <span class="icon">R</span>
+            <strong>Recall Controller</strong>
+            <span>질문 의도별로 hot / working / cold-map 경로 선택</span>
+          </div>
+          <div class="map-node recall node-pack">
+            <span class="icon">P</span>
+            <strong>Bounded Memory Pack</strong>
+            <span>토큰 예산 안의 근거, 요약, 경고만 전달</span>
+          </div>
+          <div class="map-node actor node-action">
+            <span class="icon">C</span>
+            <strong>Codex Action</strong>
+            <span>코딩, 문서화, 검증, GitHub 인계</span>
+          </div>
+          <div class="map-node safety node-gates">
+            <span class="icon">!</span>
+            <strong>Gates</strong>
+            <span>doctor<br>health<br>recall regression<br>privacy pre-push<br>witness / rollback</span>
+          </div>
+          <div class="map-node public node-public">
+            <span class="icon">G</span>
+            <strong>GitHub Repo</strong>
+            <span>코드, 테스트, 문서, public-memory-bundle</span>
+          </div>
+          <div class="map-node handoff node-bundle">
+            <span class="icon">B</span>
+            <strong>Public Bundle</strong>
+            <span>redacted, portable, secret-free</span>
+          </div>
+          <div class="map-node handoff node-release">
+            <span class="icon">E</span>
+            <strong>Encrypted Raw Release</strong>
+            <span>원본 `.ara-memory`는 암호화 asset, key는 별도</span>
+          </div>
         </div>
       </div>
     </article>
@@ -300,9 +611,9 @@
     <article class="span-4">
       <h2>최근 커밋</h2>
       <ul>
+        <li><code>e5a59d0</code> Refresh Ara memory status architecture page</li>
         <li><code>a5e5f37</code> Document private memory handoff</li>
         <li><code>aeeaa58</code> Add public handoff doctor</li>
-        <li><code>6a17064</code> Document verified backup restore drill</li>
       </ul>
       <p class="callout">
         raw `.ara-memory`, plaintext ZIP, key file은 공개 repo에 넣지 않는다. 키는 로컬 파일
