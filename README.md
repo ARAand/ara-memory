@@ -837,12 +837,14 @@ a `memory_mutation_witnesses` row, and blocks on any post-approval drift. Rewrit
 uses `APPLY MEMORY REWRITE` and changes only title/body/tags. Delete uses
 `APPLY MEMORY SOFT DELETE`, changes only the capsule status to `rejected`, and
 preserves source events and archived evidence; physical deletion is still outside
-this gate. To reverse an applied rewrite, run `prepare-mutation-rollback
---witness-id ID`, review the approval, then run `live-mutation-rollback
---approval-token TOKEN --confirm "ROLL BACK MEMORY REWRITE"`. Rollback restores
-only the title/body/tags projection recorded in the mutation witness and blocks
-if the target capsule changed after rollback approval. Soft-delete rollback is
-not opened yet; use a new reviewed mutation path rather than physical deletion.
+this gate. To reverse an applied mutation, run `prepare-mutation-rollback
+--witness-id ID`, review the approval, then run `live-mutation-rollback` with
+the exact confirmation reported by the approval. Rewrite rollback uses
+`ROLL BACK MEMORY REWRITE` and restores only the title/body/tags projection
+recorded in the mutation witness. Soft-delete rollback uses
+`ROLL BACK MEMORY SOFT DELETE` and restores only the capsule status recorded
+before the soft-delete. Both rollback paths block if the target capsule changed
+after rollback approval.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

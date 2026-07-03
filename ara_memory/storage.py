@@ -2497,7 +2497,6 @@ class MemoryStore:
         self.init()
         token = secrets.token_urlsafe(24)
         approval_id = new_id("mrb")
-        confirmation = "ROLL BACK MEMORY REWRITE"
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
         with self.session() as conn:
             witness_row = conn.execute(
@@ -2507,8 +2506,9 @@ class MemoryStore:
             if witness_row is None:
                 raise ValueError(f"Mutation witness not found: {witness_id}")
             witness = dict(witness_row)
-            if witness["action"] != "rewrite":
-                raise ValueError("Only rewrite mutation rollback is implemented.")
+            if witness["action"] not in {"rewrite", "delete"}:
+                raise ValueError("Only rewrite and soft-delete mutation rollbacks are implemented.")
+            confirmation = _mutation_rollback_confirmation(str(witness["action"]))
             row = conn.execute("SELECT * FROM capsules WHERE id = ?", (witness["capsule_id"],)).fetchone()
             if row is None:
                 raise ValueError("Cannot prepare mutation rollback because target capsule is missing.")
@@ -2561,17 +2561,17 @@ class MemoryStore:
         confirm: str,
     ) -> dict[str, Any]:
         self.init()
-        confirmation = "ROLL BACK MEMORY REWRITE"
-        if confirm != confirmation:
-            return _mutation_rollback_blocked(None, "Confirmation did not match.", confirmation)
         with self.session() as conn:
             approval_row = conn.execute(
                 "SELECT * FROM memory_mutation_rollback_approvals WHERE token_hash = ?",
                 (_token_hash(approval_token),),
             ).fetchone()
             if approval_row is None:
-                return _mutation_rollback_blocked(None, "Approval token was not found.", confirmation)
+                return _mutation_rollback_blocked(None, "Approval token was not found.", _mutation_rollback_confirmation("rewrite"))
             approval = dict(approval_row)
+            confirmation = _mutation_rollback_confirmation(str(approval["action"]))
+            if confirm != confirmation:
+                return _mutation_rollback_blocked(approval, "Confirmation did not match.", confirmation)
             if approval["status"] != "prepared":
                 return _mutation_rollback_blocked(approval, f"Approval status is {approval['status']}, not prepared.", confirmation)
             if _is_expired(str(approval["expires_at"])):
@@ -2580,8 +2580,8 @@ class MemoryStore:
                     ("expired", approval["id"]),
                 )
                 return _mutation_rollback_blocked(approval, "Approval token is expired.", confirmation)
-            if approval["action"] != "rewrite":
-                return _mutation_rollback_blocked(approval, "Only rewrite mutation rollback is implemented.", confirmation)
+            if approval["action"] not in {"rewrite", "delete"}:
+                return _mutation_rollback_blocked(approval, "Only rewrite and soft-delete mutation rollbacks are implemented.", confirmation)
             witness_row = conn.execute(
                 "SELECT * FROM memory_mutation_witnesses WHERE id = ?",
                 (approval["mutation_witness_id"],),
@@ -2603,29 +2603,57 @@ class MemoryStore:
                 return _mutation_rollback_blocked(approval, "Approved capsule no longer matches mutation witness after snapshot.", confirmation)
             witness_before = json.loads(str(witness["before_json"]))
             now = utc_now()
-            cur = conn.execute(
-                """
-                UPDATE capsules
-                SET title = ?, body = ?, tags_json = ?, updated_at = ?
-                WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
-                """,
-                (
-                    witness_before["title"],
-                    witness_before["body"],
-                    json.dumps(list(witness_before["tags"]), ensure_ascii=False),
-                    now,
-                    approval["capsule_id"],
-                    current["title"],
-                    current["body"],
-                    json.dumps(list(current["tags"]), ensure_ascii=False),
-                    current["status"],
-                ),
-            )
-            if cur.rowcount <= 0:
-                return _mutation_rollback_blocked(approval, "Rewrite rollback compare-and-set failed.", confirmation)
+            if approval["action"] == "rewrite":
+                cur = conn.execute(
+                    """
+                    UPDATE capsules
+                    SET title = ?, body = ?, tags_json = ?, updated_at = ?
+                    WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                    """,
+                    (
+                        witness_before["title"],
+                        witness_before["body"],
+                        json.dumps(list(witness_before["tags"]), ensure_ascii=False),
+                        now,
+                        approval["capsule_id"],
+                        current["title"],
+                        current["body"],
+                        json.dumps(list(current["tags"]), ensure_ascii=False),
+                        current["status"],
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    return _mutation_rollback_blocked(approval, "Rewrite rollback compare-and-set failed.", confirmation)
+                rollback_action = "rewrite-rollback"
+                success_message = "Live rewrite rollback restored only the projection fields recorded by the approved mutation witness."
+                followup_message = "Run health and recall-regression after live rewrite rollback."
+            else:
+                if current["status"] != MemoryStatus.REJECTED.value:
+                    return _mutation_rollback_blocked(approval, "Soft-delete rollback requires the capsule to still be rejected.", confirmation)
+                cur = conn.execute(
+                    """
+                    UPDATE capsules
+                    SET status = ?, updated_at = ?
+                    WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                    """,
+                    (
+                        witness_before["status"],
+                        now,
+                        approval["capsule_id"],
+                        current["title"],
+                        current["body"],
+                        json.dumps(list(current["tags"]), ensure_ascii=False),
+                        current["status"],
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    return _mutation_rollback_blocked(approval, "Soft-delete rollback compare-and-set failed.", confirmation)
+                rollback_action = "soft-delete-rollback"
+                success_message = "Live soft-delete rollback restored only the capsule status recorded by the approved mutation witness."
+                followup_message = "Source events and archived evidence remained preserved; run health and recall-regression after live soft-delete rollback."
             updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
             if updated is None:
-                return _mutation_rollback_blocked(approval, "Capsule disappeared during rewrite rollback.", confirmation)
+                return _mutation_rollback_blocked(approval, "Capsule disappeared during mutation rollback.", confirmation)
             _sync_capsule_fts_row(conn, updated)
             after = _capsule_witness_snapshot(updated)
             rollback_witness_id = new_id("mrbw")
@@ -2644,7 +2672,7 @@ class MemoryStore:
                     approval["mutation_approval_id"],
                     approval["capsule_id"],
                     approval["scope"],
-                    "rewrite-rollback",
+                    rollback_action,
                     f"approved rollback of mutation witness {approval['mutation_witness_id']}",
                     json.dumps(current, ensure_ascii=False, sort_keys=True),
                     json.dumps(after, ensure_ascii=False, sort_keys=True),
@@ -2657,7 +2685,7 @@ class MemoryStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "rewrite-rollback",
+                    rollback_action,
                     approval["capsule_id"],
                     approval["scope"],
                     f"approved rollback of mutation witness {approval['mutation_witness_id']}",
@@ -2678,10 +2706,10 @@ class MemoryStore:
                 "mutation_approval_id": approval["mutation_approval_id"],
                 "capsule_id": approval["capsule_id"],
                 "scope": approval["scope"],
-                "action": "rewrite-rollback",
+                "action": rollback_action,
                 "recommendations": [
-                    "Live rewrite rollback restored only the projection fields recorded by the approved mutation witness.",
-                    "Run health and recall-regression after live rewrite rollback.",
+                    success_message,
+                    followup_message,
                 ],
             }
 
@@ -2881,6 +2909,12 @@ def _mutation_confirmation(action: str) -> str:
     if action == "delete":
         return "APPLY MEMORY SOFT DELETE"
     return "APPLY MEMORY REWRITE"
+
+
+def _mutation_rollback_confirmation(action: str) -> str:
+    if action == "delete":
+        return "ROLL BACK MEMORY SOFT DELETE"
+    return "ROLL BACK MEMORY REWRITE"
 
 
 def _mutation_blocked(

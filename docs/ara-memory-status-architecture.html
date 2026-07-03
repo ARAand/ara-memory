@@ -174,7 +174,7 @@
         <li><code>mutation-preflight</code>가 rewrite/delete 전 before/after/rollback projection과 risk gate를 만든다.</li>
         <li><code>prepare-mutation</code>은 통과한 preflight만 짧은 수명의 one-use token으로 승인한다.</li>
         <li><code>live-mutation-apply</code>는 rewrite와 soft-delete에 대해 drift check, token check, confirmation check를 통과해야만 실제 반영한다.</li>
-        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 적용된 rewrite witness를 되돌린다.</li>
+        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 적용된 rewrite와 soft-delete witness를 되돌린다.</li>
         <li>delete는 물리 삭제가 아니라 <code>APPLY MEMORY SOFT DELETE</code> 확인문을 요구하는 <code>rejected</code> 상태 전환으로만 열린다.</li>
         <li>review queue는 compact/review-worker 경로로 관리되고, 자동 적용은 witness를 남긴다.</li>
         <li>working-memory impact eval이 기억 호출이 실제 작업에 도움인지 방해인지 평가한다.</li>
@@ -191,8 +191,8 @@
         <li>relation edges: 27,361</li>
         <li>source event links: 5,643</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 26</li>
-        <li>storage: 343,412,330 bytes</li>
+        <li>review queue open: 32</li>
+        <li>storage: 342,481,902 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -223,8 +223,8 @@
         </div>
         <div class="row">
           <strong>soft-delete rollback</strong>
-          <p>soft-delete witness를 기반으로 candidate/quarantined 상태 복구를 승인형 token으로 되돌린다.</p>
-          <span class="badge watch">1-2h</span>
+          <p>완료: soft-delete witness를 기반으로 candidate/quarantined 상태 복구를 승인형 token으로 되돌린다.</p>
+          <span class="badge pass">done</span>
         </div>
         <div class="row">
           <strong>recall quality loop</strong>
@@ -255,7 +255,7 @@
         <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
         <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
         <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> soft-delete rollback을 닫고, 그 다음 recall quality loop로 간다.</li>
+        <li><span class="badge info">다음</span> recall quality loop로 넘어가 기억 호출의 자연스러움과 방해 가능성을 측정한다.</li>
       </ul>
     </article>
   </section>
@@ -264,7 +264,7 @@
     <article class="span-6">
       <h2>예상 완료 시간</h2>
       <ul>
-        <li>운영 안전성 1차 완성: 2-4시간</li>
+        <li>운영 안전성 1차 완성: 완료</li>
         <li>자연스러운 기억 품질 루프 1차: 8-14시간</li>
         <li>비용/토큰 governor 포함 실사용 베타: 14-24시간</li>
         <li>72시간 장기 안정성 검증까지: 추가 3일</li>

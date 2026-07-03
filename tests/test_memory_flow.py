@@ -14489,6 +14489,172 @@ class MemoryFlowTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
             self.assertFalse(payload["passed"])
 
+    def test_live_mutation_soft_delete_rollback_requires_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project xi soft-delete rollback should restore only status.",
+                source="test",
+                scope="xi",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="xi delete candidate",
+                body="Project xi soft-delete rollback should restore only status.",
+                scope="xi",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["delete", "rollback"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(capsule_id=capsule.id, action="delete", ttl_minutes=10)
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY SOFT DELETE")
+            self.assertTrue(applied["passed"], applied)
+            witness_id = applied["mutation_witness_id"]
+
+            rollback_approval = memory.prepare_mutation_rollback(str(witness_id), ttl_minutes=10)
+
+            self.assertTrue(rollback_approval["token"])
+            self.assertEqual(rollback_approval["action"], "delete")
+            self.assertEqual(rollback_approval["confirmation_required"], "ROLL BACK MEMORY SOFT DELETE")
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT * FROM memory_mutation_rollback_approvals WHERE id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(approval_row)
+                self.assertEqual(approval_row["action"], "delete")
+                self.assertNotEqual(approval_row["token_hash"], rollback_approval["token"])
+
+            wrong_confirm = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY REWRITE",
+            )
+            self.assertFalse(wrong_confirm["passed"])
+            self.assertEqual(wrong_confirm["confirmation_required"], "ROLL BACK MEMORY SOFT DELETE")
+            self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.REJECTED.value)
+
+            rolled_back = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY SOFT DELETE",
+            )
+
+            self.assertTrue(rolled_back["passed"], rolled_back)
+            self.assertEqual(rolled_back["action"], "soft-delete-rollback")
+            restored = memory.store.get_capsule(capsule.id)
+            self.assertEqual(restored["title"], "xi delete candidate")
+            self.assertEqual(restored["body"], "Project xi soft-delete rollback should restore only status.")
+            self.assertEqual(restored["status"], MemoryStatus.CANDIDATE.value)
+            self.assertEqual(json.loads(restored["source_event_ids_json"]), [event.id])
+            self.assertEqual(json.loads(restored["tags_json"]), ["delete", "rollback"])
+            reused = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY SOFT DELETE",
+            )
+            self.assertFalse(reused["passed"])
+            self.assertIn("not prepared", reused["recommendations"][0])
+            with memory.store.session() as conn:
+                approval_status = conn.execute(
+                    "SELECT status, used_at FROM memory_mutation_rollback_approvals WHERE id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertEqual(approval_status["status"], "used")
+                self.assertIsNotNone(approval_status["used_at"])
+                witness_row = conn.execute(
+                    "SELECT * FROM memory_mutation_rollback_witnesses WHERE rollback_approval_id = ?",
+                    (rollback_approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(witness_row)
+                self.assertEqual(witness_row["action"], "soft-delete-rollback")
+                before = json.loads(witness_row["before_json"])
+                after = json.loads(witness_row["after_json"])
+                self.assertEqual(before["status"], MemoryStatus.REJECTED.value)
+                self.assertEqual(after["status"], MemoryStatus.CANDIDATE.value)
+                action_row = conn.execute(
+                    "SELECT action, actor FROM memory_actions WHERE capsule_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (capsule.id,),
+                ).fetchone()
+                self.assertEqual(action_row["action"], "soft-delete-rollback")
+                self.assertEqual(action_row["actor"], "memory-mutation-rollback")
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "live-mutation-rollback",
+                    "--approval-token",
+                    rollback_approval["token"],
+                    "--confirm",
+                    "ROLL BACK MEMORY SOFT DELETE",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"])
+
+    def test_live_mutation_soft_delete_rollback_blocks_when_capsule_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project omicron soft-delete rollback should block drift.",
+                source="test",
+                scope="omicron",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="omicron delete candidate",
+                body="Project omicron soft-delete rollback should block drift.",
+                scope="omicron",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["delete", "rollback", "drift"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(capsule_id=capsule.id, action="delete", ttl_minutes=10)
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY SOFT DELETE")
+            rollback_approval = memory.prepare_mutation_rollback(applied["mutation_witness_id"], ttl_minutes=10)
+            current = memory.store.get_capsule(capsule.id)
+            memory.store.update_capsule_projection_if_current(
+                capsule.id,
+                title="drifted omicron delete candidate",
+                body=current["body"],
+                tags=json.loads(current["tags_json"]),
+                expected_status=current["status"],
+                expected_title=current["title"],
+                expected_body=current["body"],
+                expected_tags=json.loads(current["tags_json"]),
+                actor="test",
+                reason="simulate soft-delete rollback drift",
+                action="test-drift",
+            )
+
+            blocked = memory.live_mutation_rollback(
+                rollback_approval["token"],
+                confirm="ROLL BACK MEMORY SOFT DELETE",
+            )
+
+            self.assertFalse(blocked["passed"])
+            self.assertIn("changed after mutation rollback approval", blocked["recommendations"][0])
+            updated = memory.store.get_capsule(capsule.id)
+            self.assertEqual(updated["title"], "drifted omicron delete candidate")
+            self.assertEqual(updated["status"], MemoryStatus.REJECTED.value)
+
     def test_live_mutation_rollback_blocks_when_capsule_changed_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = AraMemory(Path(tmp) / "memory")
