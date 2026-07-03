@@ -829,16 +829,20 @@ deterministic risk without mutating the live store. For delete it only plans a
 reversible soft-delete to `rejected`; physical deletion remains outside this
 gate, and stable memory delete is blocked until a stronger shadow-delete
 approval exists.
-`prepare-mutation --action rewrite` reruns the preflight and writes a one-use
-approval only when the live capsule still matches the digest-bound before
-projection. `live-mutation-apply` consumes the token with exact confirmation
-`APPLY MEMORY REWRITE`, compare-and-sets the approved projection fields, writes a
-`memory_mutation_witnesses` row, and blocks on any post-approval drift. Delete
-mutation approvals are intentionally not implemented. To reverse an applied
-rewrite, run `prepare-mutation-rollback --witness-id ID`, review the approval,
-then run `live-mutation-rollback --approval-token TOKEN --confirm "ROLL BACK MEMORY REWRITE"`.
-Rollback restores only the title/body/tags projection recorded in the mutation
-witness and blocks if the target capsule changed after rollback approval.
+`prepare-mutation --action rewrite` and `prepare-mutation --action delete` rerun
+the preflight and write a one-use approval only when the live capsule still
+matches the digest-bound before projection. `live-mutation-apply` consumes the
+token with exact confirmation, compare-and-sets only the approved fields, writes
+a `memory_mutation_witnesses` row, and blocks on any post-approval drift. Rewrite
+uses `APPLY MEMORY REWRITE` and changes only title/body/tags. Delete uses
+`APPLY MEMORY SOFT DELETE`, changes only the capsule status to `rejected`, and
+preserves source events and archived evidence; physical deletion is still outside
+this gate. To reverse an applied rewrite, run `prepare-mutation-rollback
+--witness-id ID`, review the approval, then run `live-mutation-rollback
+--approval-token TOKEN --confirm "ROLL BACK MEMORY REWRITE"`. Rollback restores
+only the title/body/tags projection recorded in the mutation witness and blocks
+if the target capsule changed after rollback approval. Soft-delete rollback is
+not opened yet; use a new reviewed mutation path rather than physical deletion.
 `worker` is the one-shot background processor for unattended operation. It drains
 the spool, folds raw command/file-artifact/session episode candidates and
 repeated operational candidates into stable summaries, persists quality scores,

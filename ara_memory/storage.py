@@ -2255,8 +2255,8 @@ class MemoryStore:
     ) -> dict[str, Any]:
         self.init()
         action = str(preflight.get("action") or "")
-        if action != "rewrite":
-            raise ValueError("Only rewrite mutation approval is implemented.")
+        if action not in {"rewrite", "delete"}:
+            raise ValueError("Only rewrite and soft-delete mutation approvals are implemented.")
         if not preflight.get("passed"):
             raise ValueError("Cannot prepare mutation approval from a failed preflight.")
         before = preflight.get("before")
@@ -2276,7 +2276,7 @@ class MemoryStore:
             raise ValueError("Mutation preflight digest mismatch.")
         token = secrets.token_urlsafe(24)
         approval_id = new_id("mut")
-        confirmation = "APPLY MEMORY REWRITE"
+        confirmation = _mutation_confirmation(action)
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
         with self.session() as conn:
             row = conn.execute("SELECT * FROM capsules WHERE id = ?", (preflight["capsule_id"],)).fetchone()
@@ -2328,17 +2328,17 @@ class MemoryStore:
         confirm: str,
     ) -> dict[str, Any]:
         self.init()
-        confirmation = "APPLY MEMORY REWRITE"
-        if confirm != confirmation:
-            return _mutation_blocked(None, "Confirmation did not match.", confirmation)
         with self.session() as conn:
             approval_row = conn.execute(
                 "SELECT * FROM memory_mutation_approvals WHERE token_hash = ?",
                 (_token_hash(approval_token),),
             ).fetchone()
             if approval_row is None:
-                return _mutation_blocked(None, "Approval token was not found.", confirmation)
+                return _mutation_blocked(None, "Approval token was not found.", _mutation_confirmation("rewrite"))
             approval = dict(approval_row)
+            confirmation = _mutation_confirmation(str(approval["action"]))
+            if confirm != confirmation:
+                return _mutation_blocked(approval, "Confirmation did not match.", confirmation)
             if approval["status"] != "prepared":
                 return _mutation_blocked(approval, f"Approval status is {approval['status']}, not prepared.", confirmation)
             if _is_expired(str(approval["expires_at"])):
@@ -2347,8 +2347,8 @@ class MemoryStore:
                     ("expired", approval["id"]),
                 )
                 return _mutation_blocked(approval, "Approval token is expired.", confirmation)
-            if approval["action"] != "rewrite":
-                return _mutation_blocked(approval, "Only rewrite live mutation is implemented.", confirmation)
+            if approval["action"] not in {"rewrite", "delete"}:
+                return _mutation_blocked(approval, "Only rewrite and soft-delete live mutations are implemented.", confirmation)
             preflight = json.loads(str(approval["preflight_json"]))
             before = preflight.get("before")
             after_plan = preflight.get("after")
@@ -2372,32 +2372,66 @@ class MemoryStore:
             if _json_digest(current) != _json_digest(approved_current):
                 return _mutation_blocked(approval, "Approved capsule changed after mutation approval.", confirmation)
             if _json_digest(_mutation_projection_snapshot(current)) != before.get("projection_digest"):
-                return _mutation_blocked(approval, "Approved capsule no longer matches rewrite preflight before snapshot.", confirmation)
+                return _mutation_blocked(
+                    approval,
+                    f"Approved capsule no longer matches {approval['action']} preflight before snapshot.",
+                    confirmation,
+                )
             now = utc_now()
-            tags_json = json.dumps(list(after_plan["tags"]), ensure_ascii=False)
-            cur = conn.execute(
-                """
-                UPDATE capsules
-                SET title = ?, body = ?, tags_json = ?, updated_at = ?
-                WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
-                """,
-                (
-                    after_plan["title"],
-                    after_plan["body"],
-                    tags_json,
-                    now,
-                    approval["capsule_id"],
-                    before["title"],
-                    before["body"],
-                    json.dumps(list(before["tags"]), ensure_ascii=False),
-                    before["status"],
-                ),
-            )
-            if cur.rowcount <= 0:
-                return _mutation_blocked(approval, "Rewrite compare-and-set failed.", confirmation)
+            before_tags_json = json.dumps(list(before["tags"]), ensure_ascii=False)
+            if approval["action"] == "rewrite":
+                cur = conn.execute(
+                    """
+                    UPDATE capsules
+                    SET title = ?, body = ?, tags_json = ?, updated_at = ?
+                    WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                    """,
+                    (
+                        after_plan["title"],
+                        after_plan["body"],
+                        json.dumps(list(after_plan["tags"]), ensure_ascii=False),
+                        now,
+                        approval["capsule_id"],
+                        before["title"],
+                        before["body"],
+                        before_tags_json,
+                        before["status"],
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    return _mutation_blocked(approval, "Rewrite compare-and-set failed.", confirmation)
+                witness_reason = f"approved live rewrite from mutation preflight {approval['mutation_digest']}"
+                memory_action = "rewrite"
+                success_message = "Live rewrite changed only the approved capsule projection fields."
+                followup_message = "Run health and recall-regression after live rewrite."
+            else:
+                if after_plan.get("status") != MemoryStatus.REJECTED.value:
+                    return _mutation_blocked(approval, "Soft-delete preflight did not target rejected status.", confirmation)
+                cur = conn.execute(
+                    """
+                    UPDATE capsules
+                    SET status = ?, updated_at = ?
+                    WHERE id = ? AND title = ? AND body = ? AND tags_json = ? AND status = ?
+                    """,
+                    (
+                        MemoryStatus.REJECTED.value,
+                        now,
+                        approval["capsule_id"],
+                        before["title"],
+                        before["body"],
+                        before_tags_json,
+                        before["status"],
+                    ),
+                )
+                if cur.rowcount <= 0:
+                    return _mutation_blocked(approval, "Soft-delete compare-and-set failed.", confirmation)
+                witness_reason = f"approved soft-delete from mutation preflight {approval['mutation_digest']}"
+                memory_action = "soft-delete"
+                success_message = "Live soft-delete changed only the approved capsule status to rejected."
+                followup_message = "Source events and archived evidence were preserved; run health and recall-regression after live soft-delete."
             updated = conn.execute("SELECT * FROM capsules WHERE id = ?", (approval["capsule_id"],)).fetchone()
             if updated is None:
-                return _mutation_blocked(approval, "Capsule disappeared during rewrite.", confirmation)
+                return _mutation_blocked(approval, "Capsule disappeared during mutation apply.", confirmation)
             _sync_capsule_fts_row(conn, updated)
             after = _capsule_witness_snapshot(updated)
             witness_id = new_id("mutw")
@@ -2415,7 +2449,7 @@ class MemoryStore:
                     approval["capsule_id"],
                     approval["scope"],
                     approval["action"],
-                    f"approved live rewrite from mutation preflight {approval['mutation_digest']}",
+                    witness_reason,
                     json.dumps(current, ensure_ascii=False, sort_keys=True),
                     json.dumps(after, ensure_ascii=False, sort_keys=True),
                     utc_now(),
@@ -2427,10 +2461,10 @@ class MemoryStore:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    "rewrite",
+                    memory_action,
                     approval["capsule_id"],
                     approval["scope"],
-                    f"approved live rewrite from mutation preflight {approval['mutation_digest']}",
+                    witness_reason,
                     "memory-mutation",
                     utc_now(),
                 ),
@@ -2449,8 +2483,8 @@ class MemoryStore:
                 "action": approval["action"],
                 "mutation_digest": approval["mutation_digest"],
                 "recommendations": [
-                    "Live rewrite changed only the approved capsule projection fields.",
-                    "Run health and recall-regression after live rewrite.",
+                    success_message,
+                    followup_message,
                 ],
             }
 
@@ -2841,6 +2875,12 @@ def _mutation_projection_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "tags": list(snapshot["tags"]),
         "status": snapshot["status"],
     }
+
+
+def _mutation_confirmation(action: str) -> str:
+    if action == "delete":
+        return "APPLY MEMORY SOFT DELETE"
+    return "APPLY MEMORY REWRITE"
 
 
 def _mutation_blocked(

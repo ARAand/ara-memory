@@ -6,28 +6,30 @@
   <title>Ara Memory OS - 현재 작업 상황과 아키텍처</title>
   <style>
     :root {
-      --bg: #f5f6f2;
+      --bg: #f6f7f4;
       --ink: #18201c;
-      --muted: #5e6a62;
-      --line: #d8ded7;
+      --muted: #5d6961;
+      --line: #d9ded8;
       --panel: #ffffff;
-      --good: #176b45;
-      --warn: #9a6614;
+      --green: #176b45;
+      --amber: #9a6614;
       --blue: #205f91;
-      --soft-good: #e6f2eb;
-      --soft-warn: #fbefd7;
+      --red: #9b2f28;
+      --soft-green: #e6f2eb;
+      --soft-amber: #fbefd7;
       --soft-blue: #e7f0f8;
+      --soft-red: #f7e6e4;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font-family: Arial, "Noto Sans KR", sans-serif;
-      line-height: 1.58;
+      font-family: Arial, "Noto Sans KR", "Malgun Gothic", sans-serif;
+      line-height: 1.55;
     }
     main {
-      width: min(1180px, calc(100% - 32px));
+      width: min(1200px, calc(100% - 32px));
       margin: 0 auto;
       padding: 32px 0 48px;
     }
@@ -45,7 +47,7 @@
       box-shadow: 0 1px 0 rgba(24, 32, 28, .04);
     }
     h1, h2, h3, p { margin-top: 0; }
-    h1 { font-size: clamp(28px, 4vw, 44px); line-height: 1.1; margin-bottom: 14px; }
+    h1 { font-size: clamp(28px, 4vw, 44px); line-height: 1.12; margin-bottom: 14px; }
     h2 { font-size: 21px; margin-bottom: 14px; }
     h3 { font-size: 16px; margin-bottom: 8px; }
     code {
@@ -63,7 +65,7 @@
     .span-8 { grid-column: span 8; }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
-    .lead { color: var(--muted); font-size: 17px; max-width: 820px; margin-bottom: 0; }
+    .lead { color: var(--muted); font-size: 17px; max-width: 880px; margin-bottom: 0; }
     .metric {
       display: flex;
       justify-content: space-between;
@@ -83,16 +85,17 @@
       font-weight: 700;
       white-space: nowrap;
     }
-    .pass { background: var(--soft-good); color: var(--good); }
-    .watch { background: var(--soft-warn); color: var(--warn); }
+    .pass { background: var(--soft-green); color: var(--green); }
+    .watch { background: var(--soft-amber); color: var(--amber); }
     .info { background: var(--soft-blue); color: var(--blue); }
+    .risk { background: var(--soft-red); color: var(--red); }
     .flow {
       display: grid;
       grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 10px;
     }
     .node {
-      min-height: 128px;
+      min-height: 136px;
       background: #fbfcfa;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -103,7 +106,7 @@
     .rows { display: grid; gap: 0; }
     .row {
       display: grid;
-      grid-template-columns: minmax(170px, .8fr) minmax(0, 1.8fr) auto;
+      grid-template-columns: minmax(170px, .8fr) minmax(0, 1.8fr) minmax(110px, auto);
       gap: 12px;
       align-items: start;
       border-top: 1px solid var(--line);
@@ -134,55 +137,47 @@
     <section class="hero">
       <h1>Ara Memory OS 현재 작업 상황과 아키텍처</h1>
       <p class="lead">
-        현재 시스템은 26시간 이상 이어서 제작 중인 장기 기억 저장소다. 핵심 방향은 대화와 파일, 이미지, 명령 결과를 전부 매번 다시 읽는 구조가 아니라,
-        원문 증거는 보존하고 작업 맥락에 필요한 압축 기억, 관계, 검증 가능한 변경 이력만 불러오는 자연스러운 기억 구조다.
+        26시간째 제작 중인 현재 시스템은 단순 벡터DB가 아니라 원문 증거, 압축 기억, 작업 기억, 관계 그래프,
+        승인형 변경, 백업과 회귀검사를 함께 가진 로컬 우선 장기기억 운영체제다. 아직 완성은 아니다.
+        지금의 핵심은 "많이 저장"이 아니라, 나중에 필요한 맥락만 싸게 되살리고 잘못된 기억 변경을 되돌릴 수 있게 만드는 것이다.
       </p>
     </section>
     <aside class="meta">
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">스키마</span><span class="value">v23</span></div>
-      <div class="metric"><span class="label">헬스</span><span class="value">ara-memory 100 / 100 pass</span></div>
-      <div class="metric"><span class="label">로드맵</span><span class="value">ara-memory pass, global fail</span></div>
-      <div class="metric"><span class="label">최근 백업</span><span class="value">검증됨</span></div>
-      <div class="metric"><span class="label">현재 상태</span><span class="value">원격과 동기화, 워킹트리 clean</span></div>
+      <div class="metric"><span class="label">작업 시간</span><span class="value">약 26시간째</span></div>
+      <div class="metric"><span class="label">스키마</span><span class="value">v27</span></div>
+      <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
+      <div class="metric"><span class="label">작업트리</span><span class="value">clean, 원격 동기화됨</span></div>
+      <div class="metric"><span class="label">최근 커밋</span><span class="value">rewrite rollback approvals</span></div>
     </aside>
   </header>
 
   <section class="grid">
     <article class="span-4">
-      <h2>지금까지 완성</h2>
+      <h2>현재 완성된 부분</h2>
       <ul>
-        <li>SQLite 기반 capsule, source event, relation graph, FTS 검색 저장소.</li>
-        <li><code>remember-turn</code>, <code>spool-turn</code>, <code>drain-spool</code> 기반 상시 수집 경로.</li>
-        <li>원문 전체를 직접 프롬프트에 넣지 않도록 recall policy, working-memory pack, capsule projection 구성.</li>
-        <li>core, working, guarded, evidence, archive, reject로 기억 수명주기 분리.</li>
-        <li>doctor, health, privacy-pre-push, milestone, goal-roadmap, backup verification 게이트.</li>
-        <li>reconsolidation prepare/apply/review, shadow rollback, live rollback 승인 토큰, action witness 계열.</li>
-        <li><code>govern-turn</code> now reports a <code>projection_gate</code> for working-memory overlap, next-action coverage, and token budget.</li>
-        <li><code>govern-turn --record-working-impact</code> can store reviewed projection outcomes as bounded working-memory impact feedback.</li>
-        <li><code>working-memory-impact-eval</code> audits helpful versus harmful cue-matched memory habits without mutating recall.</li>
+        <li>프롬프트, 응답 요약, 파일/이미지 설명, 명령 결과, 의사결정을 source event로 수집한다.</li>
+        <li>원문 증거는 보존하고, 검색/추론용 capsule은 별도로 압축해 토큰 낭비를 줄인다.</li>
+        <li>hot memory, working memory, cold memory, distant memory map을 분리했다.</li>
+        <li>목표, 정체성, 절차, 실패, 프로젝트 증거를 다른 kind로 분류한다.</li>
+        <li>관계 그래프와 FTS를 함께 사용해 벡터DB 없이도 맥락 후보를 좁힌다.</li>
+        <li>doctor, health, milestone, recall-regression, privacy-pre-push로 운영 게이트를 만들었다.</li>
+        <li>백업, 검증, restore drill, cold export, retention cycle로 장기 보존 경로를 만들었다.</li>
+        <li>review-worker와 rollback witness로 자동 변경을 추적하고 되돌릴 수 있게 했다.</li>
       </ul>
     </article>
 
     <article class="span-4">
-      <h2>최신 단계</h2>
+      <h2>최근 단계</h2>
       <ul>
-        <li><code>SCHEMA_VERSION</code>은 27이고 rewrite mutation rollback approval/witness 테이블이 있다.</li>
-        <li><code>live-reconsolidation-cool</code>은 첫 제한적 live action executor로 열렸다.</li>
-        <li><code>reconsolidation-action-witnesses</code>와 shadow rollback으로 live action의 되돌림 가능성을 검증한다.</li>
-        <li><code>prepare-live-reconsolidation-action-rollback</code>은 one-use rollback approval token을 만든다.</li>
-        <li><code>reconsolidation-action-rollback-approvals</code>는 준비된 rollback approval을 읽기 전용으로 재검사한다.</li>
-        <li><code>live-reconsolidation-action-rollback</code>은 prepared token을 소비해 기록된 <code>cool</code> status transition만 되돌린다.</li>
-        <li><code>working-memory-impact-eval</code>은 작업기억 피드백을 capsule/source별로 읽기 전용 평가한다.</li>
-        <li><code>health --compact</code>는 worker log와 상태 handoff용 저토큰 건강 보고를 낸다.</li>
-        <li><code>review-compact --compact</code>는 대량 review marker를 action/reason별로 묶어 검토한다.</li>
-        <li><code>promotion-candidates</code>는 high-quality candidate를 ready/blocked로 나누는 읽기 전용 promotion gate다.</li>
-        <li><code>review-witnesses</code>는 worker-applied promote/quarantine의 before/after capsule snapshot을 조회한다.</li>
-        <li><code>prepare-review-rollback</code>과 <code>live-review-rollback</code>은 review-worker status transition을 one-use token으로 되돌린다.</li>
-        <li><code>mutation-preflight</code>는 rewrite/delete 실행 전 before/after/rollback projection과 risk gate를 만든다.</li>
-        <li><code>prepare-mutation</code>과 <code>live-mutation-apply</code>는 rewrite projection만 token-gated live executor로 적용한다.</li>
-        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 applied rewrite witness를 되돌린다.</li>
+        <li><code>mutation-preflight</code>가 rewrite/delete 전 before/after/rollback projection과 risk gate를 만든다.</li>
+        <li><code>prepare-mutation</code>은 통과한 preflight만 짧은 수명의 one-use token으로 승인한다.</li>
+        <li><code>live-mutation-apply</code>는 rewrite와 soft-delete에 대해 drift check, token check, confirmation check를 통과해야만 실제 반영한다.</li>
+        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 적용된 rewrite witness를 되돌린다.</li>
+        <li>delete는 물리 삭제가 아니라 <code>APPLY MEMORY SOFT DELETE</code> 확인문을 요구하는 <code>rejected</code> 상태 전환으로만 열린다.</li>
+        <li>review queue는 compact/review-worker 경로로 관리되고, 자동 적용은 witness를 남긴다.</li>
+        <li>working-memory impact eval이 기억 호출이 실제 작업에 도움인지 방해인지 평가한다.</li>
       </ul>
     </article>
 
@@ -191,12 +186,13 @@
       <ul>
         <li>source events: 1,716</li>
         <li>capsules: 3,747</li>
+        <li>stable capsules: 847</li>
         <li>relation nodes: 6,999</li>
         <li>relation edges: 27,259</li>
+        <li>source event links: 5,626</li>
         <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue: open 25</li>
-        <li>distant-memory raw-to-map reduction: 938.9x</li>
-        <li>storage: 343,339,299 bytes, backups: 119,917,259 bytes</li>
+        <li>review queue open: 26</li>
+        <li>storage: 342,122,207 bytes</li>
         <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
       </ul>
     </article>
@@ -206,104 +202,49 @@
     <article class="span-12">
       <h2>아키텍처</h2>
       <div class="flow">
-        <div class="node"><b>1. Capture</b><span>프롬프트, 응답, 파일, 이미지 설명, 명령 결과, 결정, 실패를 event envelope로 받아들인다.</span></div>
-        <div class="node"><b>2. Guard</b><span>비밀, 직접 식별자, 위험 텍스트, 저장 금지 항목을 redaction 또는 block 처리한다.</span></div>
-        <div class="node"><b>3. Store</b><span>원문 증거는 ledger/archive에 남기고, 검색용 capsule과 graph는 별도 구조로 저장한다.</span></div>
-        <div class="node"><b>4. Compress</b><span>원문을 통째로 반복 투입하지 않고 목적, 결정, 실패, 작업 맥락 단위로 압축한다.</span></div>
-        <div class="node"><b>5. Recall</b><span>현재 목표에 맞는 capsule, source link, distant memory만 제한된 토큰 예산으로 불러온다.</span></div>
-        <div class="node"><b>6. Gate</b><span>기억 변경은 prepare, review, approval, witness, rollback, backup 검증을 통과해야 한다.</span></div>
+        <div class="node"><b>1. Capture</b><span>대화, 파일, 이미지, 명령, 결정, 실패를 event envelope로 받는다. 숨은 추론은 저장하지 않고 검토 가능한 요약과 증거만 저장한다.</span></div>
+        <div class="node"><b>2. Guard</b><span>비밀, 직접 생계형 개인정보, 위험 문자열, 저장 금지 항목을 redaction 또는 block 처리한다.</span></div>
+        <div class="node"><b>3. Store</b><span>source event는 원문 증거로, capsule은 압축 기억으로, relation은 연결 단서로 따로 저장한다.</span></div>
+        <div class="node"><b>4. Compress</b><span>반복 작업 로그를 목표, 결정, 절차, 실패, 프로젝트 증거 단위로 접어 토큰 비용을 줄인다.</span></div>
+        <div class="node"><b>5. Recall</b><span>현재 목표와 질문에 맞는 hot/working/cold 후보만 뽑고, 필요한 경우 source link로 원문까지 거슬러 올라간다.</span></div>
+        <div class="node"><b>6. Mutate</b><span>기억 변경은 preflight, approval token, drift check, witness, rollback 게이트를 통과해야 한다.</span></div>
       </div>
     </article>
   </section>
 
   <section class="grid">
     <article class="span-8">
-      <h2>남은 작업과 예상 소요</h2>
+      <h2>남은 작업</h2>
       <div class="rows">
         <div class="row">
-          <strong>Action rollback approval review</strong>
-          <p>완료: 준비된 rollback approval의 status, 만료, 백업 identity, 백업 검증, live witness review, target capsule snapshot drift를 토큰 소비 없이 재검사한다.</p>
+          <strong>soft-delete live apply</strong>
+          <p>완료: delete를 실제 삭제가 아니라 <code>rejected</code> 상태 전환으로만 반영한다. source event와 원문은 보존한다.</p>
           <span class="badge pass">done</span>
         </div>
         <div class="row">
-          <strong>Live action rollback executor</strong>
-          <p>완료: approval review를 다시 통과한 one-use token만 소비하고, recorded cool transition을 compare-and-set으로 되돌린 뒤 action rollback witness를 남긴다.</p>
-          <span class="badge pass">done</span>
+          <strong>soft-delete rollback</strong>
+          <p>soft-delete witness를 기반으로 candidate/quarantined 상태 복구를 승인형 token으로 되돌린다.</p>
+          <span class="badge watch">1-2h</span>
         </div>
         <div class="row">
-          <strong>Working-memory projection gate</strong>
-          <p>Completed: govern-turn now checks whether projected working memory overlaps visible recall evidence, contains next-action items, and stays inside the working-memory token budget.</p>
-          <span class="badge pass">done</span>
+          <strong>recall quality loop</strong>
+          <p>기억이 더 사람처럼 보이려면 "검색"보다 "상황별 회상 습관"이 필요하다. cue, goal, emotional salience, recency를 평가 루프로 묶어야 한다.</p>
+          <span class="badge info">3-5h</span>
         </div>
         <div class="row">
-          <strong>Projection impact feedback</strong>
-          <p>Completed: govern-turn can explicitly record reviewed projection outcomes into working-memory-impact rows for the projected capsule ids, without auto-promoting memory or mutating policy.</p>
-          <span class="badge pass">done</span>
+          <strong>memory worker 분리</strong>
+          <p>Codex 본체가 모든 것을 읽지 않도록 capture/drain/consolidate/critic/retriever 역할을 별도 worker로 더 명확히 분리한다.</p>
+          <span class="badge info">4-7h</span>
         </div>
         <div class="row">
-          <strong>Working-memory impact eval</strong>
-          <p>Completed: working-memory-impact-eval groups feedback by capsule and source, reports pass/watch/fail, and recommends review for harmful memory habits without changing recall state.</p>
-          <span class="badge pass">done</span>
+          <strong>cost governor</strong>
+          <p>AI API 호출, DB 크기, 압축률, recall token을 작업별 budget으로 제한하고 실패 시 저비용 fallback을 선택하게 한다.</p>
+          <span class="badge info">3-4h</span>
         </div>
         <div class="row">
-          <strong>Compact health handoff</strong>
-          <p>Completed: health --compact reports status, compact stats, and only warning/error signals so worker logs and Codex handoffs do not spend tokens on nested diagnostics.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Review compact summary</strong>
-          <p>Completed: review-compact --compact groups non-destructive review markers by action and reason; 223 open markers were resolved without mutating capsules.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Promotion candidate gate</strong>
-          <p>Completed: promotion-candidates reports ready versus blocked high-quality candidate memories without mutating capsule status.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Review apply witness</strong>
-          <p>Completed: review-worker --apply now records memory_review_witnesses for promote/quarantine status changes before resolving the queue item.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Review apply rollback</strong>
-          <p>Completed: review-worker promote/quarantine status transitions can be prepared and rolled back with an exact confirmation token when the witness and target capsule have not drifted.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Rewrite/delete preflight</strong>
-          <p>Completed: mutation-preflight builds read-only before/after/rollback plans for rewrite and reversible soft-delete, while blocking stable physical deletion.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Live rewrite executor</strong>
-          <p>Completed: prepare-mutation and live-mutation-apply apply approved title/body/tags rewrites with exact confirmation, drift checks, one-use token consumption, and mutation witnesses.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>Live rewrite rollback</strong>
-          <p>Completed: prepare-mutation-rollback and live-mutation-rollback restore title/body/tags from the approved mutation witness when the target capsule has not drifted.</p>
-          <span class="badge pass">done</span>
-        </div>
-        <div class="row">
-          <strong>rewrite / promote / delete executor</strong>
-          <p>현재 live rewrite는 apply/rollback까지 열렸고 delete는 preflight까지만 있다. 다음 단계는 soft-delete approval과 shadow apply를 분리해서 여는 것이다.</p>
-          <span class="badge watch">3-5h</span>
-        </div>
-        <div class="row">
-          <strong>Memory worker 분리</strong>
-          <p>Codex 본체가 매번 직접 정리하는 방식에서, ingestion, consolidation, recall audit, backup steward 역할을 분리한 worker loop로 옮긴다.</p>
-          <span class="badge watch">3-5h</span>
-        </div>
-        <div class="row">
-          <strong>Cost / token accounting</strong>
-          <p>recall pack, compression ratio, API 호출 여부, 저장소 크기, 백업 크기를 작업별로 계량해서 비용 모델을 만든다.</p>
-          <span class="badge watch">2-3h</span>
-        </div>
-        <div class="row">
-          <strong>Long-run stress test</strong>
-          <p>긴 대화, 파일 묶음, 이미지 설명, 실패 로그, 중복 기억을 투입하고 recall 정확도와 토큰 절감률을 측정한다.</p>
-          <span class="badge watch">4-6h</span>
+          <strong>long-run stress test</strong>
+          <p>24-72시간 반복 capture/recall/worker/backup/rollback 테스트로 기억 오염, 중복, 비용 폭주, 회귀를 잡는다.</p>
+          <span class="badge risk">8-16h</span>
         </div>
       </div>
     </article>
@@ -311,22 +252,39 @@
     <article class="span-4">
       <h2>판단</h2>
       <ul>
-        <li><span class="badge pass">건강함</span> ara-memory health는 100/100이고, doctor, recall regression, 최신 backup 검증은 통과 중이다.</li>
-        <li><span class="badge pass">프로젝트 pass</span> <code>ara-memory</code> scope의 goal-roadmap과 milestone은 통과한다.</li>
-        <li><span class="badge watch">전체 fail</span> 기본 global health/roadmap은 candidate/stable 비율과 목적 연속성, worker readiness가 섞여 fail로 보인다.</li>
-        <li><span class="badge watch">미완성</span> promote/rewrite/delete live executor와 그 rollback은 아직 단계적으로 열어야 한다.</li>
-        <li><span class="badge pass">정리됨</span> review queue open count는 0이다.</li>
-        <li><span class="badge info">방향</span> 지금은 “더 많이 저장”이 아니라 “안전하게 바꾸고 정확히 불러오기”가 병목이다.</li>
+        <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate는 정상이다.</li>
+        <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
+        <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
+        <li><span class="badge info">다음</span> soft-delete rollback을 닫고, 그 다음 recall quality loop로 간다.</li>
       </ul>
+    </article>
+  </section>
+
+  <section class="grid">
+    <article class="span-6">
+      <h2>예상 완료 시간</h2>
+      <ul>
+        <li>운영 안전성 1차 완성: 2-4시간</li>
+        <li>자연스러운 기억 품질 루프 1차: 8-14시간</li>
+        <li>비용/토큰 governor 포함 실사용 베타: 14-24시간</li>
+        <li>72시간 장기 안정성 검증까지: 추가 3일</li>
+      </ul>
+    </article>
+
+    <article class="span-6">
+      <h2>현재 목적성</h2>
       <p class="note">
-        현실적인 잔여 시간은 최소 운영 가능 게이트까지 3-5시간, 강한 executor와 stress test까지 포함하면 11-18시간이다.
-        사람 같은 자연스러운 기억의 1차 골격은 섰지만, 자유롭게 자기 기억을 고치는 단계는 아직 승인과 되돌림 장치가 더 필요하다.
+        이 기억의 목적은 모든 원문을 매번 읽는 것이 아니다. Jongseo와 Ara가 이어서 만들던 맥락, 판단,
+        실패, 선호, 설계 이유를 작은 회상 단위로 되살려서 Codex가 매번 새로 태어난 도구처럼 굴지 않게 하는 것이다.
+        따라서 저장소는 "기록 보관소"이면서 동시에 "회상 정책을 가진 인지 구조"여야 한다.
       </p>
     </article>
   </section>
 
   <footer>
-    Generated from local repository evidence: git status, Ara Memory health, goal-roadmap, schema v23, and current docs.
+    Generated from live repository checks: <code>python -m ara_memory stats</code>,
+    <code>python -m ara_memory health --scope ara-memory --compact --json</code>,
+    <code>git status --short --branch</code>. Updated: 2026-07-03 KST.
   </footer>
 </main>
 </body>

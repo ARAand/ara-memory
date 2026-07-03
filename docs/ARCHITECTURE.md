@@ -521,15 +521,17 @@ mutation_preflight(capsule, action)
   -> block stable delete and all physical deletion
   -> return digest-bound plan without live mutation
 
-prepare_mutation(rewrite)
+prepare_mutation(rewrite/delete)
   -> rerun mutation_preflight
   -> require live capsule still equals preflight before projection
   -> write one-use approval with token hash, preflight JSON, and capsule snapshot
 
 live_mutation_apply(token)
-  -> require exact confirmation and prepared, unexpired rewrite token
+  -> require exact confirmation and prepared, unexpired mutation token
   -> require approval capsule snapshot and preflight digest have not drifted
-  -> compare-and-set title/body/tags only
+  -> for rewrite, compare-and-set title/body/tags only
+  -> for delete, compare-and-set status to rejected only
+  -> preserve source events and archived evidence; never physically delete
   -> write memory_mutation_witnesses and consume approval
 
 prepare_mutation_rollback(witness)

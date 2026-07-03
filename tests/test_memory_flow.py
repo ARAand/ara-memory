@@ -14214,6 +14214,179 @@ class MemoryFlowTests(unittest.TestCase):
             self.assertIn("changed after mutation approval", blocked["recommendations"][0])
             self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "drifted theta title")
 
+    def test_live_mutation_soft_delete_requires_approval_and_records_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp) / "memory"
+            memory = AraMemory(memory_root)
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project lambda soft-delete should preserve source evidence.",
+                source="test",
+                scope="lambda",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="lambda delete candidate",
+                body="Project lambda soft-delete should preserve source evidence.",
+                scope="lambda",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["delete", "live"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            approval = memory.prepare_mutation(capsule_id=capsule.id, action="delete", ttl_minutes=10)
+
+            self.assertTrue(approval["token"])
+            self.assertEqual(approval["confirmation_required"], "APPLY MEMORY SOFT DELETE")
+            with memory.store.session() as conn:
+                approval_row = conn.execute(
+                    "SELECT * FROM memory_mutation_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(approval_row)
+                self.assertEqual(approval_row["action"], "delete")
+                self.assertNotEqual(approval_row["token_hash"], approval["token"])
+
+            wrong_confirm = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY REWRITE")
+            self.assertFalse(wrong_confirm["passed"])
+            self.assertEqual(wrong_confirm["confirmation_required"], "APPLY MEMORY SOFT DELETE")
+            self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.CANDIDATE.value)
+
+            applied = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY SOFT DELETE")
+
+            self.assertTrue(applied["passed"], applied)
+            self.assertEqual(applied["action"], "delete")
+            updated = memory.store.get_capsule(capsule.id)
+            self.assertEqual(updated["title"], "lambda delete candidate")
+            self.assertEqual(updated["body"], "Project lambda soft-delete should preserve source evidence.")
+            self.assertEqual(updated["status"], MemoryStatus.REJECTED.value)
+            self.assertEqual(json.loads(updated["source_event_ids_json"]), [event.id])
+            self.assertEqual(json.loads(updated["tags_json"]), ["delete", "live"])
+            reused = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY SOFT DELETE")
+            self.assertFalse(reused["passed"])
+            self.assertIn("not prepared", reused["recommendations"][0])
+            with memory.store.session() as conn:
+                approval_status = conn.execute(
+                    "SELECT status, used_at FROM memory_mutation_approvals WHERE id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertEqual(approval_status["status"], "used")
+                self.assertIsNotNone(approval_status["used_at"])
+                witness_row = conn.execute(
+                    "SELECT * FROM memory_mutation_witnesses WHERE mutation_approval_id = ?",
+                    (approval["approval_id"],),
+                ).fetchone()
+                self.assertIsNotNone(witness_row)
+                self.assertEqual(witness_row["action"], "delete")
+                before = json.loads(witness_row["before_json"])
+                after = json.loads(witness_row["after_json"])
+                self.assertEqual(before["status"], MemoryStatus.CANDIDATE.value)
+                self.assertEqual(after["status"], MemoryStatus.REJECTED.value)
+                action_row = conn.execute(
+                    "SELECT action, actor FROM memory_actions WHERE capsule_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (capsule.id,),
+                ).fetchone()
+                self.assertEqual(action_row["action"], "soft-delete")
+                self.assertEqual(action_row["actor"], "memory-mutation")
+
+            completed = run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ara_memory",
+                    "--root",
+                    str(memory_root),
+                    "live-mutation-apply",
+                    "--approval-token",
+                    approval["token"],
+                    "--confirm",
+                    "APPLY MEMORY SOFT DELETE",
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            payload = json.loads(completed.stdout)
+            self.assertFalse(payload["passed"])
+
+    def test_live_mutation_soft_delete_blocks_stable_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project mu stable memory should not be soft-deleted by the normal delete path.",
+                source="test",
+                scope="mu",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="mu stable memory",
+                body="Project mu stable memory should not be soft-deleted by the normal delete path.",
+                scope="mu",
+                confidence=0.9,
+                salience=0.9,
+                source_event_ids=[event.id],
+                tags=["delete", "stable"],
+                status=MemoryStatus.STABLE,
+            )
+            memory.store.upsert_capsule(capsule)
+
+            with self.assertRaisesRegex(ValueError, "failed preflight"):
+                memory.prepare_mutation(capsule_id=capsule.id, action="delete", ttl_minutes=10)
+
+            self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.STABLE.value)
+
+    def test_live_mutation_soft_delete_blocks_when_capsule_changed_after_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = AraMemory(Path(tmp) / "memory")
+            memory.init()
+            event = memory.retain(
+                kind="note",
+                text="Decision: project nu soft-delete should block drift.",
+                source="test",
+                scope="nu",
+            )
+            capsule = Capsule.create(
+                kind=CapsuleKind.DECISION,
+                title="nu delete candidate",
+                body="Project nu soft-delete should block drift.",
+                scope="nu",
+                confidence=0.8,
+                salience=0.8,
+                source_event_ids=[event.id],
+                tags=["delete", "drift"],
+                status=MemoryStatus.CANDIDATE,
+            )
+            memory.store.upsert_capsule(capsule)
+            approval = memory.prepare_mutation(capsule_id=capsule.id, action="delete", ttl_minutes=10)
+            memory.store.update_capsule_projection_if_current(
+                capsule.id,
+                title="drifted nu delete candidate",
+                body=capsule.body,
+                tags=capsule.tags,
+                expected_status=MemoryStatus.CANDIDATE,
+                expected_title=capsule.title,
+                expected_body=capsule.body,
+                expected_tags=capsule.tags,
+                actor="test",
+                reason="simulate soft-delete drift",
+                action="test-drift",
+            )
+
+            blocked = memory.live_mutation_apply(approval["token"], confirm="APPLY MEMORY SOFT DELETE")
+
+            self.assertFalse(blocked["passed"])
+            self.assertIn("changed after mutation approval", blocked["recommendations"][0])
+            self.assertEqual(memory.store.get_capsule(capsule.id)["title"], "drifted nu delete candidate")
+            self.assertEqual(memory.store.get_capsule(capsule.id)["status"], MemoryStatus.CANDIDATE.value)
+
     def test_live_mutation_rollback_requires_approval_and_records_witness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory_root = Path(tmp) / "memory"
