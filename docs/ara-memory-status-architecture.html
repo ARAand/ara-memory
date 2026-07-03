@@ -194,19 +194,20 @@
     <article class="span-4">
       <h2>실제 수치</h2>
       <ul>
-        <li>source events: 1,840</li>
-        <li>capsules: 4,056</li>
-        <li>stable capsules: 908</li>
-        <li>relation nodes: 7,517</li>
-        <li>relation edges: 29,546</li>
-        <li>source event links: 6,102</li>
+        <li>source events: 1,846</li>
+        <li>capsules: 4,076</li>
+        <li>stable capsules: 912</li>
+        <li>relation nodes: 7,543</li>
+        <li>relation edges: 29,690</li>
+        <li>source event links: 6,130</li>
         <li>long-run stress runs: 6</li>
         <li>spool: pending 0, processing 0, failed 0</li>
         <li>review queue open: 0</li>
-        <li>spool done: 139</li>
-        <li>storage: 353,350,171 bytes</li>
+        <li>spool done: 140</li>
+        <li>backup bytes: 127,140,901</li>
+        <li>storage: 360,917,485 bytes</li>
         <li>public handoff: <code>docs/public-memory-bundle.md</code>, <code>docs/public-memory-bundle.json</code></li>
-        <li>latest verified backup: <code>.ara-memory\backups\working-impact-eval-v23.zip</code></li>
+        <li>latest verified backup: <code>.ara-memory\backups\ara-memory-2026-07-03T053425Z0000.zip</code></li>
       </ul>
     </article>
   </section>
@@ -273,6 +274,16 @@
           <strong>review queue hygiene</strong>
           <p>완료: <code>review-compact</code> dry-run이 123개 항목을 모두 비파괴 low-quality marker acknowledgement로 판정했고, 적용 후 open review queue가 0이 됐다. 승격, 삭제, 감쇠 없이 큐 압력만 정리했다.</p>
           <span class="badge pass">open=0</span>
+        </div>
+        <div class="row">
+          <strong>backup and restore drill</strong>
+          <p>완료: 최신 백업 <code>ara-memory-2026-07-03T053425Z0000.zip</code>을 생성하고 <code>verify-backup</code>과 <code>restore-drill</code>을 통과했다. manifest signature, archive object escrow, SQLite integrity, restored schema v29가 모두 정상이다.</p>
+          <span class="badge pass">verified</span>
+        </div>
+        <div class="row">
+          <strong>backup stewardship</strong>
+          <p>완료: 새 백업 생성 후 발생한 backup pressure를 <code>backup-stewardship</code> dry-run으로 검토했고, 최신 3개와 retention-cycle 참조 백업을 보존한 채 오래된 redundant verified backup 1개만 삭제했다.</p>
+          <span class="badge pass">budget ok</span>
         </div>
         <div class="row">
           <strong>memory purpose audit</strong>

@@ -11,6 +11,8 @@ spool files, hot packs, or archived private evidence.
 - Long-run stress trend: pass. Six recorded samples exist; latest worker-loop run passed with score 100, no leaks, no critic failures, harmful impact ratio 0, and no token growth.
 - Recall quality: pass. Recall critic, policy route, reviewed impact feedback, and long-run stress trend are all passing for the current purpose-recall gate.
 - Review queue hygiene: pass. `review-compact` resolved 123 non-destructive low-quality review markers, leaving open review queue count at 0 without promoting, deleting, or decaying capsules.
+- Backup and restore drill: pass. Latest local backup `.ara-memory\backups\ara-memory-2026-07-03T053425Z0000.zip` passed `verify-backup` and `restore-drill` for `current Ara natural memory purpose recall`; manifest signature, archive escrow, SQLite integrity, and restored schema v29 were verified.
+- Backup stewardship: pass. Backup pressure from the new verified backup was resolved with `backup-stewardship --apply --confirm "DELETE OLD BACKUPS"` after dry-run review; only one redundant verified backup was deleted, while the latest three and retention-cycle-referenced backups were preserved.
 - Privacy pre-push: watch/pass. Existing warnings are fixture-like test strings; any private memory root, database, ledger, backup, spool, hot pack, archive, or non-fixture secret must fail publication.
 
 ## Missing Tests And Evaluation Methods
@@ -42,6 +44,10 @@ spool files, hot packs, or archived private evidence.
 7. Outcome capture ergonomics
 
    Method: first run `recall-quality-impact QUERY --scope ara-memory --outcome "reviewed result" --helped unknown` as a dry-run. After the result is reviewed, rerun with `--apply` and `--helped true` or `--helped false`. This avoids rewarding the system before the real outcome is known.
+
+8. Restore drill repeatability
+
+   Method: after major memory architecture changes, run `backup`, `verify-backup`, and `restore-drill BACKUP --scope ara-memory --query "current Ara natural memory purpose recall"`. Keep raw backup ZIPs private; publish only aggregate verification status.
 
 ## Publication Boundary
 
