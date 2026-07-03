@@ -3,24 +3,29 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ara Memory OS - 현재 작업 상황과 아키텍처</title>
+  <title>Ara Memory OS - 현황과 아키텍처</title>
   <style>
     :root {
-      --bg: #f6f7f4;
-      --ink: #18201c;
-      --muted: #5d6961;
-      --line: #d9ded8;
+      --bg: #f5f6f2;
       --panel: #ffffff;
-      --green: #176b45;
-      --amber: #9a6614;
-      --blue: #205f91;
-      --red: #9b2f28;
-      --soft-green: #e6f2eb;
-      --soft-amber: #fbefd7;
+      --ink: #18211d;
+      --muted: #5b675f;
+      --line: #d9ded6;
+      --green: #12613d;
+      --blue: #1f5f8f;
+      --amber: #9a6412;
+      --red: #9b3028;
+      --violet: #5b4a91;
+      --soft-green: #e5f2ea;
       --soft-blue: #e7f0f8;
-      --soft-red: #f7e6e4;
+      --soft-amber: #fbefd8;
+      --soft-red: #f8e5e2;
+      --soft-violet: #eeeaf8;
+      --code: #eef2ee;
     }
+
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       background: var(--bg);
@@ -28,44 +33,54 @@
       font-family: Arial, "Noto Sans KR", "Malgun Gothic", sans-serif;
       line-height: 1.55;
     }
+
     main {
-      width: min(1200px, calc(100% - 32px));
+      width: min(1320px, calc(100% - 32px));
       margin: 0 auto;
-      padding: 32px 0 48px;
+      padding: 28px 0 48px;
     }
-    header, .grid {
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 16px;
-    }
-    header { margin-bottom: 16px; }
+
     section, article, aside {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 18px;
-      box-shadow: 0 1px 0 rgba(24, 32, 28, .04);
+      box-shadow: 0 1px 0 rgba(24, 33, 29, .04);
     }
+
+    header, .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
     h1, h2, h3, p { margin-top: 0; }
-    h1 { font-size: clamp(28px, 4vw, 44px); line-height: 1.12; margin-bottom: 14px; }
-    h2 { font-size: 21px; margin-bottom: 14px; }
-    h3 { font-size: 16px; margin-bottom: 8px; }
+    h1 { font-size: clamp(30px, 4vw, 48px); line-height: 1.1; margin-bottom: 14px; letter-spacing: 0; }
+    h2 { font-size: 22px; margin-bottom: 12px; letter-spacing: 0; }
+    h3 { font-size: 16px; margin-bottom: 8px; letter-spacing: 0; }
+    p { color: var(--muted); }
+    ul { margin: 0; padding-left: 20px; }
+    li + li { margin-top: 8px; }
+
     code {
-      background: #eef2ee;
+      background: var(--code);
       border: 1px solid #dce4dc;
       border-radius: 5px;
       padding: 1px 5px;
       font-size: .94em;
     }
-    ul { margin: 0; padding-left: 20px; }
-    li + li { margin-top: 8px; }
+
+    a { color: var(--blue); }
     .hero { grid-column: span 8; }
     .meta { grid-column: span 4; display: grid; gap: 10px; align-content: start; }
     .span-12 { grid-column: span 12; }
     .span-8 { grid-column: span 8; }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
-    .lead { color: var(--muted); font-size: 17px; max-width: 880px; margin-bottom: 0; }
+    .span-3 { grid-column: span 3; }
+    .lead { font-size: 17px; max-width: 900px; margin-bottom: 0; }
+
     .metric {
       display: flex;
       justify-content: space-between;
@@ -73,61 +88,137 @@
       padding-bottom: 10px;
       border-bottom: 1px solid var(--line);
     }
+
     .metric:last-child { border-bottom: 0; padding-bottom: 0; }
     .label { color: var(--muted); }
     .value { font-weight: 700; text-align: right; }
+
     .badge {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       border-radius: 999px;
+      min-height: 24px;
       padding: 3px 9px;
       font-size: 12px;
       font-weight: 700;
       white-space: nowrap;
     }
+
     .pass { background: var(--soft-green); color: var(--green); }
     .watch { background: var(--soft-amber); color: var(--amber); }
-    .info { background: var(--soft-blue); color: var(--blue); }
     .risk { background: var(--soft-red); color: var(--red); }
-    .flow {
+    .info { background: var(--soft-blue); color: var(--blue); }
+    .design { background: var(--soft-violet); color: var(--violet); }
+
+    .cards {
       display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
     }
-    .node {
-      min-height: 136px;
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
       background: #fbfcfa;
+      padding: 12px;
+      min-height: 108px;
+    }
+
+    .card b { display: block; margin-bottom: 6px; }
+    .card p { margin-bottom: 0; font-size: 14px; }
+
+    .pipe {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .node {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfa;
+      padding: 12px;
+      min-height: 150px;
+    }
+
+    .node b { display: block; color: var(--blue); margin-bottom: 8px; }
+    .node p { margin-bottom: 0; font-size: 14px; }
+
+    .layers {
+      display: grid;
+      gap: 10px;
+    }
+
+    .layer {
+      display: grid;
+      grid-template-columns: minmax(160px, .8fr) minmax(0, 2fr) minmax(160px, 1fr);
+      gap: 12px;
+      align-items: start;
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 12px;
+      background: #fbfcfa;
     }
-    .node b { display: block; margin-bottom: 8px; color: var(--blue); }
-    .node span { color: var(--muted); font-size: 14px; }
-    .rows { display: grid; gap: 0; }
+
+    .layer p { margin-bottom: 0; }
+
+    .rows { display: grid; }
     .row {
       display: grid;
-      grid-template-columns: minmax(170px, .8fr) minmax(0, 1.8fr) minmax(110px, auto);
+      grid-template-columns: minmax(190px, .85fr) minmax(0, 1.8fr) minmax(125px, auto);
       gap: 12px;
       align-items: start;
       border-top: 1px solid var(--line);
       padding: 12px 0;
     }
+
     .row:first-child { border-top: 0; padding-top: 0; }
     .row:last-child { padding-bottom: 0; }
-    .row p { margin-bottom: 0; color: var(--muted); }
-    .note { color: var(--muted); margin-bottom: 0; }
+    .row p { margin-bottom: 0; }
+
+    .matrix {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    .matrix th, .matrix td {
+      border: 1px solid var(--line);
+      padding: 9px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .matrix th { background: #f0f3ef; }
+
+    .callout {
+      border-left: 4px solid var(--amber);
+      background: #fffaf0;
+      padding: 12px 14px;
+      border-radius: 8px;
+      color: var(--muted);
+    }
+
     footer {
       color: var(--muted);
       font-size: 13px;
-      margin-top: 20px;
+      margin-top: 18px;
       padding-top: 14px;
       border-top: 1px solid var(--line);
     }
-    @media (max-width: 900px) {
+
+    @media (max-width: 1080px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 820px) {
       header, .grid { grid-template-columns: 1fr; }
-      .hero, .meta, .span-12, .span-8, .span-6, .span-4 { grid-column: 1; }
-      .flow { grid-template-columns: 1fr; }
-      .row { grid-template-columns: 1fr; }
+      .hero, .meta, .span-12, .span-8, .span-6, .span-4, .span-3 { grid-column: 1; }
+      .cards, .pipe { grid-template-columns: 1fr; }
+      .layer, .row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -135,228 +226,307 @@
 <main>
   <header>
     <section class="hero">
-      <h1>Ara Memory OS 현재 작업 상황과 아키텍처</h1>
+      <h1>Ara Memory OS 현황과 아키텍처</h1>
       <p class="lead">
-        26시간째 제작 중인 현재 시스템은 단순 벡터DB가 아니라 원문 증거, 압축 기억, 작업 기억, 관계 그래프,
-        승인형 변경, 백업과 회귀검사를 함께 가진 로컬 우선 장기기억 운영체제다. 아직 완성은 아니다.
-        지금의 핵심은 "많이 저장"이 아니라, 나중에 필요한 맥락만 싸게 되살리고 잘못된 기억 변경을 되돌릴 수 있게 만드는 것이다.
+        이 문서는 현재 로컬 Ara Memory OS가 어디까지 완성됐는지, 어떤 구조로 기억을 저장하고 불러오는지,
+        어떤 안전장치와 인계 경로가 준비됐는지 한 화면에서 확인하기 위한 상태판이다. 공개 GitHub 인계는
+        완료됐고, 원본 `.ara-memory`는 공개 저장소에 넣지 않고 암호화 release asset으로 분리했다.
       </p>
     </section>
     <aside class="meta">
       <div class="metric"><span class="label">기준 시각</span><span class="value">2026-07-03 KST</span></div>
       <div class="metric"><span class="label">브랜치</span><span class="value">codex/ara-memory-natural-memory-gates</span></div>
-      <div class="metric"><span class="label">작업 시간</span><span class="value">약 26시간째</span></div>
+      <div class="metric"><span class="label">최신 공개 커밋</span><span class="value">a5e5f37</span></div>
       <div class="metric"><span class="label">스키마</span><span class="value">v29</span></div>
-      <div class="metric"><span class="label">헬스</span><span class="value">100 / 100 pass</span></div>
-      <div class="metric"><span class="label">작업트리</span><span class="value">public handoff 문서 갱신됨</span></div>
-      <div class="metric"><span class="label">최근 작업</span><span class="value">recall quality gates pass</span></div>
+      <div class="metric"><span class="label">Goal Roadmap</span><span class="value">pass</span></div>
+      <div class="metric"><span class="label">Operational Health</span><span class="value">watch 90/100</span></div>
+      <div class="metric"><span class="label">인계 상태</span><span class="value">GitHub + encrypted raw memory</span></div>
     </aside>
   </header>
 
   <section class="grid">
-    <article class="span-4">
-      <h2>현재 완성된 부분</h2>
-      <ul>
-        <li>프롬프트, 응답 요약, 파일/이미지 설명, 명령 결과, 의사결정을 source event로 수집한다.</li>
-        <li>원문 증거는 보존하고, 검색/추론용 capsule은 별도로 압축해 토큰 낭비를 줄인다.</li>
-        <li>hot memory, working memory, cold memory, distant memory map을 분리했다.</li>
-        <li>목표, 정체성, 절차, 실패, 프로젝트 증거를 다른 kind로 분류한다.</li>
-        <li>관계 그래프와 FTS를 함께 사용해 벡터DB 없이도 맥락 후보를 좁힌다.</li>
-        <li>doctor, health, milestone, recall-regression, privacy-pre-push로 운영 게이트를 만들었다.</li>
-        <li>백업, 검증, restore drill, cold export, retention cycle로 장기 보존 경로를 만들었다.</li>
-        <li>review-worker와 rollback witness로 자동 변경을 추적하고 되돌릴 수 있게 했다.</li>
-      </ul>
+    <article class="span-12">
+      <h2>현재 결론</h2>
+      <div class="cards">
+        <div class="card">
+          <b><span class="badge pass">완료</span> 공개 코드 인계</b>
+          <p>GitHub branch에 코드, 테스트, 공개 번들, 인계 문서가 올라갔다. clean clone에서 `.ara-memory` 없이도 handoff-doctor가 통과했다.</p>
+        </div>
+        <div class="card">
+          <b><span class="badge pass">완료</span> 원본 메모리 분리</b>
+          <p>raw `.ara-memory`는 공개 repo에 넣지 않고 AES-GCM 암호화 release asset으로 분리했다. 로컬 복호화 검증도 통과했다.</p>
+        </div>
+        <div class="card">
+          <b><span class="badge pass">완료</span> 핵심 테스트</b>
+          <p>clean clone 전체 테스트는 419 OK, skipped 1이다. skip은 Windows symlink 생성 권한 부족으로 인한 조건부 skip이다.</p>
+        </div>
+        <div class="card">
+          <b><span class="badge watch">주의</span> 현재 로컬 health</b>
+          <p>목표 종료 후 추가 캡처 때문에 recall-regression baseline drift와 review marker가 생겨 health는 watch 90/100이다. Roadmap은 여전히 pass다.</p>
+        </div>
+      </div>
     </article>
+  </section>
 
+  <section class="grid">
     <article class="span-4">
-      <h2>최근 단계</h2>
+      <h2>실제 저장소 수치</h2>
       <ul>
-        <li><code>mutation-preflight</code>가 rewrite/delete 전 before/after/rollback projection과 risk gate를 만든다.</li>
-        <li><code>prepare-mutation</code>은 통과한 preflight만 짧은 수명의 one-use token으로 승인한다.</li>
-        <li><code>live-mutation-apply</code>는 rewrite와 soft-delete에 대해 drift check, token check, confirmation check를 통과해야만 실제 반영한다.</li>
-        <li><code>prepare-mutation-rollback</code>과 <code>live-mutation-rollback</code>은 적용된 rewrite와 soft-delete witness를 되돌린다.</li>
-        <li>delete는 물리 삭제가 아니라 <code>APPLY MEMORY SOFT DELETE</code> 확인문을 요구하는 <code>rejected</code> 상태 전환으로만 열린다.</li>
-        <li>review queue는 compact/review-worker 경로로 관리되고, 자동 적용은 witness를 남긴다.</li>
-        <li><code>recall-quality</code>가 recall-policy, working-memory, impact feedback을 묶어 기억 호출의 pass/watch/fail을 판정한다.</li>
-        <li><code>govern-turn</code>이 <code>recall-quality</code>와 <code>cost_gate</code>를 함께 보고 자동 실행 전 품질/비용 초과를 막는다.</li>
-        <li><code>budget_profile</code>이 quick/standard/deep/debug/mutation 작업별 recall 예산과 입력 ceiling을 자동 선택한다.</li>
-        <li><code>fallback_plan</code>이 품질 실패나 비용 초과 시 current-evidence, recall-plan, working-memory cues 중 저비용 경로를 고른다.</li>
-        <li><code>worker</code>가 <code>governance_probe</code>로 품질/비용 상태를 예약 실행 로그에 남긴다.</li>
-        <li><code>recall-critic</code>이 retriever가 만든 후보를 별도로 판정하고, <code>recall-quality</code>와 <code>govern-turn</code> fallback이 그 결과를 신뢰 차단 신호로 사용한다.</li>
-        <li><code>recall-critic-impact</code>가 critic 결정의 실제 outcome을 append-only로 기록해, 임계값 조정을 raw ledger 재스캔 없이 평가한다.</li>
-        <li><code>long-run-stress</code>가 multi-query recall, critic, token growth, leakage, impact feedback risk를 AI API 없이 검증하고 <code>goal-roadmap</code>과 scheduled worker rehearsal에 포함된다.</li>
-        <li><code>long_run_stress_runs</code>가 worker rehearsal 결과를 append-only event와 색인 테이블에 남겨 score/token/harmful trend를 본다.</li>
-        <li><code>recall-quality</code>가 장기 스트레스 추세를 실제 pass/watch/fail 판정에 포함해, 표본이 부족하거나 실패 추세가 있으면 recall route를 안정 상태로 보지 않는다.</li>
-        <li><code>recall-quality-impact</code>가 recall-quality 결과에서 critic/working-memory outcome 기록 초안을 만들고, 검토 후 <code>--apply</code>로 append-only evidence를 남긴다.</li>
-      </ul>
-    </article>
-
-    <article class="span-4">
-      <h2>실제 수치</h2>
-      <ul>
-        <li>source events: 1,852</li>
-        <li>capsules: 4,092</li>
-        <li>stable capsules: 916</li>
-        <li>relation nodes: 7,565</li>
-        <li>relation edges: 29,800</li>
-        <li>source event links: 6,155</li>
-        <li>long-run stress runs: 6</li>
-        <li>spool: pending 0, processing 0, failed 0</li>
-        <li>review queue open: 0</li>
-        <li>spool done: 141</li>
+        <li>source events: 1,860</li>
+        <li>capsules: 4,105</li>
+        <li>stable capsules: 918</li>
+        <li>source event links: 6,170</li>
+        <li>cold capsules: 2,739</li>
+        <li>spool done: 142</li>
+        <li>spool pending / processing / failed: 0 / 0 / 0</li>
+        <li>review queue open: 8</li>
         <li>backup bytes: 127,140,901</li>
-        <li>storage: 361,424,529 bytes</li>
-        <li>public handoff: <code>docs/public-memory-bundle.md</code>, <code>docs/public-memory-bundle.json</code></li>
         <li>latest verified backup: <code>.ara-memory\backups\ara-memory-2026-07-03T053425Z0000.zip</code></li>
       </ul>
+    </article>
+
+    <article class="span-4">
+      <h2>검증된 인계 증거</h2>
+      <ul>
+        <li>Release: <a href="https://github.com/ARAand/ara-memory/releases/tag/ara-memory-private-handoff-20260703-145658">ara-memory-private-handoff-20260703-145658</a></li>
+        <li>Encrypted asset: <code>ara-memory-raw-handoff-20260703-145658.zip.aesgcm</code></li>
+        <li>Manifest asset: <code>ara-memory-raw-handoff-20260703-145658.manifest.json</code></li>
+        <li>Encrypted SHA-256: <code>127dc1a6c9d7d0681f305dbcc861ce9c191f3e2e74fe4c1427a486524bd92e4d</code></li>
+        <li>Plain ZIP SHA-256 after decrypt: <code>58810ec8976c40ac230c33beca3c040d16aaa3837a01f5f44f47c47bb658645c</code></li>
+        <li>Raw memory files included: 397</li>
+      </ul>
+    </article>
+
+    <article class="span-4">
+      <h2>최근 커밋</h2>
+      <ul>
+        <li><code>a5e5f37</code> Document private memory handoff</li>
+        <li><code>aeeaa58</code> Add public handoff doctor</li>
+        <li><code>6a17064</code> Document verified backup restore drill</li>
+      </ul>
+      <p class="callout">
+        raw `.ara-memory`, plaintext ZIP, key file은 공개 repo에 넣지 않는다. 키는 로컬 파일
+        <code>C:\Users\Owner\Documents\AraMemoryPrivateHandoff\ara-memory-raw-handoff-20260703-145658.key.txt</code>
+        에만 있다.
+      </p>
     </article>
   </section>
 
   <section class="grid">
     <article class="span-12">
-      <h2>아키텍처</h2>
-      <div class="flow">
-        <div class="node"><b>1. Capture</b><span>대화, 파일, 이미지, 명령, 결정, 실패를 event envelope로 받는다. 숨은 추론은 저장하지 않고 검토 가능한 요약과 증거만 저장한다.</span></div>
-        <div class="node"><b>2. Guard</b><span>비밀, 직접 생계형 개인정보, 위험 문자열, 저장 금지 항목을 redaction 또는 block 처리한다.</span></div>
-        <div class="node"><b>3. Store</b><span>source event는 원문 증거로, capsule은 압축 기억으로, relation은 연결 단서로 따로 저장한다.</span></div>
-        <div class="node"><b>4. Compress</b><span>반복 작업 로그를 목표, 결정, 절차, 실패, 프로젝트 증거 단위로 접어 토큰 비용을 줄인다.</span></div>
-        <div class="node"><b>5. Recall</b><span>현재 목표와 질문에 맞는 hot/working/cold 후보만 뽑고, 필요한 경우 source link로 원문까지 거슬러 올라간다.</span></div>
-        <div class="node"><b>6. Mutate</b><span>기억 변경은 preflight, approval token, drift check, witness, rollback 게이트를 통과해야 한다.</span></div>
+      <h2>전체 데이터 흐름 다이어그램</h2>
+      <div class="pipe">
+        <div class="node">
+          <b>1. 입력 캡처</b>
+          <p>프롬프트, 응답 요약, 파일, 이미지, 명령 결과, git 상태를 turn envelope으로 받는다. 원문은 로컬 증거로 남기되 모델에 매번 통째로 보내지 않는다.</p>
+        </div>
+        <div class="node">
+          <b>2. Privacy Guard</b>
+          <p>secret-like text, 직접 식별자, hidden reasoning marker, 민감 metadata key를 ledger/SQLite/FTS에 쓰기 전에 redaction 또는 block 처리한다.</p>
+        </div>
+        <div class="node">
+          <b>3. Durable Store</b>
+          <p>append-only event ledger, SQLite index, encrypted archive objects, sealed spool, hot memory file, backup trust material로 나눠 저장한다.</p>
+        </div>
+        <div class="node">
+          <b>4. Consolidation</b>
+          <p>반복 episode를 decision, procedure, project, failure, self, goal capsule로 압축한다. source event link는 유지해서 원문으로 역추적 가능하게 둔다.</p>
+        </div>
+        <div class="node">
+          <b>5. Recall Controller</b>
+          <p>query intent를 purpose, working context, distant memory, retention safety 등으로 분류하고 hot / working / recall-context / cold-map 중 경로를 고른다.</p>
+        </div>
+        <div class="node">
+          <b>6. Quality Gates</b>
+          <p>recall critic, recall regression, long-run stress, privacy-pre-push, health, milestone, goal-roadmap이 recall 품질과 안전성을 검사한다.</p>
+        </div>
+        <div class="node">
+          <b>7. Handoff</b>
+          <p>공개 repo에는 redacted bundle과 코드만 올리고, raw `.ara-memory`는 암호화 release asset으로 분리해 다른 컴퓨터에서 복구한다.</p>
+        </div>
       </div>
     </article>
   </section>
 
   <section class="grid">
     <article class="span-8">
-      <h2>남은 작업</h2>
-      <div class="rows">
-        <div class="row">
-          <strong>soft-delete live apply</strong>
-          <p>완료: delete를 실제 삭제가 아니라 <code>rejected</code> 상태 전환으로만 반영한다. source event와 원문은 보존한다.</p>
-          <span class="badge pass">done</span>
+      <h2>아키텍처 계층 상세</h2>
+      <div class="layers">
+        <div class="layer">
+          <strong>Ingress Layer</strong>
+          <p><code>plan-turn</code>, <code>ingress-turn</code>, <code>remember-turn</code>, <code>spool-turn</code>가 입력을 받는다. 큰 turn이나 artifact가 있으면 먼저 spool에 밀어넣어 실패해도 원본 envelope을 잃지 않는다.</p>
+          <span class="badge pass">durable</span>
         </div>
-        <div class="row">
-          <strong>soft-delete rollback</strong>
-          <p>완료: soft-delete witness를 기반으로 candidate/quarantined 상태 복구를 승인형 token으로 되돌린다.</p>
-          <span class="badge pass">done</span>
+        <div class="layer">
+          <strong>Evidence Layer</strong>
+          <p>raw event는 append-only ledger와 SQLite에 기록된다. 파일/이미지 artifact는 archive object로 보존하고, spool snapshot은 enqueue 시점 파일을 고정해 나중 파일 변경에 영향받지 않는다.</p>
+          <span class="badge pass">audit-ready</span>
         </div>
-        <div class="row">
-          <strong>recall quality loop</strong>
-          <p>1차 완료: <code>recall-quality</code>가 현재 cue의 정책 경로, 작업기억 projection, 검토된 impact feedback을 합쳐 pass/watch/fail로 판정한다.</p>
-          <span class="badge pass">v1 done</span>
+        <div class="layer">
+          <strong>Memory Capsule Layer</strong>
+          <p>sleep, curator, candidate-summary, episode-summary가 raw evidence를 typed capsule로 압축한다. capsule은 stable/candidate/quarantined/rejected/superseded 상태를 가진다.</p>
+          <span class="badge pass">typed</span>
         </div>
-        <div class="row">
-          <strong>memory worker 분리</strong>
-          <p>1차 완료: worker가 drain/consolidate/quality/governance/review/doctor/regression/long-run-stress/maintenance를 분리 실행한다. schedule verifier는 장기 스트레스 게이트가 빠진 예약 스크립트를 거절한다.</p>
-          <span class="badge pass">v1 done</span>
+        <div class="layer">
+          <strong>Associative Graph Layer</strong>
+          <p>relation nodes/edges와 temporal edges가 memory 간 연결을 만든다. recall은 lexical/FTS만 쓰지 않고 bounded graph activation, ESPA routing, relation graph를 함께 사용한다.</p>
+          <span class="badge pass">bounded graph</span>
         </div>
-        <div class="row">
-          <strong>cost governor</strong>
-          <p>1차 완료: <code>govern-turn</code>과 worker <code>governance_probe</code>가 작업 종류별 budget profile, 입력 토큰/모델 비용 ceiling, 저비용 fallback 전략을 적용한다.</p>
-          <span class="badge pass">v1 done</span>
+        <div class="layer">
+          <strong>Recall Policy Layer</strong>
+          <p>hot memory는 core goal/self/preference 위주로 유지하고, working memory와 cold memory는 query가 요구할 때만 꺼낸다. distant cold body는 기본적으로 모델 context에 직접 넣지 않는다.</p>
+          <span class="badge pass">token control</span>
         </div>
-        <div class="row">
-          <strong>recall retriever/critic split</strong>
-          <p>1차 완료: retriever는 후보와 recall pack을 만들고, critic은 visible evidence, query term coverage, token budget, fallback usage, risk filtering을 독립 판정한다. 이것이 사람 같은 기억에서 '떠오른 것'과 '믿을 만한 것'을 나누는 첫 구조다.</p>
-          <span class="badge pass">v1 done</span>
+        <div class="layer">
+          <strong>Governance Layer</strong>
+          <p><code>govern-turn</code>은 agency-review, cost gate, recall-quality, fallback plan을 묶어 action_allowed 여부와 낮은 비용 경로를 결정한다.</p>
+          <span class="badge pass">controlled action</span>
         </div>
-        <div class="row">
-          <strong>critic impact loop</strong>
-          <p>1차 완료: <code>recall-quality-impact</code>로 실제 회상 outcome을 기록했고, <code>recall-critic-impact-eval</code>이 pass 상태가 됐다. 계속할 일은 더 많은 실제 턴에서 도움이 됐는지/해로웠는지를 균형 있게 축적하는 것이다.</p>
-          <span class="badge pass">first pass</span>
+        <div class="layer">
+          <strong>Mutation Safety Layer</strong>
+          <p>rewrite/delete/cool/prune 같은 변경은 preflight, one-use token, compare-and-set drift check, witness, rollback gate를 거쳐야 한다.</p>
+          <span class="badge pass">rollback-ready</span>
         </div>
-        <div class="row">
-          <strong>long-run stress gate</strong>
-          <p>1차 완료: <code>long-run-stress</code>가 paraphrase recall, token growth, selected capsule diversity, forbidden leakage, recall critic failure, harmful impact ratio를 반복 검증하고 <code>goal-roadmap</code>, <code>worker-loop</code>, <code>recall-quality</code>에 연결된다. 현재 trend는 pass, samples 6, latest score 100, leaks 0, critic failures 0이다.</p>
-          <span class="badge pass">trend pass</span>
-        </div>
-        <div class="row">
-          <strong>review queue hygiene</strong>
-          <p>완료: <code>review-compact</code> dry-run이 123개 항목을 모두 비파괴 low-quality marker acknowledgement로 판정했고, 적용 후 open review queue가 0이 됐다. 승격, 삭제, 감쇠 없이 큐 압력만 정리했다.</p>
-          <span class="badge pass">open=0</span>
-        </div>
-        <div class="row">
-          <strong>backup and restore drill</strong>
-          <p>완료: 최신 백업 <code>ara-memory-2026-07-03T053425Z0000.zip</code>을 생성하고 <code>verify-backup</code>과 <code>restore-drill</code>을 통과했다. manifest signature, archive object escrow, SQLite integrity, restored schema v29가 모두 정상이다.</p>
-          <span class="badge pass">verified</span>
-        </div>
-        <div class="row">
-          <strong>backup stewardship</strong>
-          <p>완료: 새 백업 생성 후 발생한 backup pressure를 <code>backup-stewardship</code> dry-run으로 검토했고, 최신 3개와 retention-cycle 참조 백업을 보존한 채 오래된 redundant verified backup 1개만 삭제했다.</p>
-          <span class="badge pass">budget ok</span>
-        </div>
-        <div class="row">
-          <strong>memory purpose audit</strong>
-          <p>장기 목표, Ara 정체성, 프로젝트 로그가 서로 섞이지 않도록 purpose/identity/self/failure kind audit을 더 강하게 묶는다.</p>
-          <span class="badge watch">3-6h</span>
-        </div>
-        <div class="row">
-          <strong>long-run stress test</strong>
-          <p>v1 완료: low-cost stress gate와 reviewed impact outcome이 연결되어 <code>goal-roadmap</code>과 <code>recall-quality</code>가 pass로 닫힌다. 다음은 24-72시간 동안 실제 사용 표본을 더 모아 pass가 일시적 착시가 아닌지 보는 것이다.</p>
-          <span class="badge pass">v1 pass</span>
-        </div>
-        <div class="row">
-          <strong>public GitHub handoff</strong>
-          <p>진행: 원본 <code>.ara-memory</code> 대신 redacted public bundle, coverage digest, 평가 공백, 다음 테스트 방법을 GitHub에 올린다. 다른 컴퓨터는 이 번들로 상태를 인계받고 로컬 outcome evidence를 새로 축적한다.</p>
-          <span class="badge watch">publishable</span>
-        </div>
-        <div class="row">
-          <strong>GitHub handoff doctor</strong>
-          <p>Added: <code>python -m ara_memory handoff-doctor --json</code> checks the public bundle, handoff docs, private gitignore rules, tracked-file boundary, and privacy-pre-push without requiring raw <code>.ara-memory</code>. Current local gate is watch/pass because reviewed fixture warnings remain non-fatal.</p>
-          <span class="badge pass">new gate</span>
-        </div>
-        <div class="row">
-          <strong>clean clone handoff</strong>
-          <p>Verified: a fresh GitHub clone at <code>C:\Users\Owner\AppData\Local\Temp\ara-memory-clean-handoff-20260703-145658</code> had no raw <code>.ara-memory</code>, passed <code>handoff-doctor --require-clean-worktree</code>, and passed the full test suite: 419 OK, skipped 1 Windows symlink-permission test.</p>
-          <span class="badge pass">clone pass</span>
-        </div>
-        <div class="row">
-          <strong>private raw memory package</strong>
-          <p>Raw <code>.ara-memory</code> was separated from the public repo and uploaded only as encrypted release asset <code>ara-memory-private-handoff-20260703-145658</code>. Local AES-GCM decryption was verified against plaintext SHA-256 before handoff.</p>
-          <span class="badge pass">encrypted</span>
+        <div class="layer">
+          <strong>Handoff Layer</strong>
+          <p><code>handoff-doctor</code>가 public bundle, docs, gitignore, tracked privacy boundary, privacy-pre-push를 검사한다. raw memory는 AES-GCM encrypted release asset으로만 전달한다.</p>
+          <span class="badge pass">portable</span>
         </div>
       </div>
     </article>
 
     <article class="span-4">
-      <h2>판단</h2>
+      <h2>토큰 절감 구조</h2>
       <ul>
-        <li><span class="badge pass">동작</span> 현재 저장, 압축, 회상, 백업, health gate, recall-quality, long-run stress trend는 정상이다.</li>
-        <li><span class="badge watch">부족</span> 자연스러운 기억의 핵심인 "잊기/왜곡 방지/상황별 회상"은 아직 운영 루프가 약하다.</li>
-        <li><span class="badge watch">위험</span> 자동 요약이 잘못된 의미를 stable memory로 승격하면 보상해킹처럼 자기확신이 강화될 수 있다.</li>
-        <li><span class="badge info">다음</span> 24-72시간 rehearsal 로그를 더 모아 pass가 유지되는지 확인하고, 임계값은 검토된 outcome으로만 조정한다.</li>
-        <li><span class="badge info">인계</span> 공개 GitHub에는 <code>docs/public-memory-bundle.*</code>와 평가 문서를 올리고, 원본 로컬 기억 저장소는 계속 비공개 evidence로 둔다.</li>
+        <li>원문은 한 번 저장하고, 매번 전체를 읽지 않는다.</li>
+        <li>hot memory는 core goal/self/preference 중심으로 작게 유지한다.</li>
+        <li>recall-context는 budget ceiling 안에서 capsule을 선택한다.</li>
+        <li>cold-map은 오래된 기억의 본문 대신 위치와 요약 지도만 보여준다.</li>
+        <li>source event links는 원문 재검증 경로지만 기본 context에는 넣지 않는다.</li>
+        <li>local planning, ranking, regression, health는 AI API 없이 실행된다.</li>
       </ul>
     </article>
   </section>
 
   <section class="grid">
+    <article class="span-12">
+      <h2>안전 게이트 매트릭스</h2>
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>게이트</th>
+            <th>현재 상태</th>
+            <th>무엇을 막는가</th>
+            <th>다음 행동</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>handoff-doctor</code></td>
+            <td><span class="badge watch">watch/pass</span></td>
+            <td>public repo에 raw memory, database, backup, log, private path가 섞이는 것</td>
+            <td>새 컴퓨터에서 clone 직후 실행한다.</td>
+          </tr>
+          <tr>
+            <td><code>privacy-pre-push</code></td>
+            <td><span class="badge watch">20 fixture warnings</span></td>
+            <td>실제 secret 또는 private memory artifact가 공개 repo에 들어가는 것</td>
+            <td>현재 warning은 테스트 fixture다. non-fixture finding은 hard fail로 본다.</td>
+          </tr>
+          <tr>
+            <td><code>recall-regression</code></td>
+            <td><span class="badge watch">baseline drift review</span></td>
+            <td>recall pack이 조용히 커지거나 다른 evidence로 drift하는 것</td>
+            <td>현재 cases는 pass지만 baseline drift가 있어 선택 capsule을 검토해야 한다.</td>
+          </tr>
+          <tr>
+            <td><code>goal-roadmap</code></td>
+            <td><span class="badge pass">pass</span></td>
+            <td>목표, 정체성, 안전 게이트, 비용 통제가 흩어지는 것</td>
+            <td>깊은 capability 작업 전 계속 실행한다.</td>
+          </tr>
+          <tr>
+            <td><code>backup / verify / restore-drill</code></td>
+            <td><span class="badge pass">verified</span></td>
+            <td>복구 불가능한 백업, 손상된 archive object, SQLite integrity 실패</td>
+            <td>큰 변경 후 새 백업과 restore drill을 반복한다.</td>
+          </tr>
+          <tr>
+            <td><code>review-compact</code></td>
+            <td><span class="badge watch">open markers 8</span></td>
+            <td>low-quality marker가 review queue를 실제 blocker처럼 부풀리는 것</td>
+            <td>dry-run 후 비파괴 acknowledgement만 적용한다.</td>
+          </tr>
+        </tbody>
+      </table>
+    </article>
+  </section>
+
+  <section class="grid">
     <article class="span-6">
-      <h2>예상 완료 시간</h2>
-      <ul>
-        <li>운영 안전성 1차 완성: 완료</li>
-        <li>자연스러운 기억 품질 루프 1차: 완료</li>
-        <li>retriever/critic 분리와 CLI/governance 연결: 1차 완료</li>
-        <li>purpose/identity audit 강화: 3-6시간</li>
-        <li>실사용 베타 판정: 6-10시간</li>
-        <li>72시간 장기 안정성 검증까지: 추가 3일</li>
-      </ul>
+      <h2>인계 및 복구 절차</h2>
+      <ol>
+        <li>새 컴퓨터에서 <code>git clone --branch codex/ara-memory-natural-memory-gates --single-branch https://github.com/ARAand/ara-memory.git ara-memory</code>를 실행한다.</li>
+        <li><code>python -m ara_memory handoff-doctor --json</code>으로 공개 인계물이 정상인지 확인한다.</li>
+        <li>GitHub release에서 encrypted asset과 manifest를 다운로드한다.</li>
+        <li>로컬 전용 key file의 <code>key_base64_urlsafe</code>를 private channel로 전달받는다.</li>
+        <li>AES-256-GCM으로 asset을 복호화하고 plaintext ZIP SHA-256을 확인한다.</li>
+        <li>ZIP을 repo root에 풀어 `.ara-memory`를 복원한다.</li>
+        <li><code>health</code>, <code>goal-roadmap</code>, <code>recall-quality</code>를 실행해 복원 후 작동 여부를 확인한다.</li>
+      </ol>
     </article>
 
     <article class="span-6">
-      <h2>현재 목적성</h2>
-      <p class="note">
-        이 기억의 목적은 모든 원문을 매번 읽는 것이 아니다. Jongseo와 Ara가 이어서 만들던 맥락, 판단,
-        실패, 선호, 설계 이유를 작은 회상 단위로 되살려서 Codex가 매번 새로 태어난 도구처럼 굴지 않게 하는 것이다.
-        따라서 저장소는 "기록 보관소"이면서 동시에 "회상 정책을 가진 인지 구조"여야 한다.
-      </p>
+      <h2>실패했던 컨텍스트</h2>
+      <ul>
+        <li>PowerShell에서 Bash heredoc인 <code>python - &lt;&lt;'PY'</code>를 써서 실패했다. 이후 PowerShell here-string을 <code>python -</code>에 pipe하는 방식으로 수정했다.</li>
+        <li><code>espa_procedural_routing</code> recall regression이 557에서 704 tokens로 증가하며 예전 baseline을 넘었다. 의미 조건은 통과했기 때문에 검토 후 baseline을 갱신했다.</li>
+        <li>review queue marker가 작업 후 재발했다. 이전에는 dry-run으로 비파괴 marker임을 확인하고 <code>review-compact --apply</code>로 정리했다.</li>
+        <li>방금 <code>stats</code>와 <code>review-triage</code>를 병렬 실행했을 때 SQLite <code>database is locked</code>가 발생했다. 다음 개선은 읽기 전용 명령의 동시성/timeout 처리다.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="grid">
+    <article class="span-12">
+      <h2>남은 작업</h2>
+      <div class="rows">
+        <div class="row">
+          <strong>private-package CLI</strong>
+          <p>현재 원본 메모리 암호화 패키지는 검증됐지만 수동 스크립트로 만들었다. 다음 단계는 <code>private-handoff-package</code> 같은 CLI로 패키징, manifest, 복호화 검증, release note 생성을 표준화하는 것이다.</p>
+          <span class="badge watch">필요</span>
+        </div>
+        <div class="row">
+          <strong>encrypted restore drill</strong>
+          <p>release asset을 임시 디렉터리에 다운로드/복호화/압축해제하고 health를 돌린 뒤 plaintext를 삭제하는 restore drill이 필요하다.</p>
+          <span class="badge watch">필요</span>
+        </div>
+        <div class="row">
+          <strong>baseline drift review</strong>
+          <p>현재 health는 recall-regression case는 통과하지만 baseline drift를 경고한다. 선택 capsule과 token 증가가 좋은 변화인지 사람이 검토해야 한다.</p>
+          <span class="badge watch">검토</span>
+        </div>
+        <div class="row">
+          <strong>concurrent read robustness</strong>
+          <p>병렬 read 명령에서 SQLite lock이 발생했다. busy timeout, read-only open, command-level lock backoff를 개선할 여지가 있다.</p>
+          <span class="badge watch">개선</span>
+        </div>
+        <div class="row">
+          <strong>real outcome feedback</strong>
+          <p>synthetic stress만으로 threshold를 조정하지 말고, 실제 작업에서 recall-quality-impact를 계속 기록해야 한다.</p>
+          <span class="badge info">계속</span>
+        </div>
+      </div>
     </article>
   </section>
 
   <footer>
-    Generated from live repository checks: <code>python -m ara_memory stats</code>,
+    Evidence used in this page: <code>git status --short --branch</code>,
+    <code>python -m ara_memory handoff-doctor --require-clean-worktree --json</code>,
     <code>python -m ara_memory health --scope ara-memory --compact --json</code>,
-    <code>git status --short --branch</code>. Updated: 2026-07-03 KST.
+    <code>python -m ara_memory goal-roadmap --scope ara-memory</code>,
+    <code>gh release view ara-memory-private-handoff-20260703-145658</code>,
+    and <code>docs/HANDOFF_CONTINUATION.md</code>.
   </footer>
 </main>
 </body>
